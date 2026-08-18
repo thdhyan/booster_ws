@@ -1,0 +1,47 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.egg-info/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+
+# Training logs (large, ephemeral)
+logs/
+runs/
+wandb/
+
+# Rosbag recordings
+*.bag
+*.db3
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compiled objects (but NOT SDK prebuilt libs in sdk/)
+*.so
+*.o
+*.a
+*.lib
+
+# Environment files
+.envrc
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.log
