@@ -1,0 +1,38 @@
+name: CI — train smoke test
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  train-smoke:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Isaac Lab dependencies
+        run: |
+          source ~/.bashrc
+          source $HOME/isaaclab/python.sh
+
+      - name: Install k1_velocity package
+        run: |
+          source ~/.bashrc
+          source $HOME/isaaclab/python.sh
+          cd isaac_tasks/k1_velocity
+          pip install -e .
+
+      - name: Run training smoke test
+        run: |
+          source ~/.bashrc
+          source $HOME/isaaclab/python.sh
+          cd $GITHUB_WORKSPACE
+          python isaac_tasks/k1_velocity/scripts/train.py \
+            task=Isaac-Velocity-Rough-K1-v0 \
+            headless=True \
+            max_iterations=5
