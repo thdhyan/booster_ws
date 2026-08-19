@@ -15,7 +15,7 @@ set -e
 
 WS="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON=/home/thakk100/Projects/IsaacLab/.venv-isaac/bin/python3.12
-TRAIN=$WS/isaac_tasks/booster_train_ref/scripts/rsl_rl/train.py
+TRAIN=$WS/isaac_tasks/k1_velocity/scripts/train.py
 LOG=$WS/logs/train_k1_velocity.log
 
 mkdir -p "$WS/logs"
