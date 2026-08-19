@@ -34,10 +34,11 @@ from isaaclab.managers import (
     TerminationTermCfg as DoneTerm,
 )
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
-from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.sensors import ContactSensorCfg
+from isaaclab.terrains import TerrainImporterCfg, TerrainGeneratorCfg
+import isaaclab.terrains as terrain_gen
 from isaaclab.utils import configclass
-from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
 
@@ -73,10 +74,48 @@ K1_ARTICULATION_CFG = BOOSTER_K1_CFG
 class K1RoughSceneCfg(InteractiveSceneCfg):
     """Scene: K1 on rough terrain."""
 
+    # Rough terrain: low-angle slopes + random bumps only (no stairs).
+    # Blind policy — no raycaster, proprioception only.
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="generator",
-        terrain_generator=None,  # use default rough terrain
+        terrain_generator=TerrainGeneratorCfg(
+            size=(10.0, 10.0),
+            border_width=20.0,
+            num_rows=6,
+            num_cols=12,
+            horizontal_scale=0.1,
+            vertical_scale=0.005,
+            slope_threshold=0.75,
+            use_cache=False,
+            curriculum=True,
+            sub_terrains={
+                # 40% flat — for curriculum start
+                "flat": terrain_gen.HfRandomUniformTerrainCfg(
+                    proportion=0.4,
+                    noise_range=(0.0, 0.01),
+                    noise_step=0.005,
+                    border_width=0.25,
+                ),
+                # 40% mild rough — bumps up to ±4 cm
+                "rough": terrain_gen.HfRandomUniformTerrainCfg(
+                    proportion=0.4,
+                    noise_range=(-0.04, 0.04),
+                    noise_step=0.01,
+                    border_width=0.25,
+                ),
+                # 20% low-slope — max 12° incline
+                "slope": terrain_gen.HfDiscreteObstaclesTerrainCfg(
+                    proportion=0.2,
+                    num_obstacles=5,
+                    obstacle_height_mode="fixed",
+                    obstacle_height_range=(0.0, 0.05),
+                    obstacle_width_range=(0.5, 1.5),
+                    platform_width=2.0,
+                    border_width=0.25,
+                ),
+            },
+        ),
         max_init_terrain_level=5,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
@@ -93,14 +132,7 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
     )
     robot: ArticulationCfg = K1_ARTICULATION_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    height_scanner = RayCasterCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/Trunk",  # K1 root link
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        attach_yaw_only=True,
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-        debug_vis=False,
-        mesh_prim_paths=["/World/ground"],
-    )
+    # No height scanner — blind policy, proprioception only
     contact_forces = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*foot.*",  # K1: left_foot, right_foot
         history_length=3,
@@ -133,12 +165,7 @@ class ObservationsCfg:
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
             noise=Unoise(n_min=-1.5, n_max=1.5),
         )
-        # Height scan
-        height_scan = ObsTerm(
-            func=mdp.height_scan,
-            params={"sensor_cfg": SceneEntityCfg("height_scanner")},
-            clip=(-1.0, 1.0),
-        )
+        # No height scan — blind policy, proprioception only
         # Last action
         actions = ObsTerm(func=mdp.last_action)
 
@@ -311,7 +338,5 @@ class K1VelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
         # Disable height scan in flat mode (override in terrain subclass)
-        if hasattr(self.scene, "height_scanner"):
-            self.scene.height_scanner.update_period = self.decimation * self.sim.dt
         if hasattr(self.scene, "contact_forces"):
             self.scene.contact_forces.update_period = self.sim.dt

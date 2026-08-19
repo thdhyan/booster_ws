@@ -14,8 +14,6 @@ class K1VelocityRoughPlayEnvCfg(K1VelocityRoughEnvCfg):
         # Flat terrain
         self.scene.terrain.terrain_type = "plane"
         self.scene.terrain.terrain_generator = None
-        # Disable height scanner (flat)
-        self.scene.height_scanner = None
         # Disable noise
         self.observations.policy.enable_corruption = False
         # Disable external pushes
