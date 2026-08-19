@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<robot name="k1" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    Booster K1 URDF
+    Source: src/k1_description/assets/robots/K1/ (booster_assets submodule)
+    After running: git submodule update --init --recursive
+    Replace this placeholder with:
+      <xacro:include filename="$(find k1_description)/assets/robots/K1/k1.urdf.xacro"/>
+  -->
+  <xacro:arg name="robot_ns" default="k1_0"/>
+  <xacro:property name="ns" value="$(arg robot_ns)"/>
+
+  <!-- Placeholder base link — replace with actual K1 URDF -->
+  <link name="${ns}/base_link">
+    <inertial>
+      <mass value="19.5"/>
+      <inertia ixx="0.5" ixy="0" ixz="0" iyy="0.5" iyz="0" izz="0.2"/>
+    </inertial>
+  </link>
+
+  <!-- TODO: include actual K1 urdf from booster_assets after submodule init -->
+  <!--
+  K1 joints (22 DoF):
+    Head: Head_yaw, Head_pitch
+    L Arm: Left_Shoulder_Pitch, Left_Shoulder_Roll, Left_Elbow_Pitch, Left_Elbow_Yaw
+    R Arm: Right_Shoulder_Pitch, Right_Shoulder_Roll, Right_Elbow_Pitch, Right_Elbow_Yaw
+    L Leg: Left_Hip_Pitch, Left_Hip_Roll, Left_Hip_Yaw, Left_Knee_Pitch, Left_Ankle_Pitch, Left_Ankle_Roll
+    R Leg: Right_Hip_Pitch, Right_Hip_Roll, Right_Hip_Yaw, Right_Knee_Pitch, Right_Ankle_Pitch, Right_Ankle_Roll
+  -->
+</robot>

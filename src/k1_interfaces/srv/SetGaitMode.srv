@@ -1,0 +1,5 @@
+# Switch gait mode
+uint8 mode  # 0=walk 1=stand 2=recovery
+---
+bool success
+string message

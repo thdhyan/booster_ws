@@ -1,0 +1,9 @@
+[submodule "sdk/booster_robotics_sdk"]
+	path = sdk/booster_robotics_sdk
+	url = git@github.com:BoosterRobotics/booster_robotics_sdk.git
+[submodule "src/k1_description/assets"]
+	path = src/k1_description/assets
+	url = git@github.com:thdhyan/booster_assets.git
+[submodule "isaac_tasks/booster_train_ref"]
+	path = isaac_tasks/booster_train_ref
+	url = git@github.com:thdhyan/booster_train.git

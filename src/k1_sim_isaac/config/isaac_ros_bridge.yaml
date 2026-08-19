@@ -1,0 +1,11 @@
+# Isaac Sim <-> ROS2 bridge config for K1
+# robot_ns substituted at launch time
+isaac_bridge:
+  robot_ns: "k1_0"
+  joint_state_topic: "/{robot_ns}/joint_states"
+  joint_command_topic: "/{robot_ns}/joint_commands"
+  odom_topic: "/{robot_ns}/odom"
+  imu_topic: "/{robot_ns}/imu/data"
+  control_freq: 50  # Hz
+  # Isaac Sim ROS2 uses DomainID 0 by default; match system ROS2 domain
+  ros_domain_id: 0

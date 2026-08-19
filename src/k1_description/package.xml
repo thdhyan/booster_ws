@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>k1_description</name>
+  <version>0.1.0</version>
+  <description>Booster K1 URDF, meshes, and robot description</description>
+  <maintainer email="th.dhyan.us@gmail.com">thakk100</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>urdf</depend>
+  <depend>xacro</depend>
+  <depend>robot_state_publisher</depend>
+  <exec_depend>joint_state_publisher_gui</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
