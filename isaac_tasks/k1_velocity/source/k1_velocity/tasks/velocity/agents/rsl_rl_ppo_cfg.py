@@ -25,6 +25,8 @@ class K1VelocityPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 100
     experiment_name = "k1_velocity_rough"
     empirical_normalization = False
+    logger = "wandb"
+    wandb_project = "booster_k1_locomotion"
 
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
