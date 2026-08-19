@@ -133,8 +133,10 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
     robot: ArticulationCfg = K1_ARTICULATION_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     # No height scanner — blind policy, proprioception only
+    # Broad match — URDF importer nests links under Geometry/ layer.
+    # body_names in reward/termination SceneEntityCfg filter to specific links.
     contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/.*foot_link",  # K1: left_foot_link, right_foot_link
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
         history_length=3,
         track_air_time=True,
     )
@@ -232,13 +234,14 @@ class RewardsCfg:
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
         weight=0.25,
-        params={"command_name": "base_velocity", "sensor_cfg": SceneEntityCfg("contact_forces"),
+        params={"command_name": "base_velocity",
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
                 "threshold": 0.4},
     )
     feet_slide = RewTerm(
         func=mdp.feet_slide,
         weight=-0.1,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces"),
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
                 "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"])},
     )
     # Termination
