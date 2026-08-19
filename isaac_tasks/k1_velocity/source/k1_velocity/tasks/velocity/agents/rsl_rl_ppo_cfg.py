@@ -27,6 +27,7 @@ class K1VelocityPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     empirical_normalization = False
     logger = "wandb"
     wandb_project = "booster_k1_locomotion"
+    wandb_entity = "thakk100"
 
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
