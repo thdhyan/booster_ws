@@ -134,7 +134,7 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
 
     # No height scanner — blind policy, proprioception only
     contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/.*foot.*",  # K1: left_foot, right_foot
+        prim_path="{ENV_REGEX_NS}/Robot/.*foot_link",  # K1: left_foot_link, right_foot_link
         history_length=3,
         track_air_time=True,
     )
@@ -239,7 +239,7 @@ class RewardsCfg:
         func=mdp.feet_slide,
         weight=-0.1,
         params={"sensor_cfg": SceneEntityCfg("contact_forces"),
-                "asset_cfg": SceneEntityCfg("robot", body_names=[".*_ankle.*"])},
+                "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"])},
     )
     # Termination
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
