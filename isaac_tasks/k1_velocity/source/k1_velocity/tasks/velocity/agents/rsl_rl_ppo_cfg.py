@@ -18,7 +18,8 @@ class K1VelocityPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = "k1_velocity_rough"
     logger = "wandb"
     wandb_project = "booster_k1_locomotion"
-    wandb_entity = "thakk100"
+    # Verified via `wandb.Api().default_entity` — 'thakk100'/'thdhyan' are not valid entities.
+    wandb_entity = "thakk100-dhyan-home"
     # Blind proprioceptive policy: single "policy" obs group feeds both actor and critic.
     obs_groups = {"actor": ["policy"], "critic": ["policy"]}
 
