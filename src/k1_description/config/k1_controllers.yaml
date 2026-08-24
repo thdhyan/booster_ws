@@ -1,0 +1,41 @@
+# K1 controller configuration — one instance per robot namespace.
+# Loaded by the gz_ros2_control plugin; each robot's controller_manager
+# lives under /{robot_ns}/controller_manager.
+# Wildcard keys are required so every namespaced CM instance matches.
+/**/controller_manager:
+  ros__parameters:
+    update_rate: 200  # Hz
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    forward_position_controller:
+      type: forward_command_controller/ForwardCommandController
+
+/**/forward_position_controller:
+  ros__parameters:
+    type: forward_command_controller/ForwardCommandController
+    interface_name: position
+    joints:
+      - AAHead_yaw
+      - Head_pitch
+      - ALeft_Shoulder_Pitch
+      - Left_Shoulder_Roll
+      - Left_Elbow_Pitch
+      - Left_Elbow_Yaw
+      - ARight_Shoulder_Pitch
+      - Right_Shoulder_Roll
+      - Right_Elbow_Pitch
+      - Right_Elbow_Yaw
+      - Left_Hip_Pitch
+      - Left_Hip_Roll
+      - Left_Hip_Yaw
+      - Left_Knee_Pitch
+      - Left_Ankle_Pitch
+      - Left_Ankle_Roll
+      - Right_Hip_Pitch
+      - Right_Hip_Roll
+      - Right_Hip_Yaw
+      - Right_Knee_Pitch
+      - Right_Ankle_Pitch
+      - Right_Ankle_Roll

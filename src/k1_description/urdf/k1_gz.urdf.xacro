@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<robot name="k1" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    Booster K1 for Gazebo Harmonic (gz_ros2_control).
+    Wraps the raw booster_assets URDF and appends ros2_control + gazebo plugin
+    blocks parameterized by robot_ns.
+
+    NOTE: joint names are URDF-exact (booster_assets): head yaw is 'AAHead_yaw'
+    and shoulder-pitch joints carry an 'A' prefix. Topic-level namespacing is
+    handled by the gz plugin <ros><namespace> below; joint names stay global.
+  -->
+  <xacro:arg name="robot_ns" default="k1_0"/>
+  <xacro:property name="ns" value="$(arg robot_ns)"/>
+
+  <!-- Real K1 model (24 links, 22 revolute joints) -->
+  <xacro:include filename="$(find k1_description)/assets/robots/K1/K1_22dof.urdf"/>
+
+  <!-- 22 actuated joints, URDF-exact names -->
+  <xacro:property name="k1_joints" value="${[
+      'AAHead_yaw', 'Head_pitch',
+      'ALeft_Shoulder_Pitch', 'Left_Shoulder_Roll', 'Left_Elbow_Pitch', 'Left_Elbow_Yaw',
+      'ARight_Shoulder_Pitch', 'Right_Shoulder_Roll', 'Right_Elbow_Pitch', 'Right_Elbow_Yaw',
+      'Left_Hip_Pitch', 'Left_Hip_Roll', 'Left_Hip_Yaw',
+      'Left_Knee_Pitch', 'Left_Ankle_Pitch', 'Left_Ankle_Roll',
+      'Right_Hip_Pitch', 'Right_Hip_Roll', 'Right_Hip_Yaw',
+      'Right_Knee_Pitch', 'Right_Ankle_Pitch', 'Right_Ankle_Roll']}"/>
+
+  <ros2_control name="GazeboSimSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+    <xacro:macro name="rc_joint" params="jname">
+      <joint name="${jname}">
+        <command_interface name="position"/>
+        <command_interface name="effort">
+          <param name="min">-120</param>
+          <param name="max">120</param>
+        </command_interface>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+    </xacro:macro>
+    <xacro:rc_joint jname="AAHead_yaw"/>
+    <xacro:rc_joint jname="Head_pitch"/>
+    <xacro:rc_joint jname="ALeft_Shoulder_Pitch"/>
+    <xacro:rc_joint jname="Left_Shoulder_Roll"/>
+    <xacro:rc_joint jname="Left_Elbow_Pitch"/>
+    <xacro:rc_joint jname="Left_Elbow_Yaw"/>
+    <xacro:rc_joint jname="ARight_Shoulder_Pitch"/>
+    <xacro:rc_joint jname="Right_Shoulder_Roll"/>
+    <xacro:rc_joint jname="Right_Elbow_Pitch"/>
+    <xacro:rc_joint jname="Right_Elbow_Yaw"/>
+    <xacro:rc_joint jname="Left_Hip_Pitch"/>
+    <xacro:rc_joint jname="Left_Hip_Roll"/>
+    <xacro:rc_joint jname="Left_Hip_Yaw"/>
+    <xacro:rc_joint jname="Left_Knee_Pitch"/>
+    <xacro:rc_joint jname="Left_Ankle_Pitch"/>
+    <xacro:rc_joint jname="Left_Ankle_Roll"/>
+    <xacro:rc_joint jname="Right_Hip_Pitch"/>
+    <xacro:rc_joint jname="Right_Hip_Roll"/>
+    <xacro:rc_joint jname="Right_Hip_Yaw"/>
+    <xacro:rc_joint jname="Right_Knee_Pitch"/>
+    <xacro:rc_joint jname="Right_Ankle_Pitch"/>
+    <xacro:rc_joint jname="Right_Ankle_Roll"/>
+  </ros2_control>
+
+  <gazebo>
+    <plugin filename="libgz_ros2_control-system.so"
+            name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find k1_description)/config/k1_controllers.yaml</parameters>
+      <ros>
+        <namespace>${ns}</namespace>
+      </ros>
+    </plugin>
+  </gazebo>
+</robot>

@@ -149,12 +149,10 @@ Status: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
 - [ ] `locomotion.launch.py`: `robot_ns`, `policy_path` args
 
 ### T4.2 — k1_control (SDK bridge)
-- [ ] `sdk_bridge_node.cpp` (C++):
-  - Sub: `/{robot_ns}/joint_commands`
-  - Calls `booster_robotics_sdk` API → robot
-  - Pub: `/{robot_ns}/joint_states` from SDK feedback
-- [ ] `sim_bridge_node.py` (sim mode):
-  - Passthrough JointCommand → gz_ros2_control or Isaac
+- [x] `sim_bridge_node.py` (sim mode):
+  - Sub `/{robot_ns}/joint_commands` → pub `/{robot_ns}/forward_position_controller/commands`
+  - Verified in Gazebo fleet + MuJoCo fleet
+- [ ] `sdk_bridge_node.cpp` (C++): real robot via booster_robotics_sdk
 
 ### T4.3 — End-to-end verify (Gazebo)
 - [ ] Sim loop: policy_node → sim_bridge → Gazebo → joint_states → policy_node
@@ -164,11 +162,12 @@ Status: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
 
 ## PHASE 5 — Multi-Robot (6x)
 
-- [ ] **T5.1** Parametric launch: `sim_gazebo_fleet.launch.py n_robots:=6`
-  - Loop spawn with `robot_ns:=k1_{i}`, x_offset per robot
+- [x] **T5.1** Parametric launch: `sim_gazebo_fleet.launch.py n_robots:=6`
+  - Loop spawn with `robot_ns:=k1_{i}`, x_offset per robot (verified n=2 in Gazebo, n=3 in MuJoCo)
 - [ ] **T5.2** Fleet config: `config/fleet/6robot.yaml` — per-robot IP, ns, domain_id
-- [ ] **T5.3** Multi-robot Gazebo world with 6 spawn points
-- [ ] **T5.4** (stretch) Multi-robot Isaac Sim scene
+- [x] **T5.3** Multi-robot Gazebo world (shared flat.sdf, grid offsets)
+- [x] **T5.4b** MuJoCo backend: `k1_sim_gazebo/scripts/mujoco_fleet_node.py` — N independent K1 worlds, SDK-style PD (`qfrc_applied`, IMPLICITFAST), same ROS endpoints as Gazebo
+- [ ] (stretch) Multi-robot Isaac Sim scene
 
 ---
 
