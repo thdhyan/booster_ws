@@ -34,7 +34,6 @@ from isaaclab.managers import (
     TerminationTermCfg as DoneTerm,
 )
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensorCfg
 from isaaclab.terrains import TerrainImporterCfg, TerrainGeneratorCfg
 import isaaclab.terrains as terrain_gen
 from isaaclab.utils import configclass
@@ -56,11 +55,13 @@ K1_LEG_JOINTS = [
     "Right_Knee_Pitch", "Right_Ankle_Pitch", "Right_Ankle_Roll",
 ]
 
-# 10 arm+head joints — penalise deviation from default, regulated separately
+# 10 arm+head joints — penalise deviation from default, regulated separately.
+# NOTE: exact URDF names — Isaac Sim 6 importer preserves them verbatim:
+# head yaw is 'AAHead_yaw', shoulder pitch joints carry an 'A' prefix.
 K1_ARM_HEAD_JOINTS = [
-    "Head_yaw", "Head_pitch",
-    "Left_Shoulder_Pitch", "Left_Shoulder_Roll", "Left_Elbow_Pitch", "Left_Elbow_Yaw",
-    "Right_Shoulder_Pitch", "Right_Shoulder_Roll", "Right_Elbow_Pitch", "Right_Elbow_Yaw",
+    "AAHead_yaw", "Head_pitch",
+    "ALeft_Shoulder_Pitch", "Left_Shoulder_Roll", "Left_Elbow_Pitch", "Left_Elbow_Yaw",
+    "ARight_Shoulder_Pitch", "Right_Shoulder_Roll", "Right_Elbow_Pitch", "Right_Elbow_Yaw",
 ]
 
 # K1 articulation — imported from booster_train (real actuators, K1_22dof.urdf, init_pos z=0.57)
@@ -132,14 +133,19 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
     )
     robot: ArticulationCfg = K1_ARTICULATION_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    # No height scanner — blind policy, proprioception only
-    # Broad match — URDF importer nests links under Geometry/ layer.
-    # body_names in reward/termination SceneEntityCfg filter to specific links.
-    contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/.*",
-        history_length=3,
-        track_air_time=True,
-    )
+    # No height scanner — blind policy, proprioception only.
+    #
+    # No contact sensor — KNOWN UPSTREAM LIMITATION (IsaacLab#5918 + PR#6378, both
+    # unfixed in isaaclab 3.0.0b2 / isaacsim 6.0.1):
+    #   1. The Isaac Sim 6 URDF importer nests child link prims under their parent
+    #      (e.g. /Robot/Trunk/Left_Arm_1/left_hand_link).
+    #   2. `activate_contact_sensors` (schemas.py) skips children of any prim that has
+    #      RigidBodyAPI -> only the root link 'Trunk' gets PhysxContactReportAPI.
+    #   3. ContactSensor view creation builds a single-parent glob, which cannot address
+    #      nested bodies even if they had the API.
+    # Verified by scripts/probe_k1_bodies.py: all 23 articulation bodies exist; only
+    # Trunk is contact-reportable. Gait shaping therefore uses contact-free terms;
+    # termination uses height/orientation bounds instead of illegal trunk contact.
 
 
 # ---------------------------------------------------------------------------
@@ -230,20 +236,8 @@ class RewardsCfg:
         weight=2.0,
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
-    # Gait
-    feet_air_time = RewTerm(
-        func=mdp.feet_air_time_positive_biped,
-        weight=0.25,
-        params={"command_name": "base_velocity",
-                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
-                "threshold": 0.4},
-    )
-    feet_slide = RewTerm(
-        func=mdp.feet_slide,
-        weight=-0.1,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
-                "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"])},
-    )
+    # Gait shaping via contacts (feet_air_time / feet_slide) omitted — contact
+    # sensors unavailable on nested URDF imports in this build (see scene comment).
     # Termination
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
     # Regularization
@@ -275,10 +269,15 @@ class RewardsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    base_contact = DoneTerm(
-        func=mdp.illegal_contact,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Trunk"]),
-                "threshold": 1.0},
+    # Contact-free fall detection (contact sensors unavailable — see scene comment).
+    # K1 trunk stands at ~0.57 m; 0.35 m means the robot has collapsed.
+    root_height = DoneTerm(
+        func=mdp.root_height_below_minimum,
+        params={"minimum_height": 0.35},
+    )
+    base_orientation = DoneTerm(
+        func=mdp.bad_orientation,
+        params={"limit_angle": 0.8},
     )
 
 
@@ -340,6 +339,3 @@ class K1VelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
         self.episode_length_s = 20.0
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
-        # Disable height scan in flat mode (override in terrain subclass)
-        if hasattr(self.scene, "contact_forces"):
-            self.scene.contact_forces.update_period = self.sim.dt

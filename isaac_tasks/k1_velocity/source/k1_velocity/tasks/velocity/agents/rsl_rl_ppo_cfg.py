@@ -1,19 +1,11 @@
-"""RSL-RL PPO runner config for K1 velocity task."""
+"""RSL-RL PPO runner config for K1 velocity task.
+
+Uses the rsl-rl >= 4.0 model-based schema (actor/critic as RslRlMLPModelCfg)
+matching Isaac Lab 3.0; the old `policy: RslRlPpoActorCriticCfg` field is deprecated.
+"""
 from isaaclab.utils import configclass
 
-try:
-    from isaaclab_rl.rsl_rl import (
-        RslRlOnPolicyRunnerCfg,
-        RslRlPpoActorCriticCfg,
-        RslRlPpoAlgorithmCfg,
-    )
-except ImportError:
-    # Fallback for older Isaac Lab versions
-    from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
-        RslRlOnPolicyRunnerCfg,
-        RslRlPpoActorCriticCfg,
-        RslRlPpoAlgorithmCfg,
-    )
+from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
 
 @configclass
@@ -24,16 +16,22 @@ class K1VelocityPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 5000
     save_interval = 100
     experiment_name = "k1_velocity_rough"
-    empirical_normalization = False
     logger = "wandb"
     wandb_project = "booster_k1_locomotion"
     wandb_entity = "thakk100"
+    # Blind proprioceptive policy: single "policy" obs group feeds both actor and critic.
+    obs_groups = {"actor": ["policy"], "critic": ["policy"]}
 
-    policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
-        actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[512, 256, 128],
         activation="elu",
+        obs_normalization=False,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
+    )
+    critic = RslRlMLPModelCfg(
+        hidden_dims=[512, 256, 128],
+        activation="elu",
+        obs_normalization=False,
     )
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,

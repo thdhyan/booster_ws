@@ -151,7 +151,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir,
+    # rsl_rl 5.x MLPModel dropped the deprecated noise kwargs that
+    # isaaclab_rl 3.0.0b2's RslRlMLPModelCfg still serializes — strip them.
+    agent_cfg_dict = agent_cfg.to_dict()
+    legacy_keys = ("stochastic", "init_noise_std", "noise_std_type", "state_dependent_std")
+    for model_key in ("actor", "critic"):
+        for key in legacy_keys:
+            agent_cfg_dict[model_key].pop(key, None)
+    runner = OnPolicyRunner(env, agent_cfg_dict, log_dir=log_dir,
                             device=agent_cfg.device)
     runner.add_git_repo_to_log(__file__)
 
