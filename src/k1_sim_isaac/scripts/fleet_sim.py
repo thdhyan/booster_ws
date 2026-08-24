@@ -70,20 +70,22 @@ app_launcher = AppLauncher(launcher_args)
 simulation_app = app_launcher.app
 
 import rclpy  # noqa: E402
+import torch  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from sensor_msgs.msg import JointState  # noqa: E402
 
 import isaaclab.sim as sim_utils  # noqa: E402
-from isaaclab.assets import Articulation  # noqa: E402
+from isaaclab.assets import Articulation, AssetBaseCfg  # noqa: E402
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: E402
 from isaaclab.utils import configclass  # noqa: E402
 
 from k1_velocity.tasks.velocity.velocity_env_cfg import K1_ARTICULATION_CFG  # noqa: E402
 
-try:
-    from k1_interfaces.msg import JointCommand
-except Exception:
-    from sensor_msgs.msg import JointState as JointCommand  # degraded fallback
+# This process runs ONLY the isaacsim-bundled ROS stack (env isolation), so it
+# cannot import workspace message packages. The command endpoint therefore uses
+# standard JointState: position=q_des, velocity=dq_des, effort=tau_ff.
+CMD_TYPE_NAME = "sensor_msgs/JointState"
+JointCommand = JointState
 
 JOINT_ORDER = [
     "AAHead_yaw", "Head_pitch",
@@ -96,24 +98,26 @@ JOINT_ORDER = [
 ]
 
 
-@configclass
-class FleetSceneCfg(InteractiveSceneCfg):
-    def __init_subclass__(cls):  # not used; kept simple below
-        pass
-
-
 def build_scene(n):
-    cfg = FleetSceneCfg(num_envs=n, env_spacing=3.0)
-    cfg.robot = {
+    """Synthesize an InteractiveSceneCfg with one robot_N attribute per robot."""
+    attrs = {
         f"robot_{i}": K1_ARTICULATION_CFG.replace(
             prim_path=f"{{ENV_REGEX_NS}}/Robot_{i}",
-            init_pos=(3.0 * i, 0.0, 0.57),
+            init_state=K1_ARTICULATION_CFG.init_state.replace(pos=(3.0 * i, 0.0, 0.57)),
         )
         for i in range(n)
     }
-    cfg.ground = sim_utils.GroundPlaneCfg()
-    cfg.light = sim_utils.DomeLightCfg(intensity=600.0)
-    return cfg
+    attrs["ground"] = AssetBaseCfg(
+        prim_path="/World/defaultGround", spawn=sim_utils.GroundPlaneCfg()
+    )
+    attrs["light"] = AssetBaseCfg(
+        prim_path="/World/domeLight", spawn=sim_utils.DomeLightCfg(intensity=600.0)
+    )
+    cfg_cls = configclass(type("FleetSceneCfg", (InteractiveSceneCfg,), attrs))
+    # One scene env containing all N robots as separate articulations:
+    # each robot_N then owns exactly ONE physics instance, so per-robot
+    # target buffers are (1, num_joints).
+    return cfg_cls(num_envs=1, env_spacing=3.0)
 
 
 def main():
@@ -138,23 +142,43 @@ def main():
         }
 
         def make_cb(namespace, articulation, joint_idx):
+            logged = [False]
+
             def cb(msg):
-                q_des = {n: p for n, p in zip(msg.joint_names, msg.positions)}
+                if not logged[0]:
+                    node.get_logger().info(f"[{namespace}] first JointCommand received")
+                    logged[0] = True
+                try:
+                    # k1_interfaces/JointCommand uses plural names; JointState singular
+                    names = getattr(msg, "joint_names", None) or msg.name
+                    positions = getattr(msg, "positions", None)
+                    if positions is None:
+                        positions = msg.position
+                    q_des = {n_: float(p) for n_, p in zip(names, positions)}
+                except Exception as e:
+                    node.get_logger().warn(f"[{namespace}] bad command dropped: {e}")
+                    return
                 if q_des:
                     ids, _ = articulation.find_joints(list(q_des.keys()))
-                    vals = list(q_des.values())
-                    articulation.set_joint_position_target(vals, ids)
+                    tgt = torch.tensor([[q_des[k] for k in q_des.keys()]],
+                                       device=articulation.device)
+                    jids = torch.tensor(ids, device=articulation.device, dtype=torch.int32)
+                    articulation.set_joint_position_target_index(
+                        target=tgt, joint_ids=jids)
             return cb
 
         subs[ns] = node.create_subscription(
             JointCommand, f"/{ns}/joint_commands", make_cb(ns, art, idx), 10
         )
-        node.get_logger().info(f"[{ns}] isaac fleet endpoint ready")
+        node.get_logger().info(
+            f"[{ns}] isaac fleet endpoint ready (cmd type: {CMD_TYPE_NAME})"
+        )
 
     rate = node.create_rate(50)
     step = 0
     try:
         while simulation_app.is_running():
+            scene.write_data_to_sim()   # apply actuator targets (env normally does this)
             sim.step(render=False)
             scene.update(0.005)
             step += 1
@@ -170,7 +194,7 @@ def main():
                     m.position = [float(pos[i]) for i in d["idx"]]
                     m.velocity = [float(vel[i]) for i in d["idx"]]
                     d["js"].publish(m)
-            rclpy.spin_once(node, timeout_sec=0)
+            rclpy.spin_once(node, timeout_sec=0.005)
     except KeyboardInterrupt:
         pass
     node.destroy_node()
