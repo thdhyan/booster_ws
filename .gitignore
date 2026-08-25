@@ -45,3 +45,6 @@ wandb/
 # Temporary files
 *.tmp
 *.log
+
+# container secrets (never commit)
+docker/.env

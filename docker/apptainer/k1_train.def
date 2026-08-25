@@ -1,0 +1,100 @@
+# =============================================================================
+# K1 Isaac Lab training — Apptainer/Singularity definition
+# Target: university HPC clusters (no docker daemon; SIF images, bind mounts)
+#
+# Build on the cluster (or any linux box with apptainer):
+#   apptainer build k1-train.sif docker/apptainer/k1_train.def
+#
+# ...or pull the pushed docker image directly (no .def needed):
+#   apptainer pull k1-train.sif docker://docker.io/<user>/k1-isaac-train:3.0.0b2
+#
+# Run (from the directory that holds logs/ and, optionally, docker/.env):
+#   apptainer run --nv --cleanenv \
+#       --bind "$PWD/logs:/workspace/mounts/logs" \
+#       --bind "$PWD/models:/workspace/mounts/models" \
+#       --env K1_GIT_BRANCH=dev/phase-0 \
+#       --env-file docker/.env \
+#       k1-train.sif \
+#       --task Isaac-Velocity-Rough-K1-Teacher-v0 --num_envs 4096 \
+#       --headless --max_iterations 5000
+#
+# Slurm snippet:
+#   #SBATCH --gres=gpu:a100:1
+#   #SBATCH --time=24:00:00
+#   apptainer run --nv --cleanenv --bind ... k1-train.sif --task ... 
+#
+# NOTE: the clone lands in /tmp/booster_ws inside the container (cluster
+# homes are often read-only in $HOME); bind a scratch dir over /tmp if you
+# want the clone cached:  --bind /scratch/$USER/k1tmp:/tmp
+# =============================================================================
+
+Bootstrap: docker
+From: nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1
+
+%labels
+    Author thakk100
+    Description "Booster K1 locomotion teacher-student training (Isaac Lab 3.0.0b2 + rsl_rl 5.0.1)"
+    Version 3.0.0b2-rsl5.0.1
+
+%help
+    K1 velocity locomotion training container.
+
+    Train teacher (privileged):
+        apptainer run --nv --cleanenv --bind $PWD/logs:/workspace/mounts/logs \
+            k1-train.sif --task Isaac-Velocity-Rough-K1-Teacher-v0 \
+            --num_envs 4096 --headless --max_iterations 5000
+
+    Distill student (needs a teacher checkpoint):
+        apptainer run --nv --cleanenv --bind $PWD/logs:/workspace/mounts/logs \
+            --bind $PWD/logs:/workspace/mounts/logs \
+            --env K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/train_student.py \
+            k1-train.sif --task Isaac-Velocity-Distill-K1-v0 \
+            --teacher_checkpoint /workspace/mounts/logs/rsl_rl/k1_velocity_teacher/<run>/model_4999.pt \
+            --num_envs 4096 --headless
+
+    Secrets (wandb/HF/github) via --env-file or APPTAINERENV_* env vars.
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Etc/UTC
+
+    apt-get update && apt-get install -y --no-install-recommends \
+        git git-lfs curl wget ca-certificates build-essential tmux htop \
+    && rm -rf /var/lib/apt/lists/*
+    git lfs install
+
+    # resolve the image's Isaac python (defensive across nvcr layouts)
+    if command -v isaaclab >/dev/null 2>&1; then
+        echo "isaaclab -p" > /etc/k1_python
+    elif [ -f /workspace/isaaclab/isaaclab.sh ]; then
+        echo "/workspace/isaaclab/isaaclab.sh -p" > /etc/k1_python
+    elif [ -f /isaac-sim/python.sh ]; then
+        echo "/isaac-sim/python.sh" > /etc/k1_python
+    else
+        echo "python3" > /etc/k1_python
+    fi
+    cat /etc/k1_python
+
+    PY="$(cat /etc/k1_python)"
+    $PY -m pip install --no-cache-dir \
+        "rsl-rl-lib==5.0.1" wandb huggingface_hub "numpy<2.0"
+    $PY -c "import rsl_rl, wandb; print('rsl_rl', rsl_rl.__version__)"
+
+%files
+    entrypoint.sh /usr/local/bin/k1-entrypoint.sh
+
+%environment
+    export K1_REPO_URL=https://github.com/thdhyan/booster_ws
+    export K1_GIT_BRANCH=dev/phase-0
+    # clusters often mount $HOME read-only inside containers -> clone to /tmp
+    export K1_WORKDIR=/tmp/booster_ws
+    export K1_MOUNT_DIR=/workspace/mounts
+    export K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/train.py
+
+%runscript
+    exec /usr/local/bin/k1-entrypoint.sh "$@"
+
+%test
+    PY="$(cat /etc/k1_python)"
+    $PY -c "import rsl_rl; assert rsl_rl.__version__.startswith('5.'), 'rsl_rl 5.x required'"
+    echo "k1-train container self-test OK"

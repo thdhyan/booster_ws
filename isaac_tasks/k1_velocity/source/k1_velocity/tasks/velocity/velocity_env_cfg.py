@@ -34,6 +34,7 @@ from isaaclab.managers import (
     TerminationTermCfg as DoneTerm,
 )
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg, TerrainGeneratorCfg
 import isaaclab.terrains as terrain_gen
 from isaaclab.utils import configclass
@@ -133,6 +134,20 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
     )
     robot: ArticulationCfg = K1_ARTICULATION_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
+    # Height scanner for the PRIVILEGED (teacher) observation group. The blind
+    # student policy never sees it; the teacher uses it during PPO training and
+    # the student recovers the behavior via distillation.
+    height_scanner = RayCasterCfg(
+        # NOTE: Isaac Sim 6 URDF importer nests link prims under Geometry/
+        # (same reason contact sensors are blocked — see scene comment)
+        prim_path="{ENV_REGEX_NS}/Robot/Geometry/Trunk",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),  # 17x11 = 187 pts
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+
     # No height scanner — blind policy, proprioception only.
     #
     # No contact sensor — KNOWN UPSTREAM LIMITATION (IsaacLab#5918 + PR#6378, both
@@ -182,6 +197,46 @@ class ObservationsCfg:
             self.concatenate_terms = True
 
     policy: PolicyCfg = PolicyCfg()
+
+    @configclass
+    class TeacherCfg(ObsGroup):
+        """Privileged observations for the TEACHER policy (PPO training only).
+
+        Noise-free proprioception + terrain height scan. Foot contact forces
+        would go here too, but remain BLOCKED by the upstream URDF-import
+        nesting limitation (IsaacLab#5918 / PR#6378 — see scene comment):
+        ContactSensor cannot address nested feet bodies in isaaclab 3.0.0b2.
+        Re-add `foot_contact` once the upstream fix lands:
+
+            foot_contact = ObsTerm(
+                func=<contact_forces func>,
+                params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot.*")},
+            )
+        """
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
+        joint_pos = ObsTerm(
+            func=mdp.joint_pos_rel,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
+        )
+        joint_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
+        )
+        actions = ObsTerm(func=mdp.last_action)
+        height_scan = ObsTerm(
+            func=mdp.height_scan,
+            params={"sensor_cfg": SceneEntityCfg("height_scanner")},
+            clip=(-1.0, 1.0),
+        )
+
+        def __post_init__(self):
+            self.enable_corruption = False  # privileged: no sensor noise
+            self.concatenate_terms = True
+
+    teacher: TeacherCfg = TeacherCfg()
 
 
 # ---------------------------------------------------------------------------
@@ -339,3 +394,4 @@ class K1VelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
         self.episode_length_s = 20.0
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
+        self.scene.height_scanner.update_period = self.decimation * self.sim.dt

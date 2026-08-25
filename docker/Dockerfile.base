@@ -1,0 +1,106 @@
+# =============================================================================
+# STAGE 1 — K1 training base image (PARITY with the local venv-isaac stack)
+#
+# Reproduces the validated local training environment exactly:
+#   python 3.12 + torch 2.11.0+cu128 + isaacsim 6.0.1 + isaaclab 3.0.0b2
+#   + rsl-rl-lib 5.0.1  (all pip — same recipe as the workstation venv)
+#
+# WHY NOT nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1? Pulled and inspected:
+# despite the tag it ships Isaac Lab 6.1.16 (source + pip), which breaks the
+# workspace task APIs and is not comparable to local 3.0.0b2 runs. That image
+# is kept as docker/Dockerfile.base-nvcr for future 6.x migration.
+#
+# Build (~20 GB of wheels; needs ~40 GB disk):
+#   docker build -f docker/Dockerfile.base -t thdhyan/k1-isaac-base:3.0.0b2 .
+# Push:
+#   docker push thdhyan/k1-isaac-base:3.0.0b2
+# =============================================================================
+FROM nvcr.io/nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+ARG INSTALL_ROS=1
+ARG INSTALL_MJLAB=0
+ARG RSL_RL_VERSION=5.0.1
+ARG ISAACSIM_VERSION=6.0.1
+ARG ISAACLAB_VERSION=3.0.0b2
+ARG TORCH_VERSION=2.11.0
+ARG ROS_DISTRO=jazzy
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    OMNI_KIT_ACCEPT_EULA=YES \
+    ACCEPT_EULA=Y \
+    PYTHONUNBUFFERED=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1
+
+# ---------- system deps (Kit headless runtime libs included) ----------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git git-lfs curl wget ca-certificates build-essential \
+        python3.12 python3.12-dev python3-pip python3.12-venv \
+        tmux htop nano less \
+        libglvnd0 libgl1 libglx0 libegl1 libgles2 \
+        libx11-6 libx11-xcb1 libxcb1 libxext6 libxi6 libxrender1 libxxf86vm1 \
+        libvulkan1 vulkan-tools mesa-utils \
+        libusb-1.0-0 libudev1 libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.12 /usr/local/bin/python3 \
+    && git lfs install
+
+# ---------- python stack: torch -> isaacsim -> isaaclab (order matters) ----------
+RUN python3 -m pip install --no-cache-dir "torch==${TORCH_VERSION}" \
+        --index-url https://download.pytorch.org/whl/cu128
+RUN python3 -m pip install --no-cache-dir \
+        "isaacsim[all,extscache]==${ISAACSIM_VERSION}" \
+        --extra-index-url https://pypi.nvidia.com
+RUN python3 -m pip install --no-cache-dir \
+        "isaaclab==${ISAACLAB_VERSION}" \
+        --extra-index-url https://pypi.nvidia.com
+RUN python3 -m pip install --no-cache-dir \
+        "rsl-rl-lib==${RSL_RL_VERSION}" wandb huggingface_hub
+
+# ---------- verify the stack imports (fails the build loudly on drift) ----------
+RUN python3 -c "import importlib.metadata as md, torch, isaaclab; \
+    assert isaaclab.__version__ == '${ISAACLAB_VERSION}', isaaclab.__version__; \
+    assert md.version('isaacsim').startswith('${ISAACSIM_VERSION}'), md.version('isaacsim'); \
+    assert md.version('rsl-rl-lib') == '${RSL_RL_VERSION}', md.version('rsl-rl-lib'); \
+    print('base stack OK: isaaclab', isaaclab.__version__, \
+          '| isaacsim', md.version('isaacsim'), \
+          '| torch', torch.__version__, \
+          '| rsl_rl', md.version('rsl-rl-lib'))"
+
+# ---------- optional: ROS 2 Jazzy + teleop (NOT sourced into Isaac procs) ----
+RUN if [ "$INSTALL_ROS" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            software-properties-common gnupg lsb-release \
+        && add-apt-repository universe -y \
+        && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+            -o /usr/share/keyrings/ros-archive-keyring.gpg \
+        && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+            > /etc/apt/sources.list.d/ros2.list \
+        && apt-get update && apt-get install -y --no-install-recommends \
+            ros-${ROS_DISTRO}-ros-base \
+            ros-${ROS_DISTRO}-teleop-twist-keyboard \
+            ros-${ROS_DISTRO}-joy \
+            ros-${ROS_DISTRO}-robot-state-publisher \
+            ros-${ROS_DISTRO}-joint-state-publisher-gui \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# ---------- optional: mjlab ----------
+RUN if [ "$INSTALL_MJLAB" = "1" ]; then \
+        python3 -m pip install --no-cache-dir \
+            "git+https://github.com/mujocolab/mjlab.git"; \
+    fi
+
+# ---------- ROS opt-in hook ----------
+RUN printf '# K1 ROS hook — opt-in (NEVER for Isaac processes)\nif [ "${K1_SOURCE_ROS:-0}" = "1" ] && [ -f /opt/ros/%s/setup.bash ]; then\n  source /opt/ros/%s/setup.bash\nfi\n' "${ROS_DISTRO}" "${ROS_DISTRO}" > /etc/profile.d/k1_ros.sh \
+    && chmod +x /etc/profile.d/k1_ros.sh
+
+# python resolution marker for the entrypoint (plain python3 IS the isaac env here)
+RUN echo "python3" > /etc/k1_python
+
+COPY docker/entrypoint.sh /usr/local/bin/k1-entrypoint.sh
+RUN chmod +x /usr/local/bin/k1-entrypoint.sh
+
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/k1-entrypoint.sh"]
+CMD ["--task", "Isaac-Velocity-Rough-K1-Teacher-v0", "--num_envs", "4096", "--headless"]

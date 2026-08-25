@@ -1,3 +1,22 @@
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "k1_velocity"
+version = "0.1.0"
+description = "RSL-RL velocity locomotion task for Booster K1"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "thakk100", email = "th.dhyan.us@gmail.com" }]
+dependencies = ["isaaclab"]
+
+[tool.setuptools.packages.find]
+where = ["source"]
+
+[project.entry-points."omni.isaac.lab.tasks"]
+"Isaac-Velocity-Rough-K1-v0" = "k1_velocity.tasks.velocity:K1VelocityRoughEnvCfg"
+"Isaac-Velocity-Rough-K1-Play-v0" = "k1_velocity.tasks.velocity:K1VelocityRoughPlayEnvCfg"
+"Isaac-Velocity-Rough-K1-Teacher-v0" = "k1_velocity.tasks.velocity:K1VelocityRoughEnvCfg"
+"Isaac-Velocity-Distill-K1-v0" = "k1_velocity.tasks.velocity:K1VelocityDistillEnvCfg"
