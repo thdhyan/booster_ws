@@ -129,6 +129,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
+    # rsl_rl 5.0.1 upstream bug: OnPolicyRunner.learn() (reused by
+    # DistillationRunner) unconditionally logs action_std=policy.output_std.
+    # The distilled student is deterministic -> distribution=None -> the
+    # output_std property raises AttributeError internally, which falls
+    # through to nn.Module.__getattr__ ("has no attribute 'output_std'").
+    # Shadow it with a dummy instance attribute so logging is a no-op.
+    student_policy = runner.alg.get_policy()
+    if getattr(student_policy, "distribution", None) is None:
+        student_policy.output_std = torch.zeros(
+            env.unwrapped.num_actions, device=agent_cfg.device
+        )
+
     runner.learn(num_learning_iterations=agent_cfg.max_iterations,
                  init_at_random_ep_len=True)
     env.close()
