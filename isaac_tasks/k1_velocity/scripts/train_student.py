@@ -113,6 +113,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         for key in legacy_keys:
             agent_cfg_dict[model_key].pop(key, None)
 
+    # rsl_rl 5.0.1 upstream bug: OnPolicyRunner.learn() (reused by
+    # DistillationRunner) unconditionally logs action_std=policy.output_std.
+    # The distilled student is deterministic -> distribution=None -> reading
+    # the std raises AttributeError deep in the logging path. Override the
+    # CLASS property (instance shadowing fails: property has no setter) with
+    # a None-guarded version; PPO/stochastic models are unaffected.
+    from rsl_rl.models.mlp_model import MLPModel
+
+    def _safe_output_std(self):
+        if self.distribution is None:
+            return torch.zeros(1, device=self.mlp[0].weight.device)
+        return self.distribution.std
+
+    MLPModel.output_std = property(_safe_output_std)
+
     runner = DistillationRunner(env, agent_cfg_dict, log_dir=log_dir,
                                 device=agent_cfg.device)
     runner.add_git_repo_to_log(__file__)
@@ -128,18 +143,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-
-    # rsl_rl 5.0.1 upstream bug: OnPolicyRunner.learn() (reused by
-    # DistillationRunner) unconditionally logs action_std=policy.output_std.
-    # The distilled student is deterministic -> distribution=None -> the
-    # output_std property raises AttributeError internally, which falls
-    # through to nn.Module.__getattr__ ("has no attribute 'output_std'").
-    # Shadow it with a dummy instance attribute so logging is a no-op.
-    student_policy = runner.alg.get_policy()
-    if getattr(student_policy, "distribution", None) is None:
-        student_policy.output_std = torch.zeros(
-            env.unwrapped.action_manager.total_action_dim, device=agent_cfg.device
-        )
 
     runner.learn(num_learning_iterations=agent_cfg.max_iterations,
                  init_at_random_ep_len=True)
