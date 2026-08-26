@@ -60,6 +60,10 @@ From: docker.io/thdhyan/k1-isaac-base:3.0.0b2
 %post
     export DEBIAN_FRONTEND=noninteractive
     export TZ=Etc/UTC
+    # unprivileged (proot) builds inherit the invoker's HOME, which does not
+    # exist inside the image -> `git lfs install` cannot write .gitconfig.
+    export HOME=/root
+    mkdir -p "$HOME"
 
     apt-get update && apt-get install -y --no-install-recommends \
         git git-lfs curl wget ca-certificates build-essential tmux htop \
