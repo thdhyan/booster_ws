@@ -138,7 +138,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     student_policy = runner.alg.get_policy()
     if getattr(student_policy, "distribution", None) is None:
         student_policy.output_std = torch.zeros(
-            env.unwrapped.num_actions, device=agent_cfg.device
+            env.unwrapped.action_manager.total_action_dim, device=agent_cfg.device
         )
 
     runner.learn(num_learning_iterations=agent_cfg.max_iterations,
