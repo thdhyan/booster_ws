@@ -43,6 +43,11 @@ mkdir -p "$SINGULARITY_TMPDIR" "$SINGULARITY_CACHEDIR"
 [ -f "$SIF" ] || { echo "SIF missing: $SIF — build it first (see header)" >&2; exit 1; }
 [ -f "$HOME/.config/k1/secrets.env" ] || { echo "missing ~/.config/k1/secrets.env" >&2; exit 1; }
 
+# --containall strips the host env, so K1_* overrides must be re-passed
+# explicitly (--env beats %environment)
+SCRIPT_ENV=()
+[ -n "${K1_TRAIN_SCRIPT:-}" ] && SCRIPT_ENV+=(--env "K1_TRAIN_SCRIPT=$K1_TRAIN_SCRIPT")
+
 exec singularity run --nv --containall \
   --bind "$RUN/tmp:/tmp" \
   --bind "$RUN/home:/k1home" \
@@ -50,5 +55,6 @@ exec singularity run --nv --containall \
   --bind "$RUN/models:/workspace/mounts/models" \
   --env HOME=/k1home \
   --env CUDA_VISIBLE_DEVICES="$GPU" \
+  "${SCRIPT_ENV[@]}" \
   --env-file "$HOME/.config/k1/secrets.env" \
   "$SIF" "$@"
