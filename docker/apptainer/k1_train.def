@@ -77,9 +77,11 @@ From: docker.io/thdhyan/k1-isaac-base:3.0.0b2
     cat /etc/k1_python
 
     PY="$(cat /etc/k1_python)"
+    # NOTE: no numpy<2 pin here — isaaclab 3.0.0b2 requires numpy>=2 (the old
+    # nvcr-era def downgraded it and broke the stack).
     $PY -m pip install --no-cache-dir \
-        "rsl-rl-lib==5.0.1" wandb huggingface_hub "numpy<2.0"
-    $PY -c "import rsl_rl, wandb; print('rsl_rl', rsl_rl.__version__)"
+        "rsl-rl-lib==5.0.1" wandb huggingface_hub
+    $PY -c 'import importlib.metadata as md; v = md.version("rsl-rl-lib"); assert v.startswith("5."), v; print("post OK: rsl-rl", v)'
 
 %files
     entrypoint.sh /usr/local/bin/k1-entrypoint.sh
@@ -97,5 +99,7 @@ From: docker.io/thdhyan/k1-isaac-base:3.0.0b2
 
 %test
     PY="$(cat /etc/k1_python)"
-    $PY -c "import rsl_rl; assert rsl_rl.__version__.startswith('5.'), 'rsl_rl 5.x required'"
-    echo "k1-train container self-test OK"
+    # metadata (rsl_rl 5.x has no __version__) + Blackwell guard: cu128-only
+    # sm_120 flags, readable without a GPU (COSMOS-bw.MD §3 %test gotcha)
+    $PY -c 'import torch, importlib.metadata as md; f = torch._C._cuda_getArchFlags(); assert "12.0" in f, f; v = md.version("rsl-rl-lib"); assert v.startswith("5."), v'
+    echo "k1-train container self-test OK (sm_120 + rsl-rl 5.x)"
