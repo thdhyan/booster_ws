@@ -70,11 +70,13 @@ From: docker.io/thdhyan/k1-isaac-base:3.0.0b2
     && rm -rf /var/lib/apt/lists/*
     git lfs install
 
-    # resolve the image's Isaac python (defensive across nvcr layouts)
+    # resolve the image's Isaac python (defensive across nvcr layouts).
+    # Store a BARE interpreter path — the entrypoint execs it as a single
+    # token, so "isaaclab -p" itself would break it.
     if command -v isaaclab >/dev/null 2>&1; then
-        echo "isaaclab -p" > /etc/k1_python
+        isaaclab -p 2>/dev/null | head -1 > /etc/k1_python
     elif [ -f /workspace/isaaclab/isaaclab.sh ]; then
-        echo "/workspace/isaaclab/isaaclab.sh -p" > /etc/k1_python
+        /workspace/isaaclab/isaaclab.sh -p | head -1 > /etc/k1_python
     elif [ -f /isaac-sim/python.sh ]; then
         echo "/isaac-sim/python.sh" > /etc/k1_python
     else
