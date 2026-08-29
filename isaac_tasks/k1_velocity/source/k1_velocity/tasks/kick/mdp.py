@@ -178,14 +178,12 @@ def ball_to_goal_progress(env: ManagerBasedRLEnv) -> torch.Tensor:
     goal_pos = GOAL_POS.to(ball_pos_w.device)
 
     # Current distance to goal
-    current_dist = torch.norm(ball_pos_w - goal_pos, dim=-1, keepdim=True)
+    current_dist = torch.norm(ball_pos_w - goal_pos, dim=-1)  # (num_envs,)
 
     # Initial distance (ball spawn at origin, goal at +x)
     init_ball_pos = torch.zeros_like(ball_pos_w)
-    init_ball_pos[:, 0] = 0.0  # x
-    init_ball_pos[:, 1] = 0.0  # y
     init_ball_pos[:, 2] = BALL_RADIUS  # z
-    init_dist = torch.norm(init_ball_pos - goal_pos, dim=-1, keepdim=True)
+    init_dist = torch.norm(init_ball_pos - goal_pos, dim=-1)  # (num_envs,)
 
     # Progress: (init_dist - current_dist) / init_dist, clamped to [0, 1]
     progress = torch.clamp((init_dist - current_dist) / (init_dist + 1e-6), 0.0, 1.0)
@@ -196,68 +194,51 @@ def ball_to_goal_progress(env: ManagerBasedRLEnv) -> torch.Tensor:
 # ============================================================================
 # Kick Task Reset Samplers (OmniReset families)
 # ============================================================================
-def reset_at_ball_shoot(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
-    """Reset: ball 0.3–0.6m in front of one foot, robot ready to kick.
+def _set_ball_pos(env: ManagerBasedRLEnv, env_ids: torch.Tensor, ball_pos_w: torch.Tensor) -> None:
+    """Write ball root state to sim for given env_ids."""
+    ball = env.scene["ball"]
+    root_state = ball.data.default_root_state[env_ids].clone()
+    # world pos: default_root_state includes env origins; add env offset
+    root_state[:, :3] = ball_pos_w + env.scene.env_origins[env_ids]
+    root_state[:, 7:10] = 0.0   # zero lin vel
+    root_state[:, 10:13] = 0.0  # zero ang vel
+    ball.write_root_state_to_sim(root_state, env_ids=env_ids)
 
-    Family 1: at_ball_shoot — robot close to ball, prepared to kick.
+
+def reset_ball_omnireset(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
+    """OmniReset: population-sample a family per env and place ball accordingly.
+
+    Ratios: at_ball_shoot 50%, stand_ready 30%, walk_up 20%.
     """
     num_reset = len(env_ids)
+    device = env.device
 
-    # Random ball distance: 0.3–0.6m
-    ball_dist = 0.3 + 0.3 * torch.rand(num_reset, device=env.device)
+    # Sample family per env
+    rand = torch.rand(num_reset, device=device)
+    mask_shoot = rand < 0.50
+    mask_ready = (rand >= 0.50) & (rand < 0.80)
+    mask_walk  = rand >= 0.80
 
-    # Random heading / y offset for the ball
-    ball_y = (BALL_RADIUS + 0.05) * (2.0 * torch.rand(num_reset, device=env.device) - 1.0)
+    ball_pos = torch.zeros((num_reset, 3), device=device)
+    ball_pos[:, 2] = BALL_RADIUS + 0.01  # default z
 
-    # Ball position: (0.5 m from robot origin in +x, y offset, z=radius+margin)
-    ball_pos_w = torch.zeros((num_reset, 3), device=env.device)
-    ball_pos_w[:, 0] = ball_dist
-    ball_pos_w[:, 1] = ball_y
-    ball_pos_w[:, 2] = BALL_RADIUS + 0.01
+    # Family 1: at_ball_shoot — ball 0.3–0.6m ahead of robot, small y offset
+    n = mask_shoot.sum()
+    if n > 0:
+        dist = 0.3 + 0.3 * torch.rand(n, device=device)
+        y    = 0.10 * (2.0 * torch.rand(n, device=device) - 1.0)
+        ball_pos[mask_shoot, 0] = dist
+        ball_pos[mask_shoot, 1] = y
 
-    # Robot at default stance (handled by reset_scene_to_default)
-    env.scene["ball"].data.root_pos_w[env_ids] = ball_pos_w
-    env.scene["ball"].data.root_lin_vel_w[env_ids] = 0.0
-    env.scene["ball"].data.root_ang_vel_w[env_ids] = 0.0
+    # Family 2: stand_ready — ball at origin (robot at default, ~0.6–1.2m back)
+    # Ball stays at (0,0,z); robot default pose is ~0 — that's fine
 
+    # Family 3: walk_up — ball 2–3.5m ahead, wide y cone
+    n = mask_walk.sum()
+    if n > 0:
+        dist = 2.0 + 1.5 * torch.rand(n, device=device)
+        y    = 2.0 * (torch.rand(n, device=device) - 0.5)
+        ball_pos[mask_walk, 0] = dist
+        ball_pos[mask_walk, 1] = y
 
-def reset_stand_ready(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
-    """Reset: robot 0.6–1.2m behind ball, ball at origin, ready to approach.
-
-    Family 2: stand_ready — robot standing back, preparing approach.
-    """
-    num_reset = len(env_ids)
-
-    # Ball at origin (0, 0, radius+margin)
-    ball_pos_w = torch.zeros((num_reset, 3), device=env.device)
-    ball_pos_w[:, 2] = BALL_RADIUS + 0.01
-
-    # Robot pushed back: -0.6 to -1.2m (via velocity perturbation or direct reset)
-    # For now, rely on reset_scene_to_default + ball placement
-    env.scene["ball"].data.root_pos_w[env_ids] = ball_pos_w
-    env.scene["ball"].data.root_lin_vel_w[env_ids] = 0.0
-    env.scene["ball"].data.root_ang_vel_w[env_ids] = 0.0
-
-
-def reset_walk_up(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
-    """Reset: robot 2–3.5m from ball, ball in wide cone, approach from distance.
-
-    Family 3: walk_up — robot far from ball, must approach and kick.
-    """
-    num_reset = len(env_ids)
-
-    # Random ball distance: 2–3.5m
-    ball_dist = 2.0 + 1.5 * torch.rand(num_reset, device=env.device)
-
-    # Random y offset: wide cone (±1m)
-    ball_y = 2.0 * (torch.rand(num_reset, device=env.device) - 0.5)
-
-    # Ball position
-    ball_pos_w = torch.zeros((num_reset, 3), device=env.device)
-    ball_pos_w[:, 0] = ball_dist
-    ball_pos_w[:, 1] = ball_y
-    ball_pos_w[:, 2] = BALL_RADIUS + 0.01
-
-    env.scene["ball"].data.root_pos_w[env_ids] = ball_pos_w
-    env.scene["ball"].data.root_lin_vel_w[env_ids] = 0.0
-    env.scene["ball"].data.root_ang_vel_w[env_ids] = 0.0
+    _set_ball_pos(env, env_ids, ball_pos)

@@ -323,6 +323,8 @@ class EventCfg:
         mode="reset",
         params={"position_range": (0.5, 1.5), "velocity_range": (0.0, 0.0)},
     )
+    # OmniReset: population-sample ball placement family (shoot / ready / walk-up)
+    reset_ball = EventTerm(func=mdp.reset_ball_omnireset, mode="reset")
     push_robot = EventTerm(
         func=mdp.push_by_setting_velocity,
         mode="interval",
