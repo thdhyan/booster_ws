@@ -34,7 +34,7 @@ from isaaclab.managers import (
     TerminationTermCfg as DoneTerm,
 )
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import RayCasterCfg, patterns
+from isaaclab.sensors import RayCasterCfg, ContactSensorCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg, TerrainGeneratorCfg
 import isaaclab.terrains as terrain_gen
 from isaaclab.utils import configclass
@@ -138,8 +138,6 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
     # student policy never sees it; the teacher uses it during PPO training and
     # the student recovers the behavior via distillation.
     height_scanner = RayCasterCfg(
-        # NOTE: Isaac Sim 6 URDF importer nests link prims under Geometry/
-        # (same reason contact sensors are blocked — see scene comment)
         prim_path="{ENV_REGEX_NS}/Robot/Geometry/Trunk",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
         ray_alignment="yaw",
@@ -148,19 +146,14 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
         mesh_prim_paths=["/World/ground"],
     )
 
-    # No height scanner — blind policy, proprioception only.
-    #
-    # No contact sensor — KNOWN UPSTREAM LIMITATION (IsaacLab#5918 + PR#6378, both
-    # unfixed in isaaclab 3.0.0b2 / isaacsim 6.0.1):
-    #   1. The Isaac Sim 6 URDF importer nests child link prims under their parent
-    #      (e.g. /Robot/Trunk/Left_Arm_1/left_hand_link).
-    #   2. `activate_contact_sensors` (schemas.py) skips children of any prim that has
-    #      RigidBodyAPI -> only the root link 'Trunk' gets PhysxContactReportAPI.
-    #   3. ContactSensor view creation builds a single-parent glob, which cannot address
-    #      nested bodies even if they had the API.
-    # Verified by scripts/probe_k1_bodies.py: all 23 articulation bodies exist; only
-    # Trunk is contact-reportable. Gait shaping therefore uses contact-free terms;
-    # termination uses height/orientation bounds instead of illegal trunk contact.
+    # Contact sensor for foot forces (feet_air_time, feet_slide rewards).
+    # Fixed via scripts/flatten_k1_usd.py which applies PhysxContactReportAPI to all rigid bodies.
+    contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
+        history_length=3,
+        track_air_time=True,
+        filter_prim_paths_expr=["/World/ground"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -202,16 +195,9 @@ class ObservationsCfg:
     class TeacherCfg(ObsGroup):
         """Privileged observations for the TEACHER policy (PPO training only).
 
-        Noise-free proprioception + terrain height scan. Foot contact forces
-        would go here too, but remain BLOCKED by the upstream URDF-import
-        nesting limitation (IsaacLab#5918 / PR#6378 — see scene comment):
-        ContactSensor cannot address nested feet bodies in isaaclab 3.0.0b2.
-        Re-add `foot_contact` once the upstream fix lands:
-
-            foot_contact = ObsTerm(
-                func=<contact_forces func>,
-                params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot.*")},
-            )
+        Noise-free proprioception + terrain height scan. Foot contact forces are now
+        available via scripts/flatten_k1_usd.py which applies PhysxContactReportAPI to
+        all rigid bodies, enabling contact sensors to see nested feet.
         """
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
@@ -291,8 +277,24 @@ class RewardsCfg:
         weight=2.0,
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
-    # Gait shaping via contacts (feet_air_time / feet_slide) omitted — contact
-    # sensors unavailable on nested URDF imports in this build (see scene comment).
+    # Gait shaping via contacts — contact sensors re-enabled via flatten_k1_usd.py
+    feet_air_time = RewTerm(
+        func=mdp.feet_air_time_positive_biped,
+        weight=0.25,
+        params={
+            "command_name": "base_velocity",
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot_link"),
+            "threshold": 0.4,
+        },
+    )
+    feet_slide = RewTerm(
+        func=mdp.feet_slide,
+        weight=-0.1,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot_link"),
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot_link"),
+        },
+    )
     # Termination
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
     # Regularization
@@ -324,8 +326,9 @@ class RewardsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    # Contact-free fall detection (contact sensors unavailable — see scene comment).
+    # Contact-free fall detection (height-based, not contact-based).
     # K1 trunk stands at ~0.57 m; 0.35 m means the robot has collapsed.
+    # Contact-based termination is now possible via contact_forces sensor.
     root_height = DoneTerm(
         func=mdp.root_height_below_minimum,
         params={"minimum_height": 0.35},

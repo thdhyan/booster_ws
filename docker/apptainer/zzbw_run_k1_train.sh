@@ -55,6 +55,7 @@ exec singularity run --nv --containall \
   --bind "$RUN/models:/workspace/mounts/models" \
   --env HOME=/k1home \
   --env CUDA_VISIBLE_DEVICES="$GPU" \
+  --env DISPLAY= \
   "${SCRIPT_ENV[@]}" \
   --env-file "$HOME/.config/k1/secrets.env" \
   "$SIF" "$@"
