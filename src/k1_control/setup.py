@@ -1,26 +1,3 @@
-from setuptools import setup, find_packages
-
-package_name = 'k1_control'
-
-setup(
-    name=package_name,
-    version='0.1.0',
-    packages=find_packages(exclude=['test']),
-    data_files=[
-        ('share/ament_index/resource_index/packages', ['resource/k1_control']),
-        ('share/' + package_name, ['package.xml']),
-    ],
-    install_requires=['setuptools'],
-    zip_safe=True,
-    author='Booster K1',
-    author_email='th.dhyan.us@gmail.com',
-    description='ROS2 control bridge for Booster K1',
-    license='Apache-2.0',
-    entry_points={
-        'console_scripts': [
-            'sdk_bridge = k1_control.sdk_bridge_node:main',
-            'sim_bridge = k1_control.sim_bridge_node:main',
-            'joint_state_pub = k1_control.joint_state_publisher:main',
-        ],
-    },
-)
+version https://git-lfs.github.com/spec/v1
+oid sha256:f60f974b70e74ece56a2c8ce296a3f88d04b57db2788930d5c79ed3e81a74ef8
+size 789

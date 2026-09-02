@@ -336,4 +336,54 @@ booster-cli log --help
 
 ---
 
-*Last updated: 2026-09-02 | All 6 robots online, SSH passwordless verified.*
+## 10. Isaac ROS Compatibility
+
+| | Isaac ROS 3.2 (recommended now) | Isaac ROS 4.6 (future upgrade) |
+|---|---|---|
+| ROS distro | Humble | Jazzy |
+| JetPack | **6.2** ✅ (no change) | 7.2 ⚠️ (major upgrade) |
+| Works on Orin NX? | **✅ Yes** | ❌ Needs JetPack flash |
+| Laptop | Ubuntu 22.04, CUDA 12+ | Ubuntu 24.04, CUDA 13.2+ |
+
+**Use Isaac ROS 3.2** — directly compatible with current JetPack 6.2 / Humble.
+
+Key packages: `isaac_ros_image_pipeline`, `isaac_ros_nvenc` (hardware video encoding), `isaac_ros_vpi`.
+
+---
+
+## 11. Fleet RViz Status (2026-09-02)
+
+### What works
+- ✅ `k1_fleet_rviz` package built and launchable
+- ✅ 6 relay parent processes run in domain 0
+- ✅ 6 relay child processes spawn in robot domains (spawn mode fix applied)
+- ✅ 18 camera topics visible in domain 0 (`/k1_N/boostercamera/head/...`)
+- ✅ 6× robot_state_publisher with K1_22dof.urdf (pelvis root link)
+- ✅ RViz2 launches with 18-image + TF + RobotModel config
+
+### What's broken
+- ❌ **No image data flowing** — topics visible but messages not arriving at RViz
+- **Likely cause**: QoS mismatch (robot BEST_EFFORT vs relay) or image transport (compressed vs raw)
+- **Debug log**: `logs/fleet_rviz_20260902_154156.log`
+
+### Fix needed when robots are charged
+1. Test `ROS_DOMAIN_ID=0 ros2 topic echo /boostercamera/head/rgb --once` from laptop
+2. Check if robot publishes compressed or raw images
+3. Match relay child QoS to robot's actual QoS
+4. Possibly subscribe to compressed topics and use `image_transport` on laptop
+
+### Launch command (when ready)
+```bash
+cd ~/Projects/booster_ws
+source /opt/ros/jazzy/setup.bash && source install/setup.bash
+ros2 launch k1_fleet_rviz fleet_rviz.launch.py
+```
+
+### Stop command
+```bash
+pkill -f "fleet_rviz\|domain_relay\|rviz2\|robot_state_publisher"
+```
+
+---
+
+*Last updated: 2026-09-02 | All 6 robots SSH verified. Fleet RViz: topics visible, image flow pending debug.*
