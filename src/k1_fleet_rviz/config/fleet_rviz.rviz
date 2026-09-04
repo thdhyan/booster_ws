@@ -18,7 +18,7 @@ Visualization Manager:
           Enabled: true
           Name: Left RGB
           Topic:
-            Value: /k1_0/boostercamera/head/rgb
+            Value: /k1_0/boostercamera/head/raw/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -28,7 +28,7 @@ Visualization Manager:
           Enabled: true
           Name: Right RGB
           Topic:
-            Value: /k1_0/boostercamera/head/right/rgb
+            Value: /k1_0/boostercamera/head/raw/right/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -51,7 +51,7 @@ Visualization Manager:
           Enabled: true
           Name: Left RGB
           Topic:
-            Value: /k1_1/boostercamera/head/rgb
+            Value: /k1_1/boostercamera/head/raw/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -61,7 +61,7 @@ Visualization Manager:
           Enabled: true
           Name: Right RGB
           Topic:
-            Value: /k1_1/boostercamera/head/right/rgb
+            Value: /k1_1/boostercamera/head/raw/right/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -84,7 +84,7 @@ Visualization Manager:
           Enabled: true
           Name: Left RGB
           Topic:
-            Value: /k1_2/boostercamera/head/rgb
+            Value: /k1_2/boostercamera/head/raw/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -94,7 +94,7 @@ Visualization Manager:
           Enabled: true
           Name: Right RGB
           Topic:
-            Value: /k1_2/boostercamera/head/right/rgb
+            Value: /k1_2/boostercamera/head/raw/right/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -117,7 +117,7 @@ Visualization Manager:
           Enabled: true
           Name: Left RGB
           Topic:
-            Value: /k1_3/boostercamera/head/rgb
+            Value: /k1_3/boostercamera/head/raw/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -127,7 +127,7 @@ Visualization Manager:
           Enabled: true
           Name: Right RGB
           Topic:
-            Value: /k1_3/boostercamera/head/right/rgb
+            Value: /k1_3/boostercamera/head/raw/right/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -150,7 +150,7 @@ Visualization Manager:
           Enabled: true
           Name: Left RGB
           Topic:
-            Value: /k1_4/boostercamera/head/rgb
+            Value: /k1_4/boostercamera/head/raw/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -160,7 +160,7 @@ Visualization Manager:
           Enabled: true
           Name: Right RGB
           Topic:
-            Value: /k1_4/boostercamera/head/right/rgb
+            Value: /k1_4/boostercamera/head/raw/right/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -183,7 +183,7 @@ Visualization Manager:
           Enabled: true
           Name: Left RGB
           Topic:
-            Value: /k1_5/boostercamera/head/rgb
+            Value: /k1_5/boostercamera/head/raw/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
@@ -193,7 +193,7 @@ Visualization Manager:
           Enabled: true
           Name: Right RGB
           Topic:
-            Value: /k1_5/boostercamera/head/right/rgb
+            Value: /k1_5/boostercamera/head/raw/right/rgb
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
