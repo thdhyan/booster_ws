@@ -46,9 +46,15 @@ parser.add_argument("--num_envs", type=int, default=None)
 parser.add_argument("--seed", type=int, default=None)
 parser.add_argument("--max_iterations", type=int, default=None)
 parser.add_argument("--distributed", action="store_true", default=False)
+parser.add_argument("--video", action="store_true", default=False)
+parser.add_argument("--video_length", type=int, default=1500)
+parser.add_argument("--video_interval", type=int, default=4800)
 cli_args_unused = None  # parity with train.py; extend if needed
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+
+if args_cli.video:
+    args_cli.enable_cameras = True
 
 sys.argv = [sys.argv[0]] + hydra_args
 
@@ -66,6 +72,10 @@ from isaaclab.envs import ManagerBasedRLEnvCfg  # noqa: E402
 from isaaclab.utils.dict import print_dict  # noqa: E402
 from isaaclab.utils.io import dump_yaml  # noqa: E402
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
+from isaaclab_rl.entrypoints.common import (  # noqa: E402
+    apply_video_recording,
+    pre_launch_video_config,
+)
 from isaaclab_tasks.utils.hydra import hydra_task_config  # noqa: E402
 
 import isaaclab_tasks  # noqa: F401,E402
@@ -100,6 +110,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
+
+    # Same video wiring as isaaclab_rl's train_rsl_rl backend (pre-launch Kit
+    # visualizer injection + recorder declaration), both config-level and
+    # evaluated before gym.make builds the env. Clip cadence: first clip at
+    # step 0, then every video_interval control steps (4800 = 200 iters x 24).
+    if args_cli.video:
+        pre_launch_video_config(env_cfg, args_cli=args_cli)
+        apply_video_recording(env_cfg, log_dir, args_cli)
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
