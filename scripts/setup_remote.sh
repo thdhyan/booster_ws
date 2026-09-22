@@ -42,6 +42,10 @@ if [ ! -d "$WS/.git" ]; then
 fi
 cd "$WS"
 git fetch origin >/dev/null 2>&1 || true
+# Submodule URLs are git@github.com: SSH and dl has no GitHub key; all three
+# submodule repos are PUBLIC, so rewrite to https (dl had no working github ssh
+# anyway — no regression). Global on purpose: applies to the submodule clones.
+git config --global url."https://github.com/".insteadOf "git@github.com:"
 git submodule update --init --recursive
 echo "[setup] git lfs pull (assets)"
 git lfs pull || echo "WARN: lfs pull failed — check connectivity/git-lfs"
