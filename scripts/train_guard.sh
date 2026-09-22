@@ -24,7 +24,11 @@ set -u
 WS="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$WS/logs"
 
-GPU_MAX_MB="${GPU_MAX_MB:-7000}"
+GPU_MAX_MB="${GPU_MAX_MB:-7000}"   # used-MB cap on the WATCHED gpu (total, incl. baseline)
+GPU_IDX="${GPU_IDX:-0}"            # 0-based gpu to watch — set to match CUDA_VISIBLE_DEVICES
+MEM_MAX_GB="${MEM_MAX_GB:-9}"      # systemd MemoryMax for the run scope (raise on big-RAM boxes)
+SWAP_MAX_GB="${SWAP_MAX_GB:-4}"    # systemd MemorySwapMax for the run scope
+DISK_PATH="${DISK_PATH:-/}"        # filesystem to watch for free space (e.g. $HOME on servers)
 RAM_MIN_MB="${RAM_MIN_MB:-1024}"
 DISK_MIN_GB="${DISK_MIN_GB:-5}"
 GUARD_HITS="${GUARD_HITS:-3}"
@@ -45,11 +49,11 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 LOG="$WS/logs/guard_${NAME}.log"
 SCOPE="k1train.${NAME}.$$"
 
-echo "[guard] name=$NAME  limits: GPU<${GPU_MAX_MB}MB RAM>${RAM_MIN_MB}MB disk>${DISK_MIN_GB}GB"
+echo "[guard] name=$NAME  limits: gpu$GPU_IDX<${GPU_MAX_MB}MB RAM>${RAM_MIN_MB}MB disk($DISK_PATH)>${DISK_MIN_GB}GB scope Mem=${MEM_MAX_GB}G/swap=${SWAP_MAX_GB}G"
 echo "[guard] log: $LOG"
 
 systemd-run --user --scope --quiet \
-    -p MemoryMax=9G -p MemorySwapMax=4G \
+    -p MemoryMax=${MEM_MAX_GB}G -p MemorySwapMax=${SWAP_MAX_GB}G \
     nice -n 10 "$@" >"$LOG" 2>&1 &
 RUNNER=$!
 
@@ -58,12 +62,12 @@ BREACH=""
 HITS=0
 while kill -0 "$RUNNER" 2>/dev/null; do
     sleep 5
-    GPU_USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)
+    GPU_USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | sed -n "$((GPU_IDX + 1))p")
     RAM_FREE=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
-    DISK_FREE=$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -dc '0-9')
+    DISK_FREE=$(df -BG --output=avail "$DISK_PATH" 2>/dev/null | tail -1 | tr -dc '0-9')
     THIS_BREACH=""
     if [ -n "$GPU_USED" ] && [ "$GPU_USED" -gt "$GPU_MAX_MB" ]; then
-        THIS_BREACH="GPU ${GPU_USED}MB > ${GPU_MAX_MB}MB"
+        THIS_BREACH="gpu$GPU_IDX ${GPU_USED}MB > ${GPU_MAX_MB}MB"
     elif [ "$RAM_FREE" -lt "$RAM_MIN_MB" ]; then
         THIS_BREACH="RAM free ${RAM_FREE}MB < ${RAM_MIN_MB}MB"
     elif [ -n "$DISK_FREE" ] && [ "$DISK_FREE" -lt "$DISK_MIN_GB" ]; then

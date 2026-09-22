@@ -15,6 +15,48 @@ estimates, checkpoint flow, status. Source of truth for run order = `PLAN_PHASE6
 3. **No GT state** for deployable policies (T6.3.5 static test enforces); estimator in loop.
 4. **Locked rewards** (PLAN §4) — no silent edits.
 
+## Remote execution on dl (decided 2026-09-22, user directive)
+
+**Why:** the laptop's 8 GB GPU + ~2.6–3.2 GB desktop baseline tripped the guard's
+7000 MB cap mid-run-1 (7741 MB peak). All training moves to a server box, headless
+(always), tmux, one run at a time. Target **dl** (4× RTX 6000 Ada 48 GB, 503 GB RAM,
+64 cores, x86_64) once VPN routes exist — campus subnets (128.101/10.131) unreachable
+from home without the tunnel; **zz-bw** (2× RTX PRO 6000 Blackwell 96 GB, no SLURM,
+3 TB home) = verified fallback but both GPUs currently compute-saturated by another
+user (`abrar008`). Sparks (GB10, aarch64) = Isaac Sim not supported on arm64.
+
+**dl recipe (same paths as laptop):**
+1. `git clone` booster_ws → `$HOME/Projects/booster_ws` + `git lfs pull`.
+2. Clone isaac-sim/IsaacLab, `git fetch origin tag v3.0.0-EA --no-tags`,
+   `git worktree add $HOME/Projects/IsaacLab-ea v3.0.0-EA` (tag = `ae37b028e`,
+   what the laptop worktree runs; no local IsaacLab patches exist — all ours live
+   in booster_ws).
+3. `uv sync --extra isaacsim --extra wandb --extra video --extra importers
+   --extra rsl-rl` + `uv pip install ultralytics "imageio[ffmpeg]"`
+   (= `scripts/install_phase6_env.sh`, ≈ 30 GB incl. Isaac Sim 6.1.0 pip wheels).
+4. rsync resume checkpoint `model_1500.pt` from laptop.
+5. Launch via `scripts/tmux_train.sh` (exports `HEADLESS=1`; tmux server auto-started
+   in its own systemd scope) with server guard env:
+
+   | var | laptop default | dl value |
+   |---|---|---|
+   | `CUDA_VISIBLE_DEVICES` | (all) | chosen idle GPU (e.g. `2`) |
+   | `GPU_IDX` (guard sample) | `0` | same index as `CUDA_VISIBLE_DEVICES` |
+   | `GPU_MAX_MB` | `7000` | e.g. `46000` (48 GB card − headroom) |
+   | `MEM_MAX_GB` / `SWAP_MAX_GB` | `9` / `4` | e.g. `64` / `64` |
+   | `DISK_PATH` | `/` | `$HOME` (NVMe) |
+
+   `GPU_IDX` MUST match `CUDA_VISIBLE_DEVICES` or the guard watches the wrong GPU.
+6. `WANDB_API_KEY` exported at launch (same entity/project).
+
+**Wall-time estimates below are laptop-measured PhysX**; dl (Ada + 64 cores) expected
+faster — update this table with the first dl run's actual s/iter.
+
+**Run-1 handoff to dl:** resume point = `model_1500.pt` (the 09:57 window saved only
+the start copy before tripping the guard at iter ~1574 — its ~74 thrashing iterations
+are discarded; rewards were sane: mean −16, all 9 locked rewards logged). Remaining
+≈ 430–500 iters × 256 envs.
+
 ## Launch / monitor cheat-sheet
 
 ```bash
@@ -54,7 +96,7 @@ explodes to NaN within 1 iteration** (run-1 resume attempt, 2026-09-22 09:37).
 
 | # | Run | PLAN task id | actual gym id (registered) | envs | iters | backend | est. wall time | ckpt in | status |
 |---|-----|--------------|----------------------------|------|-------|---------|----------------|---------|--------|
-| 1 | P1 teacher | `Isaac-Basic-Teacher-K1-v0` | `Isaac-Basic-Teacher-K1-v0` | 256 | 2000 | physx | PhysX ≈ 55–70 min (remainder ≈ 15–20 min) | `model_1500.pt` (physx runs 0→~1548) | **finishing**: headless PhysX resume from `model_1500` → 2000 (tmux `k1_p1_teacher_physx_finish`, launched 09:57 CDT; first attempt 09:49 killed by an OpenCode restart — see gotcha 4). Newton resume CRASHED (NaN @iter1 = transfer); fresh@256 newton probe PASSED but slower (4.8–5.0 s/iter) |
+| 1 | P1 teacher | `Isaac-Basic-Teacher-K1-v0` | `Isaac-Basic-Teacher-K1-v0` | 256 | 2000 | physx | PhysX ≈ 55–70 min (remainder ≈ 15–20 min) | `model_1500.pt` (physx runs 0→~1548) | **blocked on VPN → dl**: 09:57 run **killed by GPU guard @7741 MB** (desktop baseline grew +2.2 GB Firefox/webview; healthy until kill: mean reward −16, 9 locked rewards, clip_0000 ok, iter ~1574 unsaved → resume `model_1500` on dl). Newton resume CRASHED earlier (NaN @iter1 = transfer); fresh@256 newton probe PASSED but slower (4.8–5.0 s/iter) |
 | 2 | P1 student | `Isaac-Basic-Student-K1-v0` | `Isaac-Basic-Student-K1-v0` `--distill` | 256 | 1500 | physx | PhysX ≈ 45–60 min | #1 final | queued (Gate G3) |
 | 3 | P2 teacher | `Isaac-Move-Teacher-K1-v0` | `Isaac-Velocity-Rough-K1-Teacher-v0` | 512 | 3000 | physx | PhysX ≈ 2–3 h | — | queued |
 | 4 | P2 student | `Isaac-Move-Student-K1-v0` | `Isaac-Velocity-Distill-K1-v0` `--distill` | 512 | 3000 | physx | PhysX ≈ 2–3 h | #3 final | queued (Gate G4) |
