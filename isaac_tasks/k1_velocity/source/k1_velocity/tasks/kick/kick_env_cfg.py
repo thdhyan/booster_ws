@@ -265,12 +265,7 @@ class RewardsCfg:
         weight=1.0,
         params={},
     )
-    # Distance from spawn (encourages ball movement away from start)
-    ball_dist_from_spawn = RewTerm(
-        func=mdp.ball_dist_from_spawn,
-        weight=0.1,
-        params={},
-    )
+
     # REGULARIZATION: velocity, action, joint constraints
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.005)
@@ -361,6 +356,10 @@ class K1KickEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+        # IL 3.0: custom BoosterDelayedPDActuator cannot run through Newton-native
+        # actuator authoring (see SimulationCfg.use_newton_actuators) → use the
+        # Isaac Lab execution path that supports custom actuator configs.
+        self.sim.use_newton_actuators = False
         self.sim.dt = 0.005          # 200 Hz physics
         self.decimation = 4          # 50 Hz control
         self.episode_length_s = 20.0

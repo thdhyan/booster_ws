@@ -38,7 +38,7 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
-import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
+import isaaclab_tasks.core.velocity.mdp as mdp
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
 
 K1_LEG_JOINTS = [

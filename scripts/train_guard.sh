@@ -46,7 +46,6 @@ echo "[guard] log: $LOG"
 
 systemd-run --user --scope --quiet \
     -p MemoryMax=9G -p MemorySwapMax=4G \
-    -p "ManagedOOMPreference=nodest" \
     nice -n 10 "$@" >"$LOG" 2>&1 &
 RUNNER=$!
 

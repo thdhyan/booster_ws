@@ -17,7 +17,7 @@ class K1KickPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 100
     experiment_name = "k1_kick"
     logger = "wandb"
-    wandb_project = "booster_k1_locomotion"
+    wandb_project = "booster_k1_soccer_hrl"
     wandb_entity = "thakk100-dhyan-home"
     # Blind proprioceptive policy: single "policy" obs group feeds both actor and critic.
     obs_groups = {"actor": ["policy"], "critic": ["policy"]}

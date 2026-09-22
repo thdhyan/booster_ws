@@ -27,7 +27,7 @@ class K1KickDistillRunnerCfg(RslRlDistillationRunnerCfg):
     save_interval = 100
     experiment_name = "k1_kick_student"
     logger = "wandb"
-    wandb_project = "booster_k1_locomotion"
+    wandb_project = "booster_k1_soccer_hrl"
     wandb_entity = "thakk100-dhyan-home"
     # student <- blind proprioceptive group (history-stacked by the env cfg),
     # teacher <- privileged group (ball state + noise-free proprioception)

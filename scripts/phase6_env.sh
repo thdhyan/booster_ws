@@ -13,6 +13,8 @@
 export PHASE6_IL_EA="${PHASE6_IL_EA:-$HOME/Projects/IsaacLab-ea}"
 export PHASE6_VENV="$PHASE6_IL_EA/.venv"
 export OMNI_KIT_ACCEPT_EULA=YES
+# venv on PATH so the unified `isaaclab` CLI and `python` resolve to the venv
+export PATH="$PHASE6_VENV/bin:$PATH"
 
 _phase6_ws="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$_phase6_ws/isaac_tasks/k1_velocity/source:$_phase6_ws/isaac_tasks/booster_train_ref/source/booster_train:$_phase6_ws/src/k1_description/assets/src${PYTHONPATH:+:$PYTHONPATH}"

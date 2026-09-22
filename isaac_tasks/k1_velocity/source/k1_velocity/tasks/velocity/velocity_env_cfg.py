@@ -40,7 +40,7 @@ import isaaclab.terrains as terrain_gen
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
-import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
+import isaaclab_tasks.core.velocity.mdp as mdp
 
 # Use the real K1 articulation config from booster_train (correct actuators, URDF path, PD gains)
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
@@ -283,7 +283,7 @@ class RewardsCfg:
         weight=0.25,
         params={
             "command_name": "base_velocity",
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Robot/left_foot_link", "Robot/right_foot_link"]),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
             "threshold": 0.4,
         },
     )
@@ -291,7 +291,7 @@ class RewardsCfg:
         func=mdp.feet_slide,
         weight=-0.1,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Robot/left_foot_link", "Robot/right_foot_link"]),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
             "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
         },
     )
@@ -392,6 +392,10 @@ class K1VelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+        # IL 3.0: custom BoosterDelayedPDActuator cannot run through Newton-native
+        # actuator authoring (see SimulationCfg.use_newton_actuators) → use the
+        # Isaac Lab execution path that supports custom actuator configs.
+        self.sim.use_newton_actuators = False
         self.sim.dt = 0.005          # 200 Hz physics
         self.decimation = 4          # 50 Hz control
         self.episode_length_s = 20.0
