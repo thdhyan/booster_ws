@@ -14,7 +14,6 @@ terrain comes from the same generator as P2 with level mixing at reset.
 from __future__ import annotations
 
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
 from isaaclab.managers import (
     EventTermCfg as EventTerm,
     ObservationGroupCfg as ObsGroup,
@@ -23,10 +22,9 @@ from isaaclab.managers import (
     SceneEntityCfg,
     TerminationTermCfg as DoneTerm,
 )
-from isaaclab.sensors import CameraCfg
-from isaaclab.sim import PinholeCameraCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
+from isaaclab_visualizers.kit import KitVisualizerCfg
 
 import isaaclab_tasks.core.velocity.mdp as mdp
 
@@ -39,35 +37,19 @@ K1_FEET = ["left_foot_link", "right_foot_link"]
 
 
 # ---------------------------------------------------------------------------
-# Scene — rough terrain + one persistent low-res verification camera
+# Video (PLAN §3.5) — headless Kit viewport recording of env_0
 # ---------------------------------------------------------------------------
-@configclass
-class K1BasicSceneCfg(K1RoughSceneCfg):
-    """P1 scene: K1 rough terrain + a static 320x240 camera per env (PLAN §3.5).
-
-    IL 3.0's ``Camera`` requires one prim per environment (FrameView count must equal
-    ``num_envs``), so the camera rides every env root with an identical offset: from
-    the front-right at ~3.2 m, framing that env's robot.  The video recorder reads
-    ``raw[0]`` — env_0's camera only.  No Kit visualizer involved, which keeps the
-    launcher off the Kit-visualizer code path (kit_visualizer.py imports pxr at module
-    scope; importing it before SimulationApp poisons extension loading and crashes Kit
-    at startup — observed on the first --video smoke attempt).
-    """
-
-    video_cam = CameraCfg(
-        prim_path="{ENV_REGEX_NS}/video_cam",
-        spawn=PinholeCameraCfg(focal_length=17.0, horizontal_aperture=24.0),  # ~70 deg hfov
-        offset=CameraCfg.OffsetCfg(
-            pos=(2.2, -2.2, 1.3),
-            # look-at (0, 0, 0.5), ROS convention (forward +Z, up -Y), quat xyzw
-            rot=(0.730107, 0.30242, -0.234496, -0.566124),
-            convention="ros",
-        ),
-        width=320,
-        height=240,
-        data_types=["rgb"],
-        update_period=0.02,  # every control step (50 Hz)
-    )
+# NOTE: recording deliberately uses the EA-native *visualizer* source, not scene
+# camera sensors.  IL 3.0's ``Camera`` requires one prim per environment, so a
+# scene-camera recorder forces num_envs render products — at 256 envs that added
+# ~1-1.5 GB VRAM and OOM'd the 8 GB GPU at the first PPO update.  The headless
+# Kit visualizer renders the single viewport **on demand** at capture time
+# (``render_rgb_array``), frames env_0 via ``origin_type="env"``, and its cfg
+# module is pxr-free (kit_visualizer.py's module-level ``from pxr import ...``
+# only loads when the visualizer instantiates, i.e. after SimulationApp starts).
+# ``sim.visualizer_cfgs`` pre-set below also skips the launcher's auto-injection.
+# PLAN §3.5's "4 dedicated low-res video envs" is superseded by this: one framed
+# view of env_0, zero per-env camera cost.
 
 
 # ---------------------------------------------------------------------------
@@ -252,25 +234,12 @@ class EventCfg:
 class K1BasicTeacherEnvCfg(ManagerBasedRLEnvCfg):
     """K1 P1 BASIC stand/balance — rough terrain teacher training."""
 
-    scene: K1BasicSceneCfg = K1BasicSceneCfg(num_envs=256, env_spacing=2.5)
+    scene: K1RoughSceneCfg = K1RoughSceneCfg(num_envs=256, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-    # Sensor-source recording (PLAN §3.5): pre-declaring recorders makes the CLI skip
-    # its Kit-visualizer auto-injection entirely; --video still gates + overrides
-    # length/interval (CLI: --video_length / --video_interval, in env steps).
-    #   1500 steps @ 50 Hz = 30 s clip; 4800 steps = 24 steps/iter x 200 iterations.
-    video_recorders: list[VideoRecorderCfg] = [
-        VideoRecorderCfg(
-            source="sensor:video_cam",
-            video_length=1500,
-            video_interval=4800,
-            fps=50,
-            output_filename_prefix="p1",
-        )
-    ]
 
     def __post_init__(self):
         super().__post_init__()
@@ -283,3 +252,20 @@ class K1BasicTeacherEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
+        # Video (PLAN §3.5): pre-declare the headless Kit visualizer so the CLI's
+        # pre_launch_video_config skips its auto-injection (our cfg is concrete) and
+        # apply_video_recording wires the --video recorder with source='visualizer'.
+        # Framing: env_0's robot, front-right ~3.2 m, look-at base height 0.5 m.
+        # Defaults would frame the world origin; envs sit on random terrain tiles.
+        self.sim.visualizer_cfgs = [
+            KitVisualizerCfg(
+                headless=True,
+                origin_type="env",
+                origin_env_index=0,
+                eye=(2.2, -2.2, 1.3),
+                lookat=(0.0, 0.0, 0.5),
+                focal_length=17.0,      # ~70 deg hfov (matches the earlier sensor cam)
+                window_width=640,       # low-res clip per PLAN §3.5
+                window_height=360,
+            )
+        ]
