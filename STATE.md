@@ -1,6 +1,6 @@
 # STATE — Booster K1 Workspace
 
-> **Snapshot:** 2026-09-22 06:15 · **Branch:** `dev/phase-6-soccer-hrl` @ `88f73fc`
+> **Snapshot:** 2026-09-22 06:45 · **Branch:** `dev/phase-6-soccer-hrl` @ `16a6803`
 > **GitHub:** `git@github.com:thdhyan/booster_ws.git`
 > Companion docs: `PLAN.md` (original), `PLAN_MULTILAYER.md` (soccer architecture),
 > `PLAN_PHASE6_SOCCER_HRL.md` (current phase plan), `TASKS.md`, `HANDOFF.md`, `PHASE0-DONE.md`
@@ -11,18 +11,20 @@
 
 | Item | Value |
 |---|---|
-| Branch | `dev/phase-6-soccer-hrl` (pushed) — `main` == `origin/main` @ `88f73fc` |
+| Branch | `dev/phase-6-soccer-hrl` @ `16a6803` (pushed) — `main` == `origin/main` @ `88f73fc` |
 | Tags | `v0.7-phase0-complete` (pushed) |
 | Uncommitted (modified) | none |
 | Untracked | `.claude/` (gitignored), `src/k1_description/assets` (submodule untracked content: `K1_22dof.urdf`, `K1_flat.usd`) |
 
 **T6.0 git closure DONE (2026-09-22):** leftovers committed `6ae1d94` → merged/pushed to `main` → tagged → phase-6 branch opened. **LFS incident fixed `88f73fc`**: 62 `.py` files had been stored as LFS pointers (`002a647` added `*.py filter=lfs`, `dd3f6b2` removed the rule without de-LFS'ing) — all restored from local `.git/lfs/objects`, zero edit loss.
 
+**T6.1 + T6.2 landed:** `e9f8e9a` (env rebuild, Gate G0) → `16a6803` (**IL 3.0-EA migration, Gate G1 PASSED**). Sub-repo: `booster_train` fork `651b7a5` → `2879b1a` (actuator API port), pushed. ⚠️ LFS audit follow-up in `16a6803`: kick `mdp.py` restore had been stale (210-line cached object vs authentic 244-line `89b13a9`) — fixed; `kick_env_cfg.py` also reverted to authentic rewards (dropped an unapproved `ball_dist_from_spawn` RewTerm my phase-0 repair had added — PLAN §4 kick = `goal_scored` + `ball_to_goal_progress` only).
+
 ## 2. What exists and works
 
 | Area | Status | Evidence |
 |---|---|---|
-| Training env (Isaac Sim 6.1.0 + IL v3.0.0-EA) | ✅ rebuilt, **G0 passed** | `~/Projects/IsaacLab-ea/.venv`, `source scripts/phase6_env.sh` |
+| Training env (Isaac Sim 6.1.0 + IL v3.0.0-EA) | ✅ rebuilt, **G0 + G1 passed** | `~/Projects/IsaacLab-ea/.venv`, `source scripts/phase6_env.sh`; G1: 16 envs × 2 iters rc=0, wandb `x1ptwkae`, contact rewards fire |
 | Velocity task + training | ✅ done (old env) | student reward 40.89, `models/k1_velocity_student.pt`, teacher `velocity_teacher_4999.pt` |
 | Kick task `Isaac-Kick-Ball-K1-v0` | ✅ committed (`89b13a9`) | `isaac_tasks/k1_velocity/.../kick/` + `scripts/train_kick*.py` |
 | USD flatten + contact rewards | ✅ committed (`faefa3e`) | `scripts/flatten_k1_usd.py`, `K1_flat.usd` (4.2 MB) |
@@ -36,7 +38,7 @@
 ## 3. What is broken / missing right now
 
 1. ~~No working Python training environment.~~ **RESOLVED (T6.1):** `~/Projects/IsaacLab-ea/.venv` = Isaac Sim 6.1.0 + IsaacLab v3.0.0-EA + torch 2.11.0+cu128 (CUDA OK) + rsl_rl + ultralytics + wandb; **Gate G0 passed** (headless Kit 110.3 launch). Task packages load via `scripts/phase6_env.sh` PYTHONPATH; 9 K1 tasks register. Old envs (`.venv-isaac`, conda `isaac`) remain deleted; `IsaacLab/isaac6/.venv` belongs to a parallel G1_sim session — hands off.
-2. **`scripts/start_training.sh` is stale** — points at deleted `.venv-isaac` and wrong wandb entity (`thakk100`; valid entity is `thakk100-dhyan-home`).
+2. ~~`scripts/start_training.sh` is stale~~ **RESOLVED (T6.1.4):** rewritten — venv path + entity `thakk100-dhyan-home`. Note: the canonical launch is now the unified CLI via `train_guard.sh` (see `HANDOFF.md`), which supersedes both `start_training.sh` and the old `scripts/train.py` wrappers.
 3. **zz-bw (HPC training target) unreachable** — `ssh zz-bw` timed out (exit 124). The proven `~/run_k1_train.sh` + SIF flow cannot be used until the network recovers. `run_k1_train.sh` is not on this machine.
 4. **No `k1_head_tracking` / `k1_kicking` packages** — just lone draft env-cfg files, unregistered, no agents or train scripts.
 5. **IsaacLab 2.x→3.0-EA API migration not started** — see PLAN_PHASE6 §3 for the breaking-change list (quats WXYZ→XYZW, `ProxyArray`, `write_*_index/mask`, new `isaaclab train` CLI, `RecordVideo` removed → `VideoRecorderCfg`, importer now nests bodies).

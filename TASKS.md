@@ -188,13 +188,13 @@ Status: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
 - [x] **T6.1.2** IsaacLab **v3.0.0-EA** worktree `~/Projects/IsaacLab-ea` (shared checkout stays on `perf-2026-07-06`); `uv sync` = editable workspace members into the venv; our task packages on PYTHONPATH via `scripts/phase6_env.sh` (EA dropped the entry-point group; root-owned egg-info removed)
 - [x] **T6.1.3** `rsl_rl` (lockfile 5.4.1), `ultralytics` 8.4.158, `imageio[ffmpeg]` — installed; reproduce with `scripts/install_phase6_env.sh`
 - [x] **T6.1.4** Rewrite `scripts/start_training.sh` (stale venv path, wrong wandb entity → `thakk100-dhyan-home`)
-- [~] **T6.1.5** **Gate G0**: headless Kit 110.3 app launch ✅ + 9 K1 task registrations ✅; velocity 16-env env smoke deferred to **G1** (needs T6.2 migration)
+- [~] **T6.1.5** **Gate G0**: headless Kit 110.3 app launch ✅ + 9 K1 task registrations ✅; velocity 16-env env smoke deferred to **G1** (needs T6.2 migration) → **G1 PASSED 2026-09-22** (`16a6803`)
 
 ### T6.2 — Migrate existing tasks to IsaacLab 3.0 API
-- [ ] **T6.2.1** Migration audit per PLAN §2 table (quats WXYZ→XYZW, `ProxyArray.torch`, `write_*_to_sim_index/mask`, `isaaclab train` CLI, `VideoRecorderCfg`, `enable_extension`, actuator renames, contact contracts)
-- [ ] **T6.2.2** Velocity task migration + **Gate G1**: contact rewards fire (`feet_air_time` > 0); re-validate `flatten_k1_usd.py` on 6.1 importer (drop flatten if IL 3.0 native contact fix suffices)
-- [ ] **T6.2.3** Kick task migration (OmniReset reset paths use removed `write_root_state_to_sim`)
-- [ ] **T6.2.4** Patch `thakk100/booster_train` fork (`BOOSTER_K1_CFG`) for 3.0 actuator/quat API if needed
+- [x] **T6.2.1** Migration audit per PLAN §2 table (quats WXYZ→XYZW, `ProxyArray.torch`, `write_*_to_sim_index/mask`, `isaaclab train` CLI, `VideoRecorderCfg`, `enable_extension`, actuator renames, contact contracts) — done; deferred by design: `VideoRecorderCfg` → T6.3.6, play scripts → T6.5
+- [x] **T6.2.2** Velocity task migration + **Gate G1**: contact rewards fire (`feet_air_time` > 0); re-validate `flatten_k1_usd.py` on 6.1 importer (drop flatten if IL 3.0 native contact fix suffices) — **PASSED 2026-09-22**: 16 envs × 2 iters rc=0 @ `16a6803`; wandb run `x1ptwkae`; `model_0/1.pt` saved; `feet_air_time`=3e-05 (>0), `feet_slide`=-2.2e-04 → contact fires directly from `K1_22dof.urdf` on the 6.1 importer (**flatten script not on the training path** — kept for reference)
+- [~] **T6.2.3** Kick task migration (OmniReset reset paths use removed `write_root_state_to_sim`) — done: cfg imports+instantiates ✅; mdp restored to authentic `89b13a9` (244-line — earlier LFS restore had landed a stale 210-line object missing `reset_ball_omnireset`) + `write_root_pose/velocity_to_sim_index` + `ProxyArray.torch`; **remaining:** obs-fn ProxyArray/quat audit + kick smoke
+- [x] **T6.2.4** Patch `thakk100/booster_train` fork (`BOOSTER_K1_CFG`) for 3.0 actuator/quat API if needed — done: fork `2879b1a` (`_parse_joint_parameter` → `resolve_joint_parameter`); deprecated `effort_limit_sim`/`velocity_limit_sim` aliases still accepted with warning
 
 ### T6.3 — Shared MDP infrastructure
 - [ ] **T6.3.1** Domain randomization: ball position (OmniReset extended ±1.5 m cone, rolling resets 0–1.5 m/s), **ball color palette** (white/orange/hivis/black-panel/red), ball physics (mass/restitution/friction/radius), lighting, camera noise — PLAN §3.1
