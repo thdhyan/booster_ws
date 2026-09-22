@@ -1,6 +1,6 @@
 # Booster K1 Workspace — Handoff
 
-> **Date:** 2026-09-22 · **Branch:** `dev/phase-0` @ `dd3f6b2` (34 commits ahead of `main`)
+> **Date:** 2026-09-22 · **Branch:** `dev/phase-6-soccer-hrl` @ `88f73fc` (`main` == `origin/main`, tag `v0.7-phase0-complete` pushed)
 > **GitHub:** https://github.com/thdhyan/booster_ws
 > **Read first:** `STATE.md` (snapshot) → `PLAN_PHASE6_SOCCER_HRL.md` (the active plan) → `TASKS.md` T6.* (execution list)
 > Supersedes the older two-agent handoff (`HANDOFF-AGENTS.md` — contact-sensor + kick-task jobs **landed**: `faefa3e`, `89b13a9`).
@@ -9,11 +9,12 @@
 
 ## Current State
 
-### 🟥 BLOCKING — no training environment exists on this box
-- Old `.venv-isaac` (Isaac Sim 6.0.1 + IL 3.0.0b2) and conda env `isaac` were **deleted from disk**.
-- Fresh empty uv venv: `~/Projects/IsaacLab/isaac6/.venv` (py3.12, created 2026-09-22, `.envrc` targets **Isaac Sim 6.1.0**) — **zero packages installed**.
-- IsaacLab checkout `~/Projects/IsaacLab` sits on branch `perf-2026-07-06` — **not** `v3.0.0-EA`. Plan: separate worktree `~/Projects/IsaacLab-ea` (shared checkout must not move; other projects use it).
-- `zz-bw` HPC unreachable (ssh timeout). **Local-only training plan** it is.
+### ✅ Training environment rebuilt (2026-09-22, T6.1 — Gate G0 PASSED)
+- **Venv:** `~/Projects/IsaacLab-ea/.venv` (uv-managed, py3.12) — Isaac Sim **6.1.0** + IsaacLab **v3.0.0-EA** (worktree `~/Projects/IsaacLab-ea`; shared `~/Projects/IsaacLab` untouched on `perf-2026-07-06`), torch 2.11.0+cu128 (CUDA OK), rsl_rl, **ultralytics 8.4.158**, wandb, imageio+ffmpeg.
+- **G0**: headless Kit 110.3 launch on the RTX 4060 ✅. 9 K1 tasks register (velocity rough/distill/contact/play + kick teacher/distill).
+- **Use:** `source scripts/phase6_env.sh` → `phase6-python <script>` (packages ride PYTHONPATH; not pip-installed: root-owned egg-info removed, and EA dropped the `omni.isaac.lab.tasks` entry-point group so metadata isn't consumed). **Reproduce/repair:** `scripts/install_phase6_env.sh` — any future `uv sync` strips the extras, rerun it after.
+- ⚠️ `~/Projects/IsaacLab/isaac6/.venv` belongs to a **parallel G1_sim session** (recreated it twice mid-run) — do not use or touch.
+- `zz-bw` HPC still unreachable → **local-only training**; disk now **16 GB free** (guard floor 5 GB).
 
 ### ✅ Landed (still valid)
 - Velocity task trained (old env): student reward 40.89 (`models/k1_velocity_student.pt`), teacher 25.08 (`velocity_teacher_4999.pt`).
@@ -21,7 +22,7 @@
 - USD flatten + contact rewards re-enabled — `faefa3e` (`scripts/flatten_k1_usd.py`, `K1_flat.usd` 4.2 MB). *Contact end-to-end never verified; IL 3.0 importer may make flatten obsolete — re-check.*
 - Fleet sim ×3 backends (Gazebo/MuJoCo/Isaac), stereo ZED 2i rig, RoboCup MuJoCo capture — see `PHASE0-DONE.md`, old details in git history.
 
-### 🟡 Untracked drafts (commit with T6.0.1)
+### 🟡 Drafts landed in git (T6.0, `6ae1d94`) — still not runnable
 `isaac_tasks/k1_head_tracking/` + `isaac_tasks/k1_kicking/` (lone env-cfg files, NOT runnable: no `__init__.py`/agents/scripts, obs wired via velocity-command hacks) · `k1_soccer_compose.py` (3-policy state machine, needs trained head/kick policies) · `PLAN_MULTILAYER.md`.
 
 ### ✅ Phase 6 plan + rewards LOCKED
@@ -40,7 +41,7 @@ Five policies, all MLP (512,256,128): **P1 stand** and **P2 walk** are *teacher�
 
 ## Machine rules (do not violate)
 
-- **RTX 4060 8 GB / 16 GiB RAM / 54 GB disk.** One training at a time; ≤512 envs; `train_guard.sh` watchdog + `systemd-run --scope MemoryMax=9G`; GPU >7 GB ⇒ kill. Never 4096 envs locally.
+- **RTX 4060 8 GB / 16 GiB RAM / 16 GB disk free (post-install).** One training at a time; ≤512 envs; `train_guard.sh` watchdog + `systemd-run --scope MemoryMax=9G`; GPU >7 GB ⇒ kill. Never 4096 envs locally.
 - Headless only (`--viz none` in IL 3.0).
 - Videos: every 200 iterations, 30 s → `logs/videos/<run>/` + wandb.
 - Never source system ROS2 and Isaac ROS2 together.

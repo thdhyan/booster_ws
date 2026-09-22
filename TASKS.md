@@ -178,16 +178,17 @@ Status: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
 > Status legend as above: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
 
 ### T6.0 — Phase-0 closure (git)
-- [ ] **T6.0.1** Commit leftovers on `dev/phase-0` (head/kick drafts, `k1_soccer_compose.py`, `PLAN_MULTILAYER.md`, `ROBOTS.md`, `isaac_fleet_vis.py`, `docker_isaac_fleet.sh`, `STATE.md`, `PLAN_PHASE6_SOCCER_HRL.md`)
-- [ ] **T6.0.2** `main ← dev/phase-0` merge, push, tag `v0.7-phase0-complete`, push tags
-- [ ] **T6.0.3** Create branch `dev/phase-6-soccer-hrl`; all Phase-6 work here
+- [x] **T6.0.1** Commit leftovers on `dev/phase-0` (head/kick drafts, `k1_soccer_compose.py`, `PLAN_MULTILAYER.md`, `ROBOTS.md`, `isaac_fleet_vis.py`, `docker_isaac_fleet.sh`, `STATE.md`, `PLAN_PHASE6_SOCCER_HRL.md`) — `6ae1d94`
+- [x] **T6.0.2** `main ← dev/phase-0` merge, push, tag `v0.7-phase0-complete`, push tags
+- [x] **T6.0.3** Create branch `dev/phase-6-soccer-hrl`; all Phase-6 work here
+- [x] **T6.0.4** *(added)* **LFS repair**: 62 `.py` files restored from pointer corruption (`002a647` had `*.py filter=lfs`), + truncated `ball_to_goal_progress` RewTerm fixed — `88f73fc`, pushed to main
 
 ### T6.1 — Environment rebuild (blocking)
-- [ ] **T6.1.1** Install Isaac Sim 6.1.0 pip into `~/Projects/IsaacLab/isaac6/.venv`; disk guard (54 GB free)
-- [ ] **T6.1.2** IsaacLab **v3.0.0-EA** as separate worktree `~/Projects/IsaacLab-ea` (shared checkout stays on `perf-2026-07-06`); editable install into venv
-- [ ] **T6.1.3** Install `rsl_rl`, `ultralytics`, `imageio[ffmpeg]`
-- [ ] **T6.1.4** Rewrite `scripts/start_training.sh` (stale venv path, wrong wandb entity → `thakk100-dhyan-home`)
-- [ ] **T6.1.5** **Gate G0**: `Isaac-Velocity-Flat-K1-v0` smoke, 16 envs, `--viz none`
+- [x] **T6.1.1** Install Isaac Sim 6.1.0 pip → **`~/Projects/IsaacLab-ea/.venv`** (NOT `isaac6/.venv` — that one is owned by a parallel G1_sim session recreating it in loops); disk guard live: **16 GB free** after install + 3.7 GB cache prune
+- [x] **T6.1.2** IsaacLab **v3.0.0-EA** worktree `~/Projects/IsaacLab-ea` (shared checkout stays on `perf-2026-07-06`); `uv sync` = editable workspace members into the venv; our task packages on PYTHONPATH via `scripts/phase6_env.sh` (EA dropped the entry-point group; root-owned egg-info removed)
+- [x] **T6.1.3** `rsl_rl` (lockfile 5.4.1), `ultralytics` 8.4.158, `imageio[ffmpeg]` — installed; reproduce with `scripts/install_phase6_env.sh`
+- [x] **T6.1.4** Rewrite `scripts/start_training.sh` (stale venv path, wrong wandb entity → `thakk100-dhyan-home`)
+- [~] **T6.1.5** **Gate G0**: headless Kit 110.3 app launch ✅ + 9 K1 task registrations ✅; velocity 16-env env smoke deferred to **G1** (needs T6.2 migration)
 
 ### T6.2 — Migrate existing tasks to IsaacLab 3.0 API
 - [ ] **T6.2.1** Migration audit per PLAN §2 table (quats WXYZ→XYZW, `ProxyArray.torch`, `write_*_to_sim_index/mask`, `isaaclab train` CLI, `VideoRecorderCfg`, `enable_extension`, actuator renames, contact contracts)
