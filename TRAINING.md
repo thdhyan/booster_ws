@@ -49,8 +49,37 @@ user (`abrar008`). Sparks (GB10, aarch64) = Isaac Sim not supported on arm64.
    `GPU_IDX` MUST match `CUDA_VISIBLE_DEVICES` or the guard watches the wrong GPU.
 6. `WANDB_API_KEY` exported at launch (same entity/project).
 
-**Wall-time estimates below are laptop-measured PhysX**; dl (Ada + 64 cores) expected
-faster — update this table with the first dl run's actual s/iter.
+**dl active since 2026-09-22 11:55 (laptop clock)** — `scripts/setup_remote.sh` brought
+the box up in 3 idempotent iterations (https rewrite for public submodules on a keyless
+host; checkout `dev/phase-6-soccer-hrl` since `main` lacks phase-6 scripts; reuse the
+pre-existing clean `~/Projects/IsaacLab` @ beta2 → fetch `v3.0.0-EA` tag → worktree
+`ae37b028e`). uv venv + import sanity OK (`isaaclab`/`rsl_rl`/`ultralytics`).
+`tmux_train.sh` now snapshots caller env into `logs/tmux_env_<name>` (600) — tmux
+sessions inherit the SERVER's env, not the ssh client's. dl joins the **pre-existing**
+tmux server (user's `g1`/`isaac-jupyter-*`); the laptop's cgroup/restart hazard (gotcha 4)
+is OpenCode-local and does not apply to remote servers.
+
+**Parallel scheme (user directive 2026-09-22):** independent runs on SEPARATE dl GPUs,
+all in tmux, **no client-side polling** — wandb is the dashboard. Single-run guard lock
+became per-run (`k1_train_guard_<name>.lock`) to allow this. `chain_train.sh` waits for
+a session server-side and launches the next run (newest `model_*.pt` picked after the
+wait). GDrive: rclone remote `gdrive-dhyan` mirrors `logs/` (guard logs, checkpoints,
+videos) to `gdrive-dhyan:Booster/logs` every 10 min from tmux session `k1_gdrive_sync`
+(wandb key `logs/.wandb_key` excluded, chmod 600).
+
+| GPU | run | session | envs × iters |
+|---|---|---|---|
+| GPU1 | P1 teacher finish → **extension** (chained) | `k1_p1_teacher_dl` → `k1_p1_chain` → `k1_p1_teacher_dl_ext` | 256×2000 (running) → 512×3000 from newest ckpt |
+| GPU2 | P2 velocity teacher (fresh) | `k1_p2_teacher_dl` | 512×3000 |
+| GPU3 | P3 head-track (after T6.3.3 authoring) | planned | planned 512×2000 |
+| GPU0 | leave free (ollama / other users) | — | — |
+
+Video interval per size: 256 envs → 4800; 512 envs → 2 457 600 env-steps (= every
+200 iters). `max_iterations` counts FRESH iterations per launch (resume restarts the
+counter: the 09:57-derived dl run does a full 0→2000 block from `model_1500`).
+
+**Wall-time estimates below are laptop-measured PhysX**; dl measured ≈ **1.45 s/iter @256
+with video, 4353 steps/s, GPU util 40 %, 6.5 GB VRAM** — update table rows as runs land.
 
 **Run-1 handoff to dl:** resume point = `model_1500.pt` (the 09:57 window saved only
 the start copy before tripping the guard at iter ~1574 — its ~74 thrashing iterations
@@ -96,9 +125,9 @@ explodes to NaN within 1 iteration** (run-1 resume attempt, 2026-09-22 09:37).
 
 | # | Run | PLAN task id | actual gym id (registered) | envs | iters | backend | est. wall time | ckpt in | status |
 |---|-----|--------------|----------------------------|------|-------|---------|----------------|---------|--------|
-| 1 | P1 teacher | `Isaac-Basic-Teacher-K1-v0` | `Isaac-Basic-Teacher-K1-v0` | 256 | 2000 | physx | PhysX ≈ 55–70 min (remainder ≈ 15–20 min) | `model_1500.pt` (physx runs 0→~1548) | **blocked on VPN → dl**: 09:57 run **killed by GPU guard @7741 MB** (desktop baseline grew +2.2 GB Firefox/webview; healthy until kill: mean reward −16, 9 locked rewards, clip_0000 ok, iter ~1574 unsaved → resume `model_1500` on dl). Newton resume CRASHED earlier (NaN @iter1 = transfer); fresh@256 newton probe PASSED but slower (4.8–5.0 s/iter) |
+| 1 | P1 teacher | `Isaac-Basic-Teacher-K1-v0` | `Isaac-Basic-Teacher-K1-v0` | 256 | 2000 | physx | PhysX ≈ 55–70 min (remainder ≈ 15–20 min) | `model_1500.pt` (physx runs 0→~1548) | **RUNNING on dl** (launch 11:55 laptop / 12:55 dl, tmux `k1_p1_teacher_dl`, idle GPU1, headless, guard `gpu1<30000 MB` / scope 64 G / disk `$HOME`, resume `model_1500` → 2000). Laptop history: 09:57 run killed by GPU guard @7741 MB (healthy rewards −16 until kill); earlier newton resume NaN'd on transfer (fresh@256 newton probe passed but slower: 4.8–5.0 s/iter) |
 | 2 | P1 student | `Isaac-Basic-Student-K1-v0` | `Isaac-Basic-Student-K1-v0` `--distill` | 256 | 1500 | physx | PhysX ≈ 45–60 min | #1 final | queued (Gate G3) |
-| 3 | P2 teacher | `Isaac-Move-Teacher-K1-v0` | `Isaac-Velocity-Rough-K1-Teacher-v0` | 512 | 3000 | physx | PhysX ≈ 2–3 h | — | queued |
+| 3 | P2 teacher | `Isaac-Move-Teacher-K1-v0` | `Isaac-Velocity-Rough-K1-Teacher-v0` | 512 | 3000 | physx | PhysX ≈ 2–3 h / dl ≈ 1–1.5 h | — | **RUNNING on dl GPU2** (tmux `k1_p2_teacher_dl`, 512×3000, launched 12:1x) — parallel with run 1 |
 | 4 | P2 student | `Isaac-Move-Student-K1-v0` | `Isaac-Velocity-Distill-K1-v0` `--distill` | 512 | 3000 | physx | PhysX ≈ 2–3 h | #3 final | queued (Gate G4) |
 | 5 | P3 head-track | `Isaac-HeadTrack-K1-v0` | *not yet authored* (T6.3.3) | 512 (64 YOLO+vid) | 2000 | physx | PhysX ≈ 2–3 h | — | blocked: task authored just before this run |
 | 6 | P4 teacher | `Isaac-Kick-Teacher-K1-v0` | `Isaac-Kick-Ball-K1-Teacher-v0` | 512 (4 vid) | 3000 | physx | PhysX ≈ 2.5–3.5 h | — | queued (kick smoke 16×2 first, closes T6.2.3) |

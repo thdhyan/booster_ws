@@ -16,7 +16,9 @@
 #     (debounce: first-run RTX shader compilation + Kit bring-up cause brief
 #      available-RAM dips that must not kill an otherwise-healthy run)
 #   * nice -n 10 so the desktop stays responsive
-#   * only ONE guarded run at a time (lock file)
+#   * per-RUN lock file (k1_train_guard_<name>.lock): same name can't start
+#     twice; different runs MAY run concurrently (multi-GPU servers). On the
+#     single-GPU laptop, launch one at a time yourself.
 #
 # Logs: logs/guard_<name>.log (stdout+stderr of the command)
 
@@ -32,16 +34,16 @@ DISK_PATH="${DISK_PATH:-/}"        # filesystem to watch for free space (e.g. $H
 RAM_MIN_MB="${RAM_MIN_MB:-1024}"
 DISK_MIN_GB="${DISK_MIN_GB:-5}"
 GUARD_HITS="${GUARD_HITS:-3}"
-LOCK=/tmp/k1_train_guard.lock
 
 NAME="run"
 if [ "${1:-}" = "--name" ]; then NAME="$2"; shift 2; fi
 if [ "${1:-}" = "--" ]; then shift; fi
 [ $# -ge 1 ] || { echo "usage: train_guard.sh [--name N] -- <cmd...>" >&2; exit 2; }
+LOCK="/tmp/k1_train_guard_${NAME}.lock"
 
 # single-run lock (flock-free, atomic via mkdir)
 if ! mkdir "$LOCK" 2>/dev/null; then
-    echo "ERROR: another guarded run holds $LOCK (remove it if stale: rmdir $LOCK)" >&2
+    echo "ERROR: run '$NAME' already holds $LOCK (remove it if stale: rmdir $LOCK)" >&2
     exit 3
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
