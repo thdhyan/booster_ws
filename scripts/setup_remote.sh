@@ -43,6 +43,9 @@ if [ ! -d "$WS/.git" ]; then
 fi
 cd "$WS"
 git fetch origin >/dev/null 2>&1 || true
+# The clone lands on the default branch (main), which predates the phase-6
+# scripts — everything T6 lives on the dev branch.
+git checkout dev/phase-6-soccer-hrl
 # Submodule URLs are git@github.com: SSH and dl has no GitHub key; all three
 # submodule repos are PUBLIC, so rewrite to https (dl had no working github ssh
 # anyway — no regression). Global on purpose: applies to the submodule clones.
