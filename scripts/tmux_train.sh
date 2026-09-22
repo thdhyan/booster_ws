@@ -39,11 +39,26 @@ if tmux list-sessions 2>&1 | grep -q "no server running"; then
     fi
 fi
 
+# Snapshot caller-set vars into a 600-mode env file sourced inside the session.
+# tmux sessions inherit the SERVER's env, not the launching client's — arbitrary
+# vars (CUDA_VISIBLE_DEVICES, guard limits, WANDB_API_KEY, K1_PHYSICS, HEADLESS)
+# would otherwise be silently dropped. Only explicitly-set vars are written.
+ENVFILE="$WS/logs/tmux_env_${NAME}"
+: > "$ENVFILE"
+chmod 600 "$ENVFILE"
+HEADLESS="${HEADLESS:-1}"
+for _v in HEADLESS CUDA_VISIBLE_DEVICES GPU_IDX GPU_MAX_MB MEM_MAX_GB SWAP_MAX_GB \
+          DISK_PATH K1_PHYSICS WANDB_API_KEY WANDB_MODE; do
+    eval "_val=\${$_v-}"
+    [ -n "$_val" ] && printf 'export %s=%q\n' "$_v" "$_val" >> "$ENVFILE"
+done
+unset _v _val
+
 # Built as a single shell string evaluated by tmux's default shell.
 # HEADLESS=1: the unified train backend ignores a --headless CLI arg (verified
 # 2026-09-22: window opened despite argv) — AppLauncher honors the HEADLESS
 # env var instead. Override with HEADLESS=0 if you ever want the window.
-INNER="cd $WS && export HEADLESS=\"\${HEADLESS:-1}\" && source scripts/phase6_env.sh && scripts/train_guard.sh --name $NAME -- $*; rc=\$?; echo GUARD_RC=\$rc | tee -a $WS/logs/guard_$NAME.log; echo GUARD_RC=\$rc > $DONE"
+INNER="cd $WS && export HEADLESS=\"\${HEADLESS:-1}\" && source scripts/phase6_env.sh && . $ENVFILE && scripts/train_guard.sh --name $NAME -- $*; rc=\$?; echo GUARD_RC=\$rc | tee -a $WS/logs/guard_$NAME.log; echo GUARD_RC=\$rc > $DONE"
 
 tmux new-session -d -s "$SESSION" "$INNER" || exit 4
 echo "launched tmux session: $SESSION"
