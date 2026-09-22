@@ -81,17 +81,9 @@ def ball_pos_in_robot_frame(env: ManagerBasedRLEnv) -> torch.Tensor:
     Returns:
         torch.Tensor: (num_envs, 3) ball position in robot frame.
     """
-    ball_pos_w = env.scene["ball"].data.root_pos_w
-    robot_pos_w = env.scene["robot"].data.root_pos_w
-    robot_quat_w = env.scene["robot"].data.root_quat_w
-
-    # Convert warp tensors to torch if needed
-    if not isinstance(ball_pos_w, torch.Tensor):
-        ball_pos_w = torch.as_tensor(ball_pos_w)
-    if not isinstance(robot_pos_w, torch.Tensor):
-        robot_pos_w = torch.as_tensor(robot_pos_w)
-    if not isinstance(robot_quat_w, torch.Tensor):
-        robot_quat_w = torch.as_tensor(robot_quat_w)
+    ball_pos_w = env.scene["ball"].data.root_pos_w.torch
+    robot_pos_w = env.scene["robot"].data.root_pos_w.torch
+    robot_quat_w = env.scene["robot"].data.root_quat_w.torch  # xyzw (IL 3.0)
 
     # Compute ball position relative to robot origin
     ball_pos_rel = ball_pos_w - robot_pos_w
@@ -109,16 +101,10 @@ def ball_lin_vel_in_robot_frame(env: ManagerBasedRLEnv) -> torch.Tensor:
     Returns:
         torch.Tensor: (num_envs, 3) ball linear velocity in robot frame.
     """
-    ball_lin_vel_w = env.scene["ball"].data.root_lin_vel_w
-    robot_quat_w = env.scene["robot"].data.root_quat_w
+    ball_lin_vel_w = env.scene["ball"].data.root_lin_vel_w.torch
+    robot_quat_w = env.scene["robot"].data.root_quat_w.torch  # xyzw (IL 3.0)
 
-    # Convert warp tensors to torch if needed
-    if not isinstance(robot_quat_w, torch.Tensor):
-        robot_quat_w = torch.as_tensor(robot_quat_w)
-    if not isinstance(ball_lin_vel_w, torch.Tensor):
-        ball_lin_vel_w = torch.as_tensor(ball_lin_vel_w)
-
-    # Rotate using isaaclab's quat_apply_inverse (which expects torch tensors)
+    # Rotate into robot frame
     from isaaclab.utils.math import quat_apply_inverse
     ball_lin_vel_robot = quat_apply_inverse(robot_quat_w, ball_lin_vel_w)
 
@@ -131,9 +117,7 @@ def goal_distance(env: ManagerBasedRLEnv) -> torch.Tensor:
     Returns:
         torch.Tensor: (num_envs, 1) Euclidean distance from ball to goal.
     """
-    ball_pos_w = env.scene["ball"].data.root_pos_w
-    if not isinstance(ball_pos_w, torch.Tensor):
-        ball_pos_w = torch.as_tensor(ball_pos_w)
+    ball_pos_w = env.scene["ball"].data.root_pos_w.torch
     goal_pos = GOAL_POS.to(ball_pos_w.device)
     dist = torch.norm(ball_pos_w - goal_pos, dim=-1, keepdim=True)
     return dist
@@ -148,9 +132,7 @@ def goal_scored(env: ManagerBasedRLEnv) -> torch.Tensor:
     Returns:
         torch.Tensor: (num_envs,) binary score indicator as bool.
     """
-    ball_pos_w = env.scene["ball"].data.root_pos_w
-    if not isinstance(ball_pos_w, torch.Tensor):
-        ball_pos_w = torch.as_tensor(ball_pos_w)
+    ball_pos_w = env.scene["ball"].data.root_pos_w.torch
     goal_x_threshold = FIELD_L / 2 - 0.1  # 0.1m margin for goal line
 
     scored = (
@@ -172,9 +154,7 @@ def ball_to_goal_progress(env: ManagerBasedRLEnv) -> torch.Tensor:
     Returns:
         torch.Tensor: (num_envs, 1) progress in range [0, 1].
     """
-    ball_pos_w = env.scene["ball"].data.root_pos_w
-    if not isinstance(ball_pos_w, torch.Tensor):
-        ball_pos_w = torch.as_tensor(ball_pos_w)
+    ball_pos_w = env.scene["ball"].data.root_pos_w.torch
     goal_pos = GOAL_POS.to(ball_pos_w.device)
 
     # Current distance to goal

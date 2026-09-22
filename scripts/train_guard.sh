@@ -8,10 +8,13 @@
 # Enforcement:
 #   * systemd user scope: MemoryMax=9G, MemorySwapMax=4G  (OOM killer hits THIS
 #     scope first; desktop RAM stays reserved)
-#   * watchdog loop (5 s): kill the whole scope if
+#   * watchdog loop (5 s): kill the whole scope if a limit is breached for
+#     $GUARD_HITS consecutive samples (default 3 = 15 s sustained):
 #       - GPU used memory  > $GPU_MAX_MB (default 7000) or
-#       - free RAM         < $RAM_MIN_MB (default 1024) or
+#       - available RAM    < $RAM_MIN_MB (default 1024) or
 #       - free disk        < $DISK_MIN_GB (default 5)
+#     (debounce: first-run RTX shader compilation + Kit bring-up cause brief
+#      available-RAM dips that must not kill an otherwise-healthy run)
 #   * nice -n 10 so the desktop stays responsive
 #   * only ONE guarded run at a time (lock file)
 #
@@ -24,6 +27,7 @@ mkdir -p "$WS/logs"
 GPU_MAX_MB="${GPU_MAX_MB:-7000}"
 RAM_MIN_MB="${RAM_MIN_MB:-1024}"
 DISK_MIN_GB="${DISK_MIN_GB:-5}"
+GUARD_HITS="${GUARD_HITS:-3}"
 LOCK=/tmp/k1_train_guard.lock
 
 NAME="run"
@@ -50,17 +54,34 @@ systemd-run --user --scope --quiet \
 RUNNER=$!
 
 KILLED=""
+BREACH=""
+HITS=0
 while kill -0 "$RUNNER" 2>/dev/null; do
     sleep 5
     GPU_USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)
     RAM_FREE=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
     DISK_FREE=$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -dc '0-9')
+    THIS_BREACH=""
     if [ -n "$GPU_USED" ] && [ "$GPU_USED" -gt "$GPU_MAX_MB" ]; then
-        KILLED="GPU ${GPU_USED}MB > ${GPU_MAX_MB}MB"
+        THIS_BREACH="GPU ${GPU_USED}MB > ${GPU_MAX_MB}MB"
     elif [ "$RAM_FREE" -lt "$RAM_MIN_MB" ]; then
-        KILLED="RAM free ${RAM_FREE}MB < ${RAM_MIN_MB}MB"
+        THIS_BREACH="RAM free ${RAM_FREE}MB < ${RAM_MIN_MB}MB"
     elif [ -n "$DISK_FREE" ] && [ "$DISK_FREE" -lt "$DISK_MIN_GB" ]; then
-        KILLED="disk ${DISK_FREE}GB < ${DISK_MIN_GB}GB"
+        THIS_BREACH="disk ${DISK_FREE}GB < ${DISK_MIN_GB}GB"
+    fi
+    if [ -n "$THIS_BREACH" ]; then
+        if [ "$THIS_BREACH" = "$BREACH" ]; then
+            HITS=$((HITS + 1))
+        else
+            BREACH="$THIS_BREACH"
+            HITS=1
+        fi
+        if [ "$HITS" -ge "$GUARD_HITS" ]; then
+            KILLED="$BREACH (${HITS} consecutive samples)"
+        fi
+    else
+        BREACH=""
+        HITS=0
     fi
     if [ -n "$KILLED" ]; then
         echo "[guard] LIMIT HIT: $KILLED — killing training scope" | tee -a "$LOG"

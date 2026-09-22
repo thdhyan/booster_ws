@@ -21,4 +21,5 @@ def register_tasks() -> list[str]:
         Additional CLI args to merge (none — all args come from the command line).
     """
     import k1_velocity.tasks.velocity  # noqa: F401 — registers velocity task family
+    import k1_velocity.tasks.basic  # noqa: F401 — registers P1 BASIC task family
     return []
