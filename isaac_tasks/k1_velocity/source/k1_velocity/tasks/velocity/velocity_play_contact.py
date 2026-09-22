@@ -1,3 +1,38 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:03c973d8c4c14d153c4dd3cc07af5817284b45a33b002cb7e4b6214b89d78a53
-size 1706
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
+# Modifications for Booster K1 by thdhyan.
+# SPDX-License-Identifier: Apache-2.0
+
+"""K1 velocity play config with contact sensor visualization."""
+
+from isaaclab.utils import configclass
+from isaaclab.envs.common import ViewerCfg
+from .velocity_env_distill import K1VelocityDistillEnvCfg
+
+@configclass
+class K1VelocityContactPlayEnvCfg(K1VelocityDistillEnvCfg):
+    """Play config: 1 env, flat terrain, contact sensors enabled for visualization."""
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 1
+        self.scene.env_spacing = 2.5
+        # Disable terrain curriculum
+        self.curriculum = None
+        # Flat terrain
+        self.scene.terrain.terrain_type = "plane"
+        self.scene.terrain.terrain_generator = None
+        # Disable noise
+        self.observations.policy.enable_corruption = False
+        self.observations.teacher.enable_corruption = False
+        # Disable external pushes
+        self.events.push_robot = None
+        self.events.add_base_mass = None
+        # Disable contact-based rewards (sensor body names don't match in play mode)
+        # The contact_forces sensor still exists for visualization
+        self.rewards.feet_air_time = None
+        self.rewards.feet_slide = None
+        # Fixed command for play (will be overridden by keyboard)
+        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
+        self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
+        self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+        # Enable viewer with proper config
+        self.viewer = ViewerCfg(eye=(2.5, 0.0, 1.5), lookat=(0.0, 0.0, 0.5))
