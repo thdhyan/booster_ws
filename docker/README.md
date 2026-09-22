@@ -72,7 +72,7 @@ docker/run.sh --task Isaac-Velocity-Rough-K1-Teacher-v0 --num-envs 4096 --iters 
 # stage-2 student distillation (teacher ckpt from stage 1)
 docker/run.sh --branch dev/phase-0 -- \
   python_dummy_ignored --task Isaac-Velocity-Distill-K1-v0 \
-  --teacher_checkpoint logs/rsl_rl/k1_velocity_teacher/<run>/model_4999.pt
+  --teacher_checkpoint logs/rsl_rl/p2_move_teacher/<run>/model_4999.pt
 # (for the student, also set: -e K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/train_student.py)
 
 # iterate on local uncommitted code (bind-mount this checkout instead of clone)

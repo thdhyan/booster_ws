@@ -71,8 +71,9 @@ videos) to `gdrive-dhyan:Booster/logs` every 10 min from tmux session `k1_gdrive
 |---|---|---|---|
 | GPU1 | P1 teacher finish → **extension** (chained) | `k1_p1_teacher_dl` → `k1_p1_chain` → `k1_p1_teacher_dl_ext` | 256×2000 (running) → 512×3000 from newest ckpt |
 | GPU2 | P2 velocity teacher (fresh) | `k1_p2_teacher_dl` | 512×3000 |
-| GPU3 | P3 head-track (after T6.3.3 authoring) | planned | planned 512×2000 |
-| GPU0 | leave free (ollama / other users) | — | — |
+| GPU3 | ⚠️ not viable for our runs (20 GiB resident by neighbors vs 30 GiB guard cap) | — | — |
+| GPU0 | kick smoke ✅ PASSED (16×2) → **P4 teacher** queued behind P3 | `k1_p4_kick_smoke` → planned | 16×2 → 512×3000 |
+| GPU2 (frees when P2 ends) / GPU0 | **P3 head-track** — launches right after T6.3.x authoring | planned | 512×2000 |
 
 Video interval per size: 256 envs → 4800; 512 envs → 2 457 600 env-steps (= every
 200 iters). `max_iterations` counts FRESH iterations per launch (resume restarts the
@@ -127,10 +128,10 @@ explodes to NaN within 1 iteration** (run-1 resume attempt, 2026-09-22 09:37).
 |---|-----|--------------|----------------------------|------|-------|---------|----------------|---------|--------|
 | 1 | P1 teacher | `Isaac-Basic-Teacher-K1-v0` | `Isaac-Basic-Teacher-K1-v0` | 256 | 2000 | physx | PhysX ≈ 55–70 min (remainder ≈ 15–20 min) | `model_1500.pt` (physx runs 0→~1548) | **RUNNING on dl** (launch 11:55 laptop / 12:55 dl, tmux `k1_p1_teacher_dl`, idle GPU1, headless, guard `gpu1<30000 MB` / scope 64 G / disk `$HOME`, resume `model_1500` → 2000). Laptop history: 09:57 run killed by GPU guard @7741 MB (healthy rewards −16 until kill); earlier newton resume NaN'd on transfer (fresh@256 newton probe passed but slower: 4.8–5.0 s/iter) |
 | 2 | P1 student | `Isaac-Basic-Student-K1-v0` | `Isaac-Basic-Student-K1-v0` `--distill` | 256 | 1500 | physx | PhysX ≈ 45–60 min | #1 final | queued (Gate G3) |
-| 3 | P2 teacher | `Isaac-Move-Teacher-K1-v0` | `Isaac-Velocity-Rough-K1-Teacher-v0` | 512 | 3000 | physx | PhysX ≈ 2–3 h / dl ≈ 1–1.5 h | — | **RUNNING on dl GPU2** (tmux `k1_p2_teacher_dl`, 512×3000, launched 12:1x) — parallel with run 1 |
+| 3 | P2 teacher | `Isaac-Move-Teacher-K1-v0` | `Isaac-Velocity-Rough-K1-Teacher-v0` | 512 | 3000 | physx | PhysX ≈ 2–3 h / dl ≈ 1–1.5 h | — | **RUNNING on dl GPU2** (tmux `k1_p2_teacher_dl`, 512×3000, launched 12:1x) — parallel with run 1; ⚠ wandb shows legacy name `k1_velocity_teacher` (cfg renamed `p2_move_teacher` this commit — rename run via wandb API at completion) |
 | 4 | P2 student | `Isaac-Move-Student-K1-v0` | `Isaac-Velocity-Distill-K1-v0` `--distill` | 512 | 3000 | physx | PhysX ≈ 2–3 h | #3 final | queued (Gate G4) |
-| 5 | P3 head-track | `Isaac-HeadTrack-K1-v0` | *not yet authored* (T6.3.3) | 512 (64 YOLO+vid) | 2000 | physx | PhysX ≈ 2–3 h | — | blocked: task authored just before this run |
-| 6 | P4 teacher | `Isaac-Kick-Teacher-K1-v0` | `Isaac-Kick-Ball-K1-Teacher-v0` | 512 (4 vid) | 3000 | physx | PhysX ≈ 2.5–3.5 h | — | queued (kick smoke 16×2 first, closes T6.2.3) |
+| 5 | P3 head-track | `Isaac-HeadTrack-K1-v0` | *not yet authored* (T6.3.3) | 512 (64 YOLO+vid) | 2000 | physx | PhysX ≈ 2–3 h | — | blocked: task authored just before this run → **authoring NOW** (T6.3.1→3.4 first); frozen legs = P1 teacher final; target GPU2 when P2 ends |
+| 6 | P4 teacher | `Isaac-Kick-Teacher-K1-v0` | `Isaac-Kick-Ball-K1-Teacher-v0` | 512 (4 vid) | 3000 | physx | PhysX ≈ 2.5–3.5 h | — | kick smoke **PASSED** 2026-09-22 13:19 dl (16×2, GPU0, GUARD_RC=0, clip non-black → T6.2.3 closed); teacher **gated on T6.3.3 YOLO + trained P3 head (PLAN §P4/T6.4.6) + obs-53/goal env upgrade — will NOT train the blind env (retrain guaranteed)** |
 | 7 | P4 student | `Isaac-Kick-Student-K1-v0` | `Isaac-Kick-Ball-K1-Distill-v0` `--distill` | 512 (64 YOLO+vid) | 3000 | physx | PhysX ≈ 2.5–3.5 h | #6 final | queued (Gate G5) |
 | 8 | P5 teacher | `Isaac-HRL-Teacher-K1-v0` | *not yet authored* (T6.3.4) | 256 (32 YOLO+vid) | 2000 | physx | PhysX ≈ 1–1.5 h | #1–#7 | blocked: T6.3.4 |
 | 9 | P5 student | `Isaac-HRL-Student-K1-v0` | *not yet authored* (T6.3.4) | 256 | 1500 | physx | PhysX ≈ 50–70 min | #8 final | queued (Gate G6) |

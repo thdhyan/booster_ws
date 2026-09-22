@@ -20,7 +20,7 @@
 # Examples:
 #   docker/run.sh --task Isaac-Velocity-Rough-K1-Teacher-v0 --num-envs 4096 --iters 5000
 #   docker/run.sh --branch dev/phase-0 --source -- --task Isaac-Velocity-Distill-K1-v0 \
-#       --teacher_checkpoint logs/rsl_rl/k1_velocity_teacher/run/model_4999.pt
+#       --teacher_checkpoint logs/rsl_rl/p2_move_teacher/run/model_4999.pt
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."   # workspace root

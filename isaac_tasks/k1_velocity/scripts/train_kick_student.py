@@ -12,14 +12,14 @@ been trained):
      history):
        python isaac_tasks/k1_velocity/scripts/train_kick_student.py \
            --task Isaac-Kick-Ball-K1-Distill-v0 \
-           --teacher_checkpoint logs/rsl_rl/k1_kick_teacher/<run>/model_4999.pt \
+           --teacher_checkpoint logs/rsl_rl/p4_kick_teacher/<run>/model_4999.pt \
            --num_envs 4096 --headless
 
   3. Export the student for deployment:
        python isaac_tasks/k1_velocity/scripts/play_kick_student.py \
            --task Isaac-Kick-Ball-K1-Distill-v0 \
-           --checkpoint logs/rsl_rl/k1_kick_student/<run>/model_*.pt \
-           --num_envs 20 --headless --export models/k1_kick_student.pt
+           --checkpoint logs/rsl_rl/p4_kick_student/<run>/model_*.pt \
+           --num_envs 20 --headless --export models/p4_kick_student.pt
 
 The student consumes the "policy" obs group history-stacked to 480 dims
 (term-major, oldest->newest) — the same layout k1_locomotion's node produces.

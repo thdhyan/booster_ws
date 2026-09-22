@@ -52,7 +52,7 @@ From: docker.io/thdhyan/k1-isaac-base:3.0.0b2
             --bind $PWD/logs:/workspace/mounts/logs \
             --env K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/train_student.py \
             k1-train.sif --task Isaac-Velocity-Distill-K1-v0 \
-            --teacher_checkpoint /workspace/mounts/logs/rsl_rl/k1_velocity_teacher/<run>/model_4999.pt \
+            --teacher_checkpoint /workspace/mounts/logs/rsl_rl/p2_move_teacher/<run>/model_4999.pt \
             --num_envs 4096 --headless
 
     Secrets (wandb/HF/github) via --env-file or APPTAINERENV_* env vars.

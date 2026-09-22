@@ -3,9 +3,9 @@
 Usage:
   python isaac_tasks/k1_velocity/scripts/play_student.py \
       --task Isaac-Velocity-Distill-K1-v0 \
-      --checkpoint logs/rsl_rl/k1_velocity_student/<run>/model_*.pt \
+      --checkpoint logs/rsl_rl/p2_move_student/<run>/model_*.pt \
       --num_envs 20 --steps 500 --headless \
-      [--export models/k1_velocity_student.pt] [--export_onnx models/k1_velocity_student.onnx]
+      [--export models/p2_move_student.pt] [--export_onnx models/p2_move_student.onnx]
 """
 import argparse
 import os

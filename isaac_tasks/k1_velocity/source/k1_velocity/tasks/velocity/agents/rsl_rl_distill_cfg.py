@@ -27,7 +27,7 @@ class K1VelocityDistillRunnerCfg(RslRlDistillationRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 3000
     save_interval = 100
-    experiment_name = "k1_velocity_student"
+    experiment_name = "p2_move_student"
     logger = "wandb"
     wandb_project = "booster_k1_soccer_hrl"
     wandb_entity = "thakk100-dhyan-home"

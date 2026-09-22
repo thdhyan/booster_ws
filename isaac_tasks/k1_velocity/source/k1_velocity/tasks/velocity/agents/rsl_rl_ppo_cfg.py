@@ -60,5 +60,5 @@ class K1VelocityPPOTeacherRunnerCfg(K1VelocityPPORunnerCfg):
     identical to the blind-policy run for comparability.
     """
 
-    experiment_name = "k1_velocity_teacher"
+    experiment_name = "p2_move_teacher"
     obs_groups = {"actor": ["teacher"], "critic": ["teacher"]}

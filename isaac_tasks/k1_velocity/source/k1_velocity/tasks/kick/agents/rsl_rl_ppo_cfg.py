@@ -15,7 +15,7 @@ class K1KickPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 5000
     save_interval = 100
-    experiment_name = "k1_kick"
+    experiment_name = "p4_kick"
     logger = "wandb"
     wandb_project = "booster_k1_soccer_hrl"
     wandb_entity = "thakk100-dhyan-home"
@@ -58,5 +58,5 @@ class K1KickPPOTeacherRunnerCfg(K1KickPPORunnerCfg):
     distillation runner as the frozen teacher.
     """
 
-    experiment_name = "k1_kick_teacher"
+    experiment_name = "p4_kick_teacher"
     obs_groups = {"actor": ["teacher"], "critic": ["teacher"]}
