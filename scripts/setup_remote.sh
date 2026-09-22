@@ -26,6 +26,7 @@ export OMNI_KIT_ACCEPT_EULA=YES UV_HTTP_TIMEOUT=900
 echo "[setup] host=$(hostname) arch=$(uname -m)"
 
 # 1. tools
+export PATH="$HOME/.local/bin:$PATH"   # uv installer target; also skips re-install
 if ! command -v uv >/dev/null; then
     echo "[setup] installing uv"
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -50,13 +51,16 @@ git submodule update --init --recursive
 echo "[setup] git lfs pull (assets)"
 git lfs pull || echo "WARN: lfs pull failed — check connectivity/git-lfs"
 
-# 3. IsaacLab v3.0.0-EA worktree (matches laptop; no local patches exist there)
+# 3. IsaacLab v3.0.0-EA worktree (matches laptop; no local patches exist there).
+#    Tolerates a pre-existing clean clone (dl had ~/Projects/IsaacLab @ beta2).
 if [ ! -d "$IL_EA" ]; then
-    echo "[setup] cloning IsaacLab + v3.0.0-EA worktree"
-    git clone https://github.com/isaac-sim/IsaacLab.git "$IL"
-    cd "$IL"
-    git fetch origin tag v3.0.0-EA --no-tags
-    git worktree add "$IL_EA" v3.0.0-EA
+    if [ ! -d "$IL/.git" ]; then
+        echo "[setup] cloning IsaacLab"
+        git clone https://github.com/isaac-sim/IsaacLab.git "$IL"
+    fi
+    echo "[setup] fetch v3.0.0-EA tag + worktree"
+    git -C "$IL" fetch origin tag v3.0.0-EA --no-tags
+    git -C "$IL" worktree add "$IL_EA" v3.0.0-EA
 fi
 
 # 4. venv (uv sync with isaacsim extras; re-runable — sync strips pip-added extras)
