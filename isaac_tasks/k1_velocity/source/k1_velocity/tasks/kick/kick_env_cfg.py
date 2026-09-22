@@ -40,6 +40,7 @@ from . import mdp
 
 # Use the real K1 articulation config from booster_train (correct actuators, URDF path, PD gains)
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
+from k1_velocity.sim_backend import apply_physics_backend
 
 # ============================================================================
 # K1 Joint Constants
@@ -360,6 +361,8 @@ class K1KickEnvCfg(ManagerBasedRLEnvCfg):
         # actuator authoring (see SimulationCfg.use_newton_actuators) → use the
         # Isaac Lab execution path that supports custom actuator configs.
         self.sim.use_newton_actuators = False
+        # Physics backend: Newton/warp by default (K1_PHYSICS=newton|physx).
+        apply_physics_backend(self)
         self.sim.dt = 0.005          # 200 Hz physics
         self.decimation = 4          # 50 Hz control
         self.episode_length_s = 20.0

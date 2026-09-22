@@ -31,6 +31,7 @@ import isaaclab_tasks.core.velocity.mdp as mdp
 from k1_velocity.tasks.basic.mdp import foot_contact_slip, still_ang_vel, still_lin_vel
 from k1_velocity.tasks.basic.mdp import random_body_push as _random_body_push
 from k1_velocity.tasks.velocity.velocity_env_cfg import K1RoughSceneCfg, K1_LEG_JOINTS
+from k1_velocity.sim_backend import apply_physics_backend
 
 # Feet (exact URDF link names — bare, no Robot/ prefix, IL 3.0 SceneEntityCfg contract)
 K1_FEET = ["left_foot_link", "right_foot_link"]
@@ -246,6 +247,8 @@ class K1BasicTeacherEnvCfg(ManagerBasedRLEnvCfg):
         # IL 3.0: custom BoosterDelayedPDActuator needs the Isaac Lab execution path
         # (see SimulationCfg.use_newton_actuators).
         self.sim.use_newton_actuators = False
+        # Physics backend: Newton/warp by default (K1_PHYSICS=newton|physx).
+        apply_physics_backend(self)
         self.sim.dt = 0.005          # 200 Hz physics
         self.decimation = 4          # 50 Hz control
         self.episode_length_s = 20.0
