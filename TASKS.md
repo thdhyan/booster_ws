@@ -171,6 +171,63 @@ Status: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
 
 ---
 
+## PHASE 6 — Soccer HRL (single robot, ball → goal) · plan: `PLAN_PHASE6_SOCCER_HRL.md`
+
+> Rewards **LOCKED** (user-approved in chat 2026-09-22). Stack: Isaac Sim 6.1.0 + IsaacLab v3.0.0-EA.
+> Deployability invariant: deployable obs groups never read GT ball/goal state (GT only in rewards + teacher groups).
+> Status legend as above: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
+
+### T6.0 — Phase-0 closure (git)
+- [ ] **T6.0.1** Commit leftovers on `dev/phase-0` (head/kick drafts, `k1_soccer_compose.py`, `PLAN_MULTILAYER.md`, `ROBOTS.md`, `isaac_fleet_vis.py`, `docker_isaac_fleet.sh`, `STATE.md`, `PLAN_PHASE6_SOCCER_HRL.md`)
+- [ ] **T6.0.2** `main ← dev/phase-0` merge, push, tag `v0.7-phase0-complete`, push tags
+- [ ] **T6.0.3** Create branch `dev/phase-6-soccer-hrl`; all Phase-6 work here
+
+### T6.1 — Environment rebuild (blocking)
+- [ ] **T6.1.1** Install Isaac Sim 6.1.0 pip into `~/Projects/IsaacLab/isaac6/.venv`; disk guard (54 GB free)
+- [ ] **T6.1.2** IsaacLab **v3.0.0-EA** as separate worktree `~/Projects/IsaacLab-ea` (shared checkout stays on `perf-2026-07-06`); editable install into venv
+- [ ] **T6.1.3** Install `rsl_rl`, `ultralytics`, `imageio[ffmpeg]`
+- [ ] **T6.1.4** Rewrite `scripts/start_training.sh` (stale venv path, wrong wandb entity → `thakk100-dhyan-home`)
+- [ ] **T6.1.5** **Gate G0**: `Isaac-Velocity-Flat-K1-v0` smoke, 16 envs, `--viz none`
+
+### T6.2 — Migrate existing tasks to IsaacLab 3.0 API
+- [ ] **T6.2.1** Migration audit per PLAN §2 table (quats WXYZ→XYZW, `ProxyArray.torch`, `write_*_to_sim_index/mask`, `isaaclab train` CLI, `VideoRecorderCfg`, `enable_extension`, actuator renames, contact contracts)
+- [ ] **T6.2.2** Velocity task migration + **Gate G1**: contact rewards fire (`feet_air_time` > 0); re-validate `flatten_k1_usd.py` on 6.1 importer (drop flatten if IL 3.0 native contact fix suffices)
+- [ ] **T6.2.3** Kick task migration (OmniReset reset paths use removed `write_root_state_to_sim`)
+- [ ] **T6.2.4** Patch `thakk100/booster_train` fork (`BOOSTER_K1_CFG`) for 3.0 actuator/quat API if needed
+
+### T6.3 — Shared MDP infrastructure
+- [ ] **T6.3.1** Domain randomization: ball position (OmniReset extended ±1.5 m cone, rolling resets 0–1.5 m/s), **ball color palette** (white/orange/hivis/black-panel/red), ball physics (mass/restitution/friction/radius), lighting, camera noise — PLAN §3.1
+- [ ] **T6.3.2** `random_body_push` EventTerm: 20–80 N, 0.05–0.15 s, interval 3–8 s, random body ∈ {Trunk/waist, pelvis, chest, upper legs}, ~60 % envs — PLAN §3.2 (P1/P2 required, P4/P5 enabled)
+- [ ] **T6.3.3** Head/scene camera 320×240 (camera subsets) + **YOLO wrapper** (`yolov8n` @10 Hz, `sports ball`, YOLO vector = visible/du/dv), geometric FOV proxy for non-camera envs, `ball_detect_rate` wandb metric
+- [ ] **T6.3.4** **Vision estimator module** (PLAN §3.4): ball = YOLO bbox + depth lookup → pos/vel est + flags; goal = rectangular-goal tracker/rememberer (noisy detection snap / odometry dead-reckon / memorized prior); estimator-model backend (noise σ, latency 50–150 ms, dropout 0–400 ms randomized per episode)
+- [ ] **T6.3.5** **Static deployability test**: assert every `policy`/student obs group references estimator outputs only — no GT ball/goal terms (grep/unit test in CI)
+- [ ] **T6.3.6** Video recorder: every **200 iterations → 30 s clip** → `logs/videos/<run>/iter_XXXX.mp4` + `wandb.Video`; 4 video envs/run; `VideoRecorderCfg` or runner callback (PLAN §3.5)
+- [ ] **T6.3.7** `scripts/train_guard.sh` watchdog (GPU > 7 GB / RAM < 1 GiB / disk < 5 GB → kill) + `systemd-run --scope MemoryMax=9G` wrapper (PLAN §3.7)
+- [ ] **T6.3.8** wandb project `booster_k1_soccer_hrl` created; run naming `p{1..5}_*` verified in smoke
+
+### T6.4 — Base policies (sequential; each: smoke → train → gate)
+- [ ] **T6.4.1** **P1 BASIC teacher** `Isaac-Basic-Teacher-K1-v0`: rough terrain + height scan + foot contacts + `random_body_push`; rewards LOCKED table (9 terms); 256 envs / 2000 it → `p1_basic_teacher`
+- [ ] **T6.4.2** **P1 BASIC student** (blind, 42×K10=420 MLP 512-256-128) distill → `p1_basic_student`; **Gate G3**
+- [ ] **T6.4.3** **P2 MOVE teacher** `Isaac-Move-Teacher-K1-v0`: rough curriculum + pushes + vel cmds; rewards LOCKED (11 terms); 512 envs / 3000 it → `p2_move_teacher`
+- [ ] **T6.4.4** **P2 MOVE student** (48×K10=480) distill → `p2_move_student`; **Gate G3**
+- [ ] **T6.4.5** **P3 HEAD TRACK** `Isaac-HeadTrack-K1-v0`: deployable 12-dim YOLO obs, 2-dim head actions; rewards LOCKED (6 terms, GT angle = reward-only); DR colors/lighting; 512 envs (64 YOLO) / 2000 it → `p3_head_track`; **Gate G2** (`ball_detect_rate` > 0.9)
+- [ ] **T6.4.6** **P4 CHASE&KICK teacher** `Isaac-Kick-Teacher-K1-v0`: GT ball/goal obs (53), head driven by frozen P3, rewards LOCKED (12 terms); 512 envs / 3000 it → `p4_kick_teacher`
+- [ ] **T6.4.7** **P4 CHASE&KICK student** `Isaac-Kick-Student-K1-v0`: estimator obs 54×K10=540, distill with estimator in the loop; 512 envs (64 YOLO) / 3000 it → `p4_kick_student`; **Gates G2.5 + G3**
+- [ ] **T6.4.8** **Auto-stability eval** (Gate G4): scripted 60 N waist shove → P1 no-fall ≥ 90 %, P2 recovers; save video
+
+### T6.5 — P5 HRL top-level
+- [ ] **T6.5.1** **P5 teacher** `Isaac-HRL-Teacher-K1-v0`: 5 Hz manager, 7-dim out (4 skill logits + vx,vy,wz), 23-dim privileged obs, frozen P1–P4 options, rewards LOCKED (7 terms); 256 envs / 2000 it → `p5_hrl_teacher`
+- [ ] **T6.5.2** **P5 student** `Isaac-HRL-Student-K1-v0`: 20×K10=200 estimator obs (YOLO+ball_est+goal_est+flags), distill → `p5_hrl_student`; 256 envs / 1500 it
+- [ ] **T6.5.3** **Gate G5**: P5 student eval (GT disconnected) — goal-scoring rate, skill-switch behavior, videos reviewed by user
+
+### T6.6 — Integration, export, handoff
+- [ ] **T6.6.1** Export TorchScript: `models/k1_{basic,move,head_track,chase_kick,hrl}_policy[_student].pt` (LFS)
+- [ ] **T6.6.2** Extend `k1_soccer_compose.py` → P3 (head/YOLO) + P4 legs + P5 manager with **estimator inputs only**; end-to-end fleet-sim run (**Gate G6**, video)
+- [ ] **T6.6.3** YOLO fine-tune on auto-labeled synthetic frames (ball palette + rectangular goal posts) if `ball_detect_rate` < 0.9
+- [ ] **T6.6.4** Update `STATE.md` + `HANDOFF.md` with final results; PR `dev/phase-6-soccer-hrl` → `main`, tag `v0.8-soccer-hrl`
+
+---
+
 ## BACKLOG / STRETCH
 
 - [ ] AMP-based training (booster_train BeyondMimic) for natural gait

@@ -28,10 +28,15 @@ CORE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirn
 import site
 
 def _ros_core_path():
+    # Check site-packages first (venv-isaac install)
     for sp in site.getsitepackages() + [site.getusersitepackages()]:
         cand = os.path.join(sp, "isaacsim", "exts", "isaacsim.ros2.core")
         if os.path.isdir(cand):
             return cand
+    # Check Isaac Sim Docker install
+    docker_cand = "/isaac-sim/exts/isaacsim.ros2.core"
+    if os.path.isdir(docker_cand):
+        return docker_cand
     return None
 
 def _ensure_bundled_ros_env():
@@ -48,11 +53,17 @@ def _ensure_bundled_ros_env():
         os.path.join(core, "lib"),
     ])
     os.environ["PYTHONPATH"] = overlay + os.pathsep + os.environ.get("PYTHONPATH", "")
+    # Also add to sys.path for the current process (execv may not work in Kit)
+    if overlay not in sys.path:
+        sys.path.insert(0, overlay)
     ld = os.environ.get("LD_LIBRARY_PATH", "")
     os.environ["LD_LIBRARY_PATH"] = libs + (os.pathsep + ld if ld else "")
     os.environ["AMENT_PREFIX_PATH"] = os.path.join(core, "jazzy")
     os.environ["K1_BUNDLED_ROS_READY"] = "1"
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    # Restart only if sys.executable is valid (not in Kit's embedded Python)
+    if sys.executable and os.path.isfile(sys.executable):
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    # else: env vars are set, continue in-process
 
 # NOTE: _ensure_bundled_ros_env() moved AFTER AppLauncher to avoid
 # LD_LIBRARY_PATH conflicts with Isaac Sim's Kit window system.
@@ -72,32 +83,83 @@ parser.add_argument("--record-fps", type=int, default=30,
 args, unknown = parser.parse_known_args()
 
 # ── Isaac Sim / Isaac Lab imports ───────────────────────────────────
-from isaaclab.app import AppLauncher
+# Detect if Kit is already running (Docker Python standalone mode via --exec)
+_kit_running = False
+try:
+    import omni.kit.app
+    _app_instance = omni.kit.app.get_app()
+    if _app_instance is not None:
+        _kit_running = True
+        print("[fleet] Kit is already running (Docker standalone mode)")
+except Exception:
+    pass
 
-launcher_args = argparse.Namespace(**vars(args))
-# Force headless when recording (no window needed)
-if args.record:
-    launcher_args.headless = True
-    launcher_args.enable_cameras = True
-    launcher_args.offscreen_render = True  # Enable offscreen rendering
-app_launcher = AppLauncher(launcher_args)
-simulation_app = app_launcher.app
+if not _kit_running:
+    try:
+        from isaaclab.app import AppLauncher
+    except ImportError:
+        # In Docker standalone mode, AppLauncher might not be available
+        _kit_running = True
+        print("[fleet] AppLauncher not available, assuming Kit is running")
+
+if not _kit_running:
+    launcher_args = argparse.Namespace(**vars(args))
+    # Force headless when recording (no window needed)
+    if args.record:
+        launcher_args.headless = True
+        launcher_args.enable_cameras = True
+        launcher_args.offscreen_render = True  # Enable offscreen rendering
+    app_launcher = AppLauncher(launcher_args)
+    simulation_app = app_launcher.app
+else:
+    # Kit is already running — get the simulation app from Kit
+    class _FakeApp:
+        def close(self): pass
+        def update(self): pass
+    simulation_app = _FakeApp()
+    print("[fleet] Using existing Kit instance")
 
 # ── Now set up bundled ROS (after Kit is initialized) ────────────────
 _ensure_bundled_ros_env()
 
-import rclpy  # noqa: E402
+# ROS2 imports (optional — Docker standalone may not have rclpy)
+_HAS_ROS = False
+try:
+    import rclpy  # noqa: E402
+    from rclpy.node import Node  # noqa: E402
+    from rclpy.qos import QoSProfile, ReliabilityPolicy  # noqa: E402
+    from sensor_msgs.msg import JointState  # noqa: E402
+    from geometry_msgs.msg import Twist  # noqa: E402
+    _HAS_ROS = True
+    print("[fleet] ROS2 available")
+except ImportError:
+    print("[fleet] ROS2 not available — running without ROS endpoints")
+    # Define stubs so the rest of the code doesn't crash
+    class Node:
+        def create_publisher(self, *a, **kw): return type('Pub', (), {'publish': lambda s, m: None})()
+        def create_subscription(self, *a, **kw): return None
+        def create_rate(self, *a, **kw): return type('Rate', (), {'sleep': lambda s: None})()
+        def get_logger(self): return type('Log', (), {'info': lambda s, m: print(m), 'warn': lambda s, m: print(m)})()
+        def get_clock(self): return type('Clock', (), {'now': lambda s: type('Stamp', (), {'to_msg': lambda s: type('Msg', (), {'sec': 0, 'nanosec': 0})()})()})()
+        def destroy_node(self): pass
+    class QoSProfile:
+        def __init__(self, **kw): pass
+    class ReliabilityPolicy:
+        RELIABLE = 0
+        BEST_EFFORT = 1
+    class JointState:
+        pass
+    class Twist:
+        pass
+    rclpy = None  # type: ignore
+
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
-from rclpy.node import Node  # noqa: E402
-from rclpy.qos import QoSProfile, ReliabilityPolicy  # noqa: E402
-from sensor_msgs.msg import JointState  # noqa: E402
-from geometry_msgs.msg import Twist  # noqa: E402
 
 import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.assets import Articulation, AssetBaseCfg  # noqa: E402
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: E402
-from isaaclab.utils import configclass  # noqa: E402
+from isaaclab.utils.configclass import configclass  # noqa: E402
 
 # Video recording imports
 if args.record:
@@ -111,7 +173,84 @@ except ImportError:
     HAS_OMNIGRAPH = False
     print("[OmniGraph] Not available — using Isaac Lab built-in ROS2 bridge")
 
-from k1_velocity.tasks.velocity.velocity_env_cfg import K1_ARTICULATION_CFG  # noqa: E402
+# Try to import K1_ARTICULATION_CFG from k1_velocity (available in Isaac Lab venv)
+# Fall back to a simplified config for Docker standalone mode
+_HAS_K1_CFG = False
+try:
+    from k1_velocity.tasks.velocity.velocity_env_cfg import K1_ARTICULATION_CFG  # noqa: E402
+    _HAS_K1_CFG = True
+except ImportError:
+    print("[fleet] k1_velocity not available — using simplified K1 articulation config")
+    # Simplified K1 articulation config for Docker standalone
+    from isaaclab.assets import ArticulationCfg
+    from isaaclab.actuators import ImplicitActuatorCfg
+    import isaaclab.sim as _sim_utils
+
+    K1_ARTICULATION_CFG = ArticulationCfg(
+        spawn=_sim_utils.UrdfFileCfg(
+            fix_base=False,
+            replace_cylinders_with_capsules=False,
+            asset_path="/workspace/booster_ws/src/k1_description/assets/robots/K1/K1_22dof.urdf",
+            activate_contact_sensors=True,
+            rigid_props=_sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                retain_accelerations=False,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=1000.0,
+                max_depenetration_velocity=1.0,
+            ),
+            articulation_props=_sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=True,
+                solver_position_iteration_count=8,
+                solver_velocity_iteration_count=4,
+            ),
+            joint_drive=_sim_utils.UrdfConverterCfg.JointDriveCfg(
+                gains=_sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(
+                    stiffness=0, damping=0
+                )
+            ),
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.57),
+            joint_pos={
+                "Left_Shoulder_Roll": -1.3,
+                "Right_Shoulder_Roll": 1.3,
+            },
+            joint_vel={".*": 0.0},
+        ),
+        soft_joint_pos_limit_factor=0.9,
+        actuators={
+            "legs": ImplicitActuatorCfg(
+                joint_names_expr=[
+                    ".*_Hip_Pitch", ".*_Hip_Roll", ".*_Hip_Yaw",
+                    ".*_Knee_Pitch", ".*_Ankle_Pitch", ".*_Ankle_Roll",
+                ],
+                effort_limit=120.0,
+                velocity_limit=30.0,
+                stiffness=40.0,
+                damping=1.0,
+            ),
+            "arms": ImplicitActuatorCfg(
+                joint_names_expr=[
+                    ".*_Shoulder_Pitch", ".*_Shoulder_Roll",
+                    ".*_Elbow_Pitch", ".*_Elbow_Yaw",
+                ],
+                effort_limit=30.0,
+                velocity_limit=10.0,
+                stiffness=20.0,
+                damping=0.5,
+            ),
+            "head": ImplicitActuatorCfg(
+                joint_names_expr=[".*Head.*"],
+                effort_limit=10.0,
+                velocity_limit=5.0,
+                stiffness=10.0,
+                damping=0.3,
+            ),
+        },
+    )
 
 # ── Constants ────────────────────────────────────────────────────────
 JOINT_ORDER = [
@@ -222,7 +361,8 @@ def main():
     setup_omnigraph_bridge()
 
     # ROS2 node
-    rclpy.init()
+    if _HAS_ROS:
+        rclpy.init()
     node = Node("k1_isaac_fleet_vis")
     sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
@@ -328,7 +468,8 @@ def main():
         print("[fleet] Entering simulation loop...")
         while simulation_app.is_running():
             # ROS spin
-            rclpy.spin_once(node, timeout_sec=0.005)
+            if _HAS_ROS:
+                rclpy.spin_once(node, timeout_sec=0.005)
 
             # Policy inference per robot
             for ns, art in robots.items():
@@ -431,8 +572,9 @@ def main():
         if video_writer:
             video_writer.release()
             print(f"[fleet] Video saved → {args.record}")
-        node.destroy_node()
-        rclpy.shutdown()
+        if _HAS_ROS:
+            node.destroy_node()
+            rclpy.shutdown()
         simulation_app.close()
 
 

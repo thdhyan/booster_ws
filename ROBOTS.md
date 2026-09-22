@@ -2,7 +2,8 @@
 
 > Generated: 2026-09-02  
 > Workspace: `/home/thakk100/Projects/booster_ws`  
-> WiFi subnet: `10.86.36.0/24`  
+> WiFi hotspot: **Hello** (iPhone personal hotspot — IPs dynamic, run `/robot-discover` each session)  
+> Last-known subnet: `10.86.36.0/24` (stale — A2/A3 IPs will differ on Hello)  
 > SSH key: `~/.ssh/booster_k1` (ed25519, passwordless ✅)
 
 ---

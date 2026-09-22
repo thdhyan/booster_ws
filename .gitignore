@@ -48,3 +48,6 @@ wandb/
 
 # container secrets (never commit)
 docker/.env
+
+# Local agent config
+.claude/
