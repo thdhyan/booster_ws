@@ -23,7 +23,14 @@ estimates, checkpoint flow, status. Source of truth for run order = `PLAN_PHASE6
 64 cores, x86_64) once VPN routes exist — campus subnets (128.101/10.131) unreachable
 from home without the tunnel; **zz-bw** (2× RTX PRO 6000 Blackwell 96 GB, no SLURM,
 3 TB home) = verified fallback but both GPUs currently compute-saturated by another
-user (`abrar008`). Sparks (GB10, aarch64) = Isaac Sim not supported on arm64.
+user (`abrar008`). **Sparks (GB10, aarch64)**: Isaac Sim unsupported *natively* on arm64,
+BUT the `nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1` container runs the full training
+stack (S0 smoke → S1/P1 + S2/P2 student smokes PASSED 2026-09-23; image's
+`activate_contact_sensors` stops at the first rigid body vs the nested 6.0 importer —
+worked around via the `_spawn_k1_urdf` wrapper in `booster.py`, idempotent on dl/EA) →
+**P1/P2 full students run on spark04** (`scripts/spark_full_host.sh p1|p2`, tmux
+`k1_spark_p1`/`k1_spark_p2`); outputs pulled to dl `logs/spark04/` by tmux
+`k1_spark_sync` → existing `k1_gdrive_sync` → GDrive (wandb = live dashboard).
 
 **dl recipe (same paths as laptop):**
 1. `git clone` booster_ws → `$HOME/Projects/booster_ws` + `git lfs pull`.
@@ -127,9 +134,9 @@ explodes to NaN within 1 iteration** (run-1 resume attempt, 2026-09-22 09:37).
 | # | Run | PLAN task id | actual gym id (registered) | envs | iters | backend | est. wall time | ckpt in | status |
 |---|-----|--------------|----------------------------|------|-------|---------|----------------|---------|--------|
 | 1 | P1 teacher | `Isaac-Basic-Teacher-K1-v0` | `Isaac-Basic-Teacher-K1-v0` | 256 | 2000 | physx | PhysX dl actual ≈ 46 min finish + ~68 min ext | `model_1500.pt` (physx runs 0→~1548) | **DONE 2026-09-22** — finish run GUARD_RC=0 (2000 it → model_3500) auto-chained ext GUARD_RC=0 (512 envs, 3000 it) → **best `model_6498.pt`** (`p1_basic_teacher/2026-09-22_13-41-33_p1_basic_teacher`); peak mean reward **−0.27** (single-iter spike), settles −16/−17; finish-run clips non-black (mean 89 / std 53) |
-| 2 | P1 student | `Isaac-Basic-Student-K1-v0` | `Isaac-Basic-Student-K1-v0` via Path B `train_student.py --teacher_checkpoint` (EA `isaaclab train` distill strict-loads the PPO ckpt → `std_param` crash) | 256 | 1500 | physx | PhysX ≈ 45–60 min | #1 final `model_6498.pt` | **queue armed 2026-09-23** — `tmux k1_p1_student_queue` (GPU1): wait GPU <10 GB → 16×3 smoke → `GUARD_RC=0` marker gate → full run; auto-starts when tang0836's 8-proc job (33 GB/GPU) releases the GPU |
-| 3 | P2 teacher | `Isaac-Move-Teacher-K1-v0` | `Isaac-Velocity-Rough-K1-Teacher-v0` | 512 | 3000 | physx | PhysX ≈ 2–3 h / dl actual ≈ 73 min | — | **DONE 2026-09-22 14:27 dl** — GUARD_RC=0, 3000 it → **`model_2999.pt`** (`k1_velocity_teacher/2026-09-22_13-14-06`), reward −2.94 → peak **16.22** → final 14.0; logs+ckpt synced to gdrive; ⚠ wandb run keeps legacy name `k1_velocity_teacher` (cfg = `p2_move_teacher`) |
-| 4 | P2 student | `Isaac-Move-Student-K1-v0` | `Isaac-Velocity-Distill-K1-v0` via Path B `train_student.py --teacher_checkpoint` | 512 | 3000 | physx | PhysX ≈ 2–3 h | #3 final `model_2999.pt` | **queue armed 2026-09-23** — `tmux k1_p2_student_queue` (GPU2): wait GPU <10 GB → smoke → marker gate → full run; runs in parallel with #2 |
+| 2 | P1 student | `Isaac-Basic-Student-K1-v0` | `Isaac-Basic-Student-K1-v0` via Path B `train_student.py --teacher_checkpoint` (EA `isaaclab train` distill strict-loads the PPO ckpt → `std_param` crash) | 256 | 1500 | physx | PhysX ≈ 45–60 min (dl) | #1 final `model_6498.pt` | **RUNNING spark04 2026-09-23** — S1 smoke PASSED on `isaac-lab:3.0.0-beta2-post1` (16×3, contact obs fix `_spawn_k1_urdf`, no Traceback) → full run `tmux k1_spark_p1` (`spark_full_host.sh p1`); **dl queue CANCELLED** (all 4 dl GPUs busy w/ tang0836, no ETA); outputs pulled to dl `logs/spark04/` by `tmux k1_spark_sync` → gdrive |
+| 3 | P2 teacher | `Isaac-Move-Teacher-K1-v0` | `Isaac-Velocity-Rough-K1-Teacher-v0` | 512 | 3000 | physx | PhysX ≈ 2–3 h / dl actual ≈ 73 min | — | **DONE 2026-09-22 14:27 dl** — GUARD_RC=0, 3000 it → **`model_2999.pt`** (`k1_velocity_teacher/2026-09-22_13-14-06`), reward −2.94 → peak **16.22** → final 14.0; logs+ckpt synced to gdrive; wandb run renamed → `p2_move_teacher` (2026-09-23, API) |
+| 4 | P2 student | `Isaac-Move-Student-K1-v0` | `Isaac-Velocity-Distill-K1-v0` via Path B `train_student.py --teacher_checkpoint` | 512 | 3000 | physx | PhysX ≈ 2–3 h | #3 final `model_2999.pt` | **RUNNING spark04 2026-09-23** — S2 smoke PASSED on isaac-lab image (feet_air_time > 0, ckpt+video+wandb) → full run `tmux k1_spark_p2` (`spark_full_host.sh p2`); **dl queue CANCELLED**; runs parallel with #2 |
 | 5 | P3 head-track | `Isaac-HeadTrack-K1-v0` | *not yet authored* (T6.3.3) | 512 (64 YOLO+vid) | 2000 | physx | PhysX ≈ 2–3 h | — | blocked: task authored just before this run → **authoring NOW** (T6.3.1→3.4 first); frozen legs = P1 teacher final; target GPU2 when P2 ends |
 | 6 | P4 teacher | `Isaac-Kick-Teacher-K1-v0` | `Isaac-Kick-Ball-K1-Teacher-v0` | 512 (4 vid) | 3000 | physx | PhysX ≈ 2.5–3.5 h | — | kick smoke **PASSED** 2026-09-22 13:19 dl (16×2, GPU0, GUARD_RC=0, clip non-black → T6.2.3 closed); teacher **gated on T6.3.3 YOLO + trained P3 head (PLAN §P4/T6.4.6) + obs-53/goal env upgrade — will NOT train the blind env (retrain guaranteed)** |
 | 7 | P4 student | `Isaac-Kick-Student-K1-v0` | `Isaac-Kick-Ball-K1-Distill-v0` `--distill` | 512 (64 YOLO+vid) | 3000 | physx | PhysX ≈ 2.5–3.5 h | #6 final | queued (Gate G5) |
