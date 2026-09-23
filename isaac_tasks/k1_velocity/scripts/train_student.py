@@ -49,9 +49,20 @@ parser.add_argument("--distributed", action="store_true", default=False)
 parser.add_argument("--video", action="store_true", default=False)
 parser.add_argument("--video_length", type=int, default=1500)
 parser.add_argument("--video_interval", type=int, default=4800)
+# IL 3.0-EA's AppLauncher dropped these two CLI flags (headless now comes from
+# the HEADLESS env), but our launch recipes still pass them. Accept and forward
+# them here — otherwise they fall through to hydra, which rejects unknown args
+# (the GUARD_RC=2 failure of the first Path-B smoke).
+parser.add_argument("--headless", action="store_true", default=False,
+                    help="IL 3.0-EA reads HEADLESS env, not a flag; accepted + translated")
+parser.add_argument("--enable_cameras", action="store_true", default=False,
+                    help="forwarded to AppLauncher (camera-capable render path)")
 cli_args_unused = None  # parity with train.py; extend if needed
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+
+if args_cli.headless:
+    os.environ.setdefault("HEADLESS", "1")
 
 if args_cli.video:
     args_cli.enable_cameras = True
