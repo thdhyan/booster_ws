@@ -33,10 +33,13 @@ from isaaclab.managers import (
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
-import isaaclab_tasks.core.velocity.mdp as mdp
+try:  # Isaac Lab 3.0-EA layout (dl); isaac-lab image renamed this package
+    import isaaclab_tasks.core.velocity.mdp as mdp
+except (ImportError, ModuleNotFoundError):
+    import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
 
 # Head joints only

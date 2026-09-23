@@ -3,7 +3,7 @@
 Uses the rsl-rl >= 4.0 model-based schema (actor/critic as RslRlMLPModelCfg)
 matching Isaac Lab 3.0; the old `policy: RslRlPpoActorCriticCfg` field is deprecated.
 """
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 

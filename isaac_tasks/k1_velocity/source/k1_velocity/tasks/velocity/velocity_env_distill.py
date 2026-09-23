@@ -12,7 +12,7 @@ history_length): the group becomes 48 x 10 = 480-dim, laid out term-major
 The teacher group (privileged, 235-dim) is unchanged.
 """
 
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from .velocity_env_cfg import K1VelocityRoughEnvCfg
 

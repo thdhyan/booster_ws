@@ -4,7 +4,7 @@
 
 """K1 velocity distillation play (eval) config."""
 
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from .velocity_env_distill import K1VelocityDistillEnvCfg
 
 @configclass

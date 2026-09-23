@@ -4,7 +4,7 @@
 
 """K1 velocity play config with contact sensor visualization."""
 
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab.envs.common import ViewerCfg
 from .velocity_env_distill import K1VelocityDistillEnvCfg
 

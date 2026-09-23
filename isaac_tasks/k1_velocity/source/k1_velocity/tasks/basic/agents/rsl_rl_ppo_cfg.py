@@ -7,7 +7,7 @@ Runs on the privileged "teacher" obs group (42 noise-free proprio + 187 height s
 + 4 foot contact/slip = 233). The checkpoint feeds the P1 student distillation run.
 Net spec per PLAN: MLP (512, 256, 128), tanh.
 """
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 

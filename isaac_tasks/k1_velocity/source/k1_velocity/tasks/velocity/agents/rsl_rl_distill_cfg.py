@@ -11,7 +11,7 @@ The student checkpoint is the deployment artifact: it runs on the robot with
 only joint encoders + IMU, matching k1_locomotion's node-side history buffer
 (input_mode=stacked).
 """
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_rl.rsl_rl import (
     RslRlDistillationAlgorithmCfg,

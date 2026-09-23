@@ -54,7 +54,12 @@ def foot_contact_slip(
     in contact (0 while airborne). Feet order follows ``body_ids`` resolution.
     """
     sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
-    forces = sensor.data.net_normal_forces_w_history.torch[:, -1, sensor_cfg.body_ids, :].norm(dim=-1)
+    # EA names the PhysX `get_net_contact_forces` history `net_normal_forces_w_history`;
+    # the isaac-lab image renamed it `net_forces_w_history` (same quantity, value-identical).
+    hist = getattr(sensor.data, "net_normal_forces_w_history", None)
+    if hist is None:
+        hist = sensor.data.net_forces_w_history
+    forces = hist.torch[:, -1, sensor_cfg.body_ids, :].norm(dim=-1)
     contact = (forces > 1.0).float()
     asset: Articulation = env.scene[asset_cfg.name]
     slip = asset.data.body_lin_vel_w.torch[:, asset_cfg.body_ids, :2].norm(dim=-1)

@@ -10,7 +10,7 @@ deployment buffer (0.2 s at 50 Hz). The privileged "teacher" group (233-dim) is
 unchanged and supplies the frozen teacher's observations.
 """
 
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from .basic_env_cfg import K1BasicTeacherEnvCfg
 

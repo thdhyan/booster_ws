@@ -35,7 +35,7 @@ import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg  # noqa: E402
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: E402
 from isaaclab.sensors import Camera, CameraCfg  # noqa: E402
-from isaaclab.utils import configclass  # noqa: E402
+from isaaclab.utils.configclass import configclass  # noqa: E402
 
 # field dims — parity with mujoco_robocup_demo.py
 FIELD_L, FIELD_W = 8.0, 5.0

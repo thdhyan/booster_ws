@@ -8,7 +8,7 @@ Student (deployable): blind 42-dim obs x 10-step history = 420, MLP (512, 256, 1
 tanh — runs on the robot with joint encoders + IMU only (PLAN §4 P1 student column).
 Launch: ``--task Isaac-Basic-Student-K1-v0 --checkpoint <teacher model.pt>``.
 """
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_rl.rsl_rl import (
     RslRlDistillationAlgorithmCfg,

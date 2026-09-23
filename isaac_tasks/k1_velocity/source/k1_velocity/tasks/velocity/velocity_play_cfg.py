@@ -1,5 +1,5 @@
 """K1 velocity play (eval) config — inherits rough env, disables curriculum/noise."""
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from .velocity_env_cfg import K1VelocityRoughEnvCfg
 
 @configclass

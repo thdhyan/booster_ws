@@ -20,37 +20,72 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
 
-# Re-export all standard mdp functions from isaaclab's velocity task
-from isaaclab_tasks.core.velocity.mdp import (
-    JointPositionActionCfg,
-    UniformVelocityCommandCfg,
-    base_lin_vel,
-    base_ang_vel,
-    projected_gravity,
-    generated_commands,
-    joint_pos_rel,
-    joint_vel_rel,
-    last_action,
-    height_scan,
-    track_lin_vel_xy_yaw_frame_exp,
-    track_ang_vel_z_world_exp,
-    is_terminated,
-    lin_vel_z_l2,
-    flat_orientation_l2,
-    action_rate_l2,
-    joint_acc_l2,
-    joint_torques_l2,
-    joint_pos_limits,
-    joint_deviation_l1,
-    time_out,
-    root_height_below_minimum,
-    bad_orientation,
-    reset_scene_to_default,
-    reset_joints_by_scale,
-    push_by_setting_velocity,
-    randomize_rigid_body_mass,
-    terrain_levels_vel,
-)
+# Re-export all standard mdp functions from isaaclab's velocity task.
+# Isaac Lab 3.0-EA (dl) keeps this at isaaclab_tasks.core.velocity; the
+# isaac-lab image renamed it to isaaclab_tasks.manager_based.locomotion.velocity
+# (identical lazy_export module contents).
+try:
+    from isaaclab_tasks.core.velocity.mdp import (
+        JointPositionActionCfg,
+        UniformVelocityCommandCfg,
+        base_lin_vel,
+        base_ang_vel,
+        projected_gravity,
+        generated_commands,
+        joint_pos_rel,
+        joint_vel_rel,
+        last_action,
+        height_scan,
+        track_lin_vel_xy_yaw_frame_exp,
+        track_ang_vel_z_world_exp,
+        is_terminated,
+        lin_vel_z_l2,
+        flat_orientation_l2,
+        action_rate_l2,
+        joint_acc_l2,
+        joint_torques_l2,
+        joint_pos_limits,
+        joint_deviation_l1,
+        time_out,
+        root_height_below_minimum,
+        bad_orientation,
+        reset_scene_to_default,
+        reset_joints_by_scale,
+        push_by_setting_velocity,
+        randomize_rigid_body_mass,
+        terrain_levels_vel,
+    )
+except (ImportError, ModuleNotFoundError):
+    from isaaclab_tasks.manager_based.locomotion.velocity.mdp import (
+        JointPositionActionCfg,
+        UniformVelocityCommandCfg,
+        base_lin_vel,
+        base_ang_vel,
+        projected_gravity,
+        generated_commands,
+        joint_pos_rel,
+        joint_vel_rel,
+        last_action,
+        height_scan,
+        track_lin_vel_xy_yaw_frame_exp,
+        track_ang_vel_z_world_exp,
+        is_terminated,
+        lin_vel_z_l2,
+        flat_orientation_l2,
+        action_rate_l2,
+        joint_acc_l2,
+        joint_torques_l2,
+        joint_pos_limits,
+        joint_deviation_l1,
+        time_out,
+        root_height_below_minimum,
+        bad_orientation,
+        reset_scene_to_default,
+        reset_joints_by_scale,
+        push_by_setting_velocity,
+        randomize_rigid_body_mass,
+        terrain_levels_vel,
+    )
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv

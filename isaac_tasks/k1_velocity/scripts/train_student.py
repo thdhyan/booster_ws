@@ -49,14 +49,19 @@ parser.add_argument("--distributed", action="store_true", default=False)
 parser.add_argument("--video", action="store_true", default=False)
 parser.add_argument("--video_length", type=int, default=1500)
 parser.add_argument("--video_interval", type=int, default=4800)
-# IL 3.0-EA's AppLauncher dropped these two CLI flags (headless now comes from
-# the HEADLESS env), but our launch recipes still pass them. Accept and forward
-# them here — otherwise they fall through to hydra, which rejects unknown args
-# (the GUARD_RC=2 failure of the first Path-B smoke).
-parser.add_argument("--headless", action="store_true", default=False,
-                    help="IL 3.0-EA reads HEADLESS env, not a flag; accepted + translated")
-parser.add_argument("--enable_cameras", action="store_true", default=False,
-                    help="forwarded to AppLauncher (camera-capable render path)")
+# IL version drift on these two flags: 3.0-EA's AppLauncher DROPPED them (headless
+# comes from the HEADLESS env) but our launch recipes still pass them — so on EA we
+# must pre-add them (else they fall through to hydra, which rejects unknown args —
+# the GUARD_RC=2 failure of the first Path-B smoke). Newer images (beta2/GA) brought
+# the flags BACK and now RAISE if the parser already has them, so only add ours when
+# the installed AppLauncher doesn't provide them.
+_appl_keys = set(getattr(AppLauncher, "_APPLAUNCHER_CFG_INFO", {}))
+if "headless" not in _appl_keys:
+    parser.add_argument("--headless", action="store_true", default=False,
+                        help="IL 3.0-EA reads HEADLESS env, not a flag; accepted + translated")
+if "enable_cameras" not in _appl_keys:
+    parser.add_argument("--enable_cameras", action="store_true", default=False,
+                        help="forwarded to AppLauncher (camera-capable render path)")
 cli_args_unused = None  # parity with train.py; extend if needed
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -83,10 +88,20 @@ from isaaclab.envs import ManagerBasedRLEnvCfg  # noqa: E402
 from isaaclab.utils.dict import print_dict  # noqa: E402
 from isaaclab.utils.io import dump_yaml  # noqa: E402
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
-from isaaclab_rl.entrypoints.common import (  # noqa: E402
-    apply_video_recording,
-    pre_launch_video_config,
-)
+# Video wiring differs across Isaac Lab versions: dl's 3.0-EA records config-level
+# via isaaclab_rl.entrypoints.common (env_cfg.video_recorders), but the isaac-lab
+# image removed entrypoints and records through a gymnasium RecordVideo wrapper
+# instead (scripts/reinforcement_learning/common.py:wrap_record_video). Prefer the
+# EA helpers when present; the call site falls back to an identical-trigger wrap.
+try:
+    from isaaclab_rl.entrypoints.common import (  # noqa: E402
+        apply_video_recording,
+        pre_launch_video_config,
+    )
+    _EA_VIDEO = True
+except (ImportError, ModuleNotFoundError):
+    apply_video_recording = pre_launch_video_config = None
+    _EA_VIDEO = False
 from isaaclab_tasks.utils.hydra import hydra_task_config  # noqa: E402
 
 import isaaclab_tasks  # noqa: F401,E402
@@ -126,11 +141,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     # visualizer injection + recorder declaration), both config-level and
     # evaluated before gym.make builds the env. Clip cadence: first clip at
     # step 0, then every video_interval control steps (4800 = 200 iters x 24).
-    if args_cli.video:
+    if args_cli.video and _EA_VIDEO:
         pre_launch_video_config(env_cfg, args_cli=args_cli)
         apply_video_recording(env_cfg, log_dir, args_cli)
 
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    env = gym.make(
+        args_cli.task,
+        cfg=env_cfg,
+        render_mode="rgb_array" if (args_cli.video and not _EA_VIDEO) else None,
+    )
+    if args_cli.video and not _EA_VIDEO:
+        # Mirrors train_rsl_rl.py:wrap_record_video — wrapper applied BEFORE
+        # RslRlVecEnvWrapper, same trigger semantics as the EA config-level path.
+        video_kwargs = {
+            "video_folder": os.path.join(log_dir, "videos", "train"),
+            "step_trigger": lambda step: step % args_cli.video_interval == 0,
+            "video_length": args_cli.video_length,
+            "disable_logger": True,
+        }
+        print("[INFO] Recording videos during training.")
+        print_dict(video_kwargs, nesting=4)
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     # rsl_rl 5.x dropped the deprecated noise kwargs that isaaclab_rl 3.0.0b2

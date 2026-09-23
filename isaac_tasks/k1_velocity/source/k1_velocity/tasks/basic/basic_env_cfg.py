@@ -22,11 +22,14 @@ from isaaclab.managers import (
     SceneEntityCfg,
     TerminationTermCfg as DoneTerm,
 )
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from isaaclab_visualizers.kit import KitVisualizerCfg
 
-import isaaclab_tasks.core.velocity.mdp as mdp
+try:  # Isaac Lab 3.0-EA layout (dl); isaac-lab image renamed this package
+    import isaaclab_tasks.core.velocity.mdp as mdp
+except (ImportError, ModuleNotFoundError):
+    import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
 
 from k1_velocity.tasks.basic.mdp import foot_contact_slip, still_ang_vel, still_lin_vel
 from k1_velocity.tasks.basic.mdp import random_body_push as _random_body_push
@@ -260,8 +263,13 @@ class K1BasicTeacherEnvCfg(ManagerBasedRLEnvCfg):
         # apply_video_recording wires the --video recorder with source='visualizer'.
         # Framing: env_0's robot, front-right ~3.2 m, look-at base height 0.5 m.
         # Defaults would frame the world origin; envs sit on random terrain tiles.
-        self.sim.visualizer_cfgs = [
-            KitVisualizerCfg(
+        # origin_type/origin_env_index are Isaac Lab 3.0-EA-only fields; filter the
+        # kwargs by signature so dl (EA, env-relative framing) and the isaac-lab
+        # image (no origin fields) both construct their supported subset.
+        import inspect
+        _viz_params = inspect.signature(KitVisualizerCfg).parameters
+        _viz_kwargs = {
+            k: v for k, v in dict(
                 headless=True,
                 origin_type="env",
                 origin_env_index=0,
@@ -270,5 +278,7 @@ class K1BasicTeacherEnvCfg(ManagerBasedRLEnvCfg):
                 focal_length=17.0,      # ~70 deg hfov (matches the earlier sensor cam)
                 window_width=640,       # low-res clip per PLAN §3.5
                 window_height=360,
-            )
-        ]
+            ).items()
+            if k in _viz_params
+        }
+        self.sim.visualizer_cfgs = [KitVisualizerCfg(**_viz_kwargs)]
