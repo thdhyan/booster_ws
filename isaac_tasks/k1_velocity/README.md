@@ -12,6 +12,7 @@ head) in Isaac Lab 3.0. Four task families live under
 | [**P2f**](#p2f--p2--force-torque-shoves) | P2 + native force/torque shoves | `Isaac-Velocity-Rough-K1-Teacher-F-v0` → `Isaac-Velocity-Distill-K1-F-v0` | 48 blind | 12 legs |
 | [**Partial control**](#partial-control-leghead-randomized-arms) | legs+head policy, arms randomized outside the action space | `Isaac-Velocity-PartialCtrl-K1-v0` → `…-Play-v0` | 68 blind | 14 (12 legs + 2 head) |
 | [**Kick ball**](#kick-ball) | locomotion + ball manipulation (gated) | `Isaac-Kick-Ball-K1-Teacher-v0` → `Isaac-Kick-Ball-K1-Distill-v0` | 45 blind | 12 legs |
+| [**P6 push**](#p6-push-box-pushing) | box pushing, frozen base + wrist IK (teacher-only) | `Isaac-Push-Reach-K1-v0` → `Isaac-Push-K1-v0` | 108 privileged | 9 (3 vel + 6 wrist) |
 
 **Teacher → student pattern.** Every family trains a privileged *teacher* with
 PPO (sees the 187-point height scan — plus ball state / foot slip / shove wrench
@@ -320,6 +321,99 @@ guarantee a retrain). No checkpoints yet.
 
 ---
 
+## P6 push (box pushing)
+
+Hierarchical manipulation: walk the K1 up to a box, place both wrist stubs on
+it, and push its corners to a moving goal. The hierarchy splits **legs from
+arms** — a 3-dim velocity override feeds the **frozen** Run-11 partial-control
+TorchScript policy (`models/k1_partialctrl_base.pt`, 68-dim obs → 14 leg+head
+actions), while the 6 wrist dims feed two DifferentialIK position terms
+(hand-link EE, `scale=0.05`, DLS, relative mode). Trains in two stages:
+`Isaac-Push-Reach-K1-v0` (heavy box, contact-only rewards) warm-starts
+`Isaac-Push-K1-v0` (corner-goal pushing). Teacher-group obs is fully
+privileged **by design** — no student/distill stage is planned for P6.
+
+### Observations
+
+`teacher` group — **108-dim** (single group, no deployable split):
+
+| Term | Function | Dim | Uniform noise |
+|---|---|---|---|
+| `box_state` | `mdp.push_box_teacher` — mass 1 + half-extents 3 + 8 corners×3 + box vel 6 + goal pose 7 + cumulative goal offset 3 + 8 goal corners×3 | 68 | — |
+| `base_lin_vel` | `mdp.base_lin_vel` | 3 | ±0.05 |
+| `base_ang_vel` | `mdp.base_ang_vel` | 3 | ±0.1 |
+| `projected_gravity` | `mdp.projected_gravity` | 3 | — |
+| `wrist_targets` | generated command (2×3 contact targets, base frame) | 6 | — |
+| `arm_joint_pos` | `mdp.joint_pos_rel` (8 arm joints) | 8 | ±0.01 |
+| `arm_joint_vel` | `mdp.joint_vel_rel` | 8 | ±0.5 |
+| `actions` | `mdp.last_action` | 9 | — |
+| **Total** | | **108** | |
+
+### Actions (9)
+
+| Slice | Dim | Path |
+|---|---|---|
+| velocity override `(v_x, v_y, ω_z)` | 3 | assembled into the frozen base's 68-dim partial obs → TorchScript policy → 12 leg + 2 head joint targets |
+| left wrist EE delta | 3 | `DifferentialInverseKinematics` (position, relative, dls) → left arm 4 joints |
+| right wrist EE delta | 3 | same → right arm 4 joints |
+
+### Commands & goals
+
+`WristTargetCommand` (6): 2×3 wrist contact targets on the box near-face
+(mid-height), written by the reset event — never auto-resamples. The goal is
+an integrator: box pose + cumulative `(dx, dy)` offset that walks away from
+the robot (`advance_goal` every 0.24–0.26 s), curriculum `goal_dist`
+**0.3 → 1.5 m** over iterations **200 → 1800**.
+
+### Rewards
+
+| Term | Weight (push) | Weight (reach) | Meaning |
+|---|---|---|---|
+| `corner_goal_tracking` | −1.0 | — | 8 box corners → 8 goal corners (normalized) |
+| `centroid_goal_tracking` | −0.5 | — | box centroid → goal centroid |
+| `box_goal_progress` | +2.0 | — | cumulative goal distance shrinks |
+| `box_vel_toward_goal` | +0.5 | — | box velocity aligned with goal direction |
+| `box_spin_penalty` | −0.1 | — | discourage yaw spin while pushing |
+| `wrist_target_tracking` | −0.3 | −1.0 | wrists → contact targets |
+| `wrist_box_proximity` | +0.5 | +1.0 | box-frame distance-to-surface shaping |
+| `track_cmd_lin_vel` / `track_cmd_ang_vel` | +0.5 / +0.25 | +0.25 / +0.1 | follow the action's velocity slice (exp, std 0.5) |
+| `flat_orientation_l2` | −1.0 | −1.0 | upright torso |
+| `action_rate_l2` | −0.005 | −0.005 | smooth actions |
+| `dof_torques_l2` (arms) | −1.5e−7 | −1.5e−7 | torque regularization |
+| `joint_pos_limits` (arms) | −1.0 | −1.0 | stay inside joint limits |
+| `termination_penalty` | −200.0 | −200.0 | fall penalty |
+
+**Terminations:** `time_out` (20 s), `root_height < 0.35 m`, `|tilt| > 0.8 rad`.
+
+### Domain randomization
+
+| Term | Mode | Range |
+|---|---|---|
+| `randomize_box_geometry` | `prestartup` (USD-time, per env; `replicate_physics=False`) | edge **0.7–1.5 m**, mass **3–25 kg** (reach: 12–25 kg); `MassAPI` + `Gf.Vec3f` inertia scaling |
+| `randomize_friction` | `startup` (needs `root_view` post-play) | static/dyn friction **0.3–1.2**, restitution 0–0.05 (32 buckets) |
+| `green_alpha` | `startup` | translucent green box (α 0.35) |
+| `reset_box` | reset | box 0.9–1.4 m ahead, yaw ±30°, resting `z = half_extents.z` |
+| `push_robot` | interval 10–15 s | ±0.3 m/s velocity impulses |
+
+### Smoke video (16 envs × 3 iters)
+
+![P6 push smoke](videos/push_smoke.mp4)
+
+| frame 1 | frame 2 |
+|---|---|
+| ![](videos/push_smoke_frame2.png) | ![](videos/push_smoke_frame3.png) |
+
+Box-size DR is visible across envs (edge 0.7–1.5 m). Zero-step gate:
+`ZERO_STEP_RESULT=OK` (`scripts/zero_step.sh Isaac-Push-K1-v0`); smoke gate:
+`Learning iteration 2/3` via `scripts/smoke_push.sh push`.
+
+**Runs:** Reach 256×1500 → warm-start Push 256×3000 (wandb
+`p6_push_reach` → `p6_push`, launchers `scripts/spark_push_{host,container}.sh`).
+Frozen base: `models/k1_partialctrl_base.pt` (Run-10 export; batch-agnostic,
+verified 1–64).
+
+---
+
 ## Recording policies (HUD videos)
 
 `scripts/play_record.py` plays a checkpoint headlessly and records
@@ -374,6 +468,7 @@ Server-side launchers (spark04 container pattern — smoke-gated, tmux + wandb):
 | `scripts/spark_full_host.sh p1\|p2` | P1 / P2 student full runs |
 | `scripts/spark_partial_host.sh` | partial-control (Run-10 / Run-11) on spark02 |
 | `scripts/spark_force_host.sh p1f\|p2f` | force-variant teacher→student chains |
+| `scripts/spark_push_host.sh reach\|push` | P6 push stage 1 / stage 2 (warm-start) |
 
 Run status, sizes, and checkpoint flow live in
 [`TRAINING.md`](../../TRAINING.md).
@@ -409,6 +504,10 @@ source/k1_velocity/
       partial_play_cfg.py         eval cfg (deltas pinned off for Run-10)
       mdp.py                      randomize_arm_pose(_delta), hold reward, curricula
     kick/                         ball + goal task (gated)
+    push/                         P6 box push (frozen base + wrist IK)
+      push_env_cfg.py             both stages' MDP (obs/actions/rewards/DR)
+      push_mdp.py                 frozen-base action, wrist cmd, corner/goal math
+      agents/                     rsl_rl PPO runner cfgs (p6_push_reach/p6_push)
   scripts/  (../../scripts/)      train.py, train_student.py, play.py,
                                   play_student.py, play_record.py
 ```

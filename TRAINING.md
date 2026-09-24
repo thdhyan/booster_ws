@@ -151,7 +151,7 @@ upper-body controller later.
   spark02 (`~/Projects/booster_ws/logs/...`); `k1_spark_sync`/gdrive currently mirrors
   **spark04 only** — pull spark02 `logs/` manually if a checkpoint is needed elsewhere.
 
-## Campaign table (9 runs)
+## Campaign table (11 runs)
 
 Wall-time estimates: **PhysX measured baseline** — 256 envs = 1.59–1.63 s/iter fresh
 (≈ 2.1–2.5 s/iter with video capture + swap pressure); startup ≈ 2–3 min.
@@ -173,6 +173,8 @@ explodes to NaN within 1 iteration** (run-1 resume attempt, 2026-09-22 09:37).
 | 7 | P4 student | `Isaac-Kick-Student-K1-v0` | `Isaac-Kick-Ball-K1-Distill-v0` `--distill` | 512 (64 YOLO+vid) | 3000 | physx | PhysX ≈ 2.5–3.5 h | #6 final | queued (Gate G5; estimator/student wiring remains) |
 | 8 | P5 teacher | `Isaac-HRL-Teacher-K1-v0` | *not yet authored* (T6.3.4) | 256 (32 YOLO+vid) | 2000 | physx | PhysX ≈ 1–1.5 h | #1–#7 | blocked: T6.3.4 |
 | 9 | P5 student | `Isaac-HRL-Student-K1-v0` | *not yet authored* (T6.3.4) | 256 | 1500 | physx | PhysX ≈ 50–70 min | #8 final | queued (Gate G6) |
+| 10 | P6 push reach | `Isaac-Push-Reach-K1-v0` | `Isaac-Push-Reach-K1-v0` | 256 | 1500 | physx (`isaac-lab:3.0.0-beta2-post1`) | ≈ 1–2 h | `models/k1_partialctrl_base.pt` (frozen) | **RUNNING spark04 2026-09-24 10:26 local** — zero-step `ZERO_STEP_RESULT=OK` + 16×3 smoke `Learning iteration 2/3` PASSED (fixed `_to_base` subset-reset broadcast: full `root_pos_w` vs `env_ids`-subset `tgt_w`); tmux `k1_spark_push_reach`, log `scripts/reach.push.log`, wandb `p6_push_reach`. Heavy box 12–25 kg, contact-only rewards. |
+| 11 | P6 push | `Isaac-Push-K1-v0` | `Isaac-Push-K1-v0` | 256 | 3000 | physx | ≈ 3–5 h | #10 final (`model_1499.pt`) | queued behind #10 — `spark_push_host.sh push` warm-starts via `--checkpoint` (auto-picked latest `p6_push_reach` model); box DR edge 0.7–1.5 m / 3–25 kg / friction 0.3–1.2, goal curriculum 0.3→1.5 m, wandb `p6_push` |
 
   **Totals (PhysX for all runs — user decision 2026-09-22):** ≈ **15–21 h sequential**.
 Newton measured slower on this box (4.8–5.0 vs 1.6–2.1 s/iter @256) and can't resume

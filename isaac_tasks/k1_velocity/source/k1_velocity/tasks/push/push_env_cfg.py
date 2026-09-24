@@ -182,15 +182,18 @@ class K1PushTerminationsCfg:
 
 @configclass
 class K1PushEventCfg:
-    # USD-time per-env DR (fixed per env; PhysX parses USD once)
+    # pre-startup USD-level DR (this build has no "usd" event mode; prestartup
+    # fires before sim start / PhysX parse)
     randomize_box_geometry = EventTerm(
         func=mdp.randomize_box_geometry,
-        mode="usd",
+        mode="prestartup",
         params={"scale_range": (0.7, 1.5), "mass_range": (3.0, 25.0)},
     )
     randomize_friction = EventTerm(
         func=mdp.vmdp.randomize_rigid_body_material,
-        mode="usd",
+        # NOT prestartup: the material impls need asset.root_view, which only
+        # exists after sim play; startup fires right after play.
+        mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("box"),
             "static_friction_range": (0.3, 1.2),

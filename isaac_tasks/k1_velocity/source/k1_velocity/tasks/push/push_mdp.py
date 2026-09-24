@@ -42,6 +42,8 @@ from isaaclab.managers import CommandTerm, CommandTermCfg, SceneEntityCfg
 from isaaclab.managers import ActionTermCfg
 from isaaclab.utils.configclass import configclass
 
+import isaaclab.sim as sim_utils
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -93,9 +95,17 @@ def _state(env: ManagerBasedRLEnv) -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 def randomize_box_geometry(env: ManagerBasedRLEnv, env_ids, scale_range, mass_range) -> None:
     """Event mode='usd': scale + mass per env, fixed for the run (PhysX parses
-    USD once at startup). Values are read back per prim into push_state."""
+    USD once at startup). Values are read back per prim into push_state.
+
+    Scale goes through IL's randomizer (it creates xformOp:scale with the right
+    xformOpOrder); the mass is written straight to USD MassAPI because this
+    build's randomize_rigid_body_mass is a class term (EventTermCfg protocol)
+    whose operations exclude 'replace'.
+    """
+    import random as pyrandom
+
     from isaaclab.envs.mdp import events as il_events
-    from pxr import Usd, UsdGeom, UsdPhysics
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
     st = _state(env)
     box = env.scene["box"]
@@ -104,34 +114,45 @@ def randomize_box_geometry(env: ManagerBasedRLEnv, env_ids, scale_range, mass_ra
     env_ids = torch.arange(env.num_envs, device=env.device)
 
     il_events.randomize_rigid_body_scale(env, env_ids, scale_range, asset_cfg)
-    il_events.randomize_rigid_body_mass(
-        env, env_ids, asset_cfg,
-        mass_distribution_params=mass_range,
-        distribution="uniform",
-        operation="replace",
-    )
 
     scales, masses = [], []
-    for path in box.prim_paths:
-        prim = Usd.PrimAtPath(path)
-        s = UsdGeom.Xformable(prim).GetAttribute("xformOp:scale").Get()
+    stage = env.sim.stage
+    for path in sim_utils.find_matching_prim_paths(box.cfg.prim_path):
+        prim = stage.GetPrimAtPath(path)
+        s = prim.GetAttribute("xformOp:scale").Get()
+        s = s if s is not None else (1.0, 1.0, 1.0)
         scales.append(torch.tensor([float(s[0])] * 3, device=env.device))
-        masses.append(torch.tensor(float(UsdPhysics.MassAPI(prim).GetMassAttr().Get()), device=env.device))
+        # uniform mass in mass_range; inertia scaled with it (I ~ m for a cube)
+        m = pyrandom.uniform(*mass_range)
+        api = UsdPhysics.MassAPI.Apply(prim)
+        old = float(api.GetMassAttr().Get() or 8.0)
+        api.GetMassAttr().Set(m)
+        diag = api.GetDiagonalInertiaAttr()
+        d = diag.Get()
+        if d is not None and len(d) == 3 and old > 0.0:
+            diag.Set(Gf.Vec3f(*[float(v) * (m / old) for v in d]))
+        masses.append(torch.tensor(m, device=env.device))
     st.half_extents = PROTO_HALF * torch.stack(scales)
     st.mass = torch.stack(masses)
     print(f"[push] box DR: edge {2 * st.half_extents[:, 0].min():.2f}-{2 * st.half_extents[:, 0].max():.2f} m, "
           f"mass {st.mass.min():.1f}-{st.mass.max():.1f} kg")
 
 
-def apply_box_green_alpha(env: ManagerBasedRLEnv) -> None:
-    """Startup: semi-transparent green PBR material on the box (pxr binding)."""
+def apply_box_green_alpha(env: ManagerBasedRLEnv, env_ids: torch.Tensor = None) -> None:
+    """Startup: semi-transparent green PBR material on the box (pxr binding).
+
+    Event terms are invoked as func(env, env_ids, **params) in this Isaac Lab
+    build, hence the (unused) env_ids argument.
+    """
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade
 
     box = env.scene["box"]
-    for path in box.prim_paths:
-        prim = Usd.PrimAtPath(path)
-        mat = UsdShade.Material.Define(Usd.PrimAtPath(path + "/green_alpha"))
-        shader = UsdShade.Shader.Define(Usd.PrimAtPath(path + "/green_alpha/surface"))
+    stage = env.sim.stage
+    for path in sim_utils.find_matching_prim_paths(box.cfg.prim_path):
+        prim = stage.GetPrimAtPath(path)
+        stage = prim.GetStage()
+        mat = UsdShade.Material.Define(stage, path + "/green_alpha")
+        shader = UsdShade.Shader.Define(stage, path + "/green_alpha/surface")
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.0, 0.8, 0.15))
         shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(0.35)
@@ -143,13 +164,27 @@ def apply_box_green_alpha(env: ManagerBasedRLEnv) -> None:
 # ---------------------------------------------------------------------------
 # geometry
 # ---------------------------------------------------------------------------
+def _rot_batch(quat: torch.Tensor, pts: torch.Tensor, inverse: bool = False) -> torch.Tensor:
+    """Rotate pts (n, ..., 3) by quats (n, 4) [xyzw]; shape-preserving.
+
+    isaaclab's quat_apply/quat_apply_inverse reshape BOTH operands flat
+    ((-1,4)/(-1,3)), so an (n,8,3) point batch desyncs from an (n,4) quat
+    ("size of tensor a (4) ... b (32)" crash). Expand the quat to one row
+    per point first; verified against per-env reference rotations.
+    """
+    from isaaclab.utils.math import quat_apply, quat_apply_inverse
+
+    shape = pts.shape
+    k = pts.numel() // (shape[0] * 3)
+    fn = quat_apply_inverse if inverse else quat_apply
+    return fn(quat.reshape(-1, 4).repeat_interleave(k, dim=0), pts.reshape(-1, 3)).view(shape)
+
+
 def _corners_from_pose(pos: torch.Tensor, quat: torch.Tensor, half: torch.Tensor) -> torch.Tensor:
     """(n,8,3) world corners of an oriented box."""
-    from isaaclab.utils.math import quat_apply
-
     signs = CORNER_SIGNS.to(pos.device)
     pts = signs[None] * half[:, None, :]                 # (n,8,3)
-    return quat_apply(quat, pts) + pos[:, None, :]
+    return _rot_batch(quat, pts) + pos[:, None, :]
 
 
 def box_corners_world(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -158,11 +193,19 @@ def box_corners_world(env: ManagerBasedRLEnv) -> torch.Tensor:
     return _corners_from_pose(box.data.root_pos_w.torch, box.data.root_quat_w.torch, st.half_extents)
 
 
-def _to_base(env: ManagerBasedRLEnv, pts_w: torch.Tensor) -> torch.Tensor:
-    from isaaclab.utils.math import quat_apply_inverse
+def _to_base(env: ManagerBasedRLEnv, pts_w: torch.Tensor, env_ids: torch.Tensor | None = None) -> torch.Tensor:
+    """(...,3) world points -> robot base frame (handles n points per env).
 
+    Pass ``env_ids`` when ``pts_w`` rows are a subset of envs (reset events);
+    otherwise the full-batch robot state would be broadcast against it.
+    """
     robot = env.scene["robot"]
-    return quat_apply_inverse(robot.data.root_quat_w.torch, pts_w - robot.data.root_pos_w.torch[:, None, :])
+    pos = robot.data.root_pos_w.torch
+    quat = robot.data.root_quat_w.torch
+    if env_ids is not None:
+        pos = pos[env_ids]
+        quat = quat[env_ids]
+    return _rot_batch(quat, pts_w - pos[:, None, :], inverse=True)
 
 
 def box_corners_base(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -180,15 +223,13 @@ def goal_corners_base(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 def wrist_positions_base(env: ManagerBasedRLEnv) -> torch.Tensor:
     """(n,2,3) left/right wrist (hand-link) positions in the base frame."""
-    from isaaclab.utils.math import quat_apply_inverse
-
     robot = env.scene["robot"]
     names = [n.split("/")[-1] for n in robot.body_names]
     idx = [names.index(LEFT_EE), names.index(RIGHT_EE)]
     pos_w = robot.data.body_pos_w[:, idx, :]
-    return quat_apply_inverse(
-        robot.data.root_quat_w.torch[:, None], pos_w - robot.data.root_pos_w.torch[:, None, :]
-    )[:, 0]
+    return _rot_batch(
+        robot.data.root_quat_w.torch, pos_w - robot.data.root_pos_w.torch[:, None, :], inverse=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +256,7 @@ def reset_box(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     yaw = (torch.rand(n, device=dev) - 0.5) * math.radians(60.0)
     pos = torch.zeros((n, 3), device=dev)
     pos[:, 0], pos[:, 1] = dist, lat
+    pos[:, 2] = st.half_extents[env_ids, 2]              # rest on the ground (top face at 2*half)
     _write_box_pose(env, env_ids, pos, yaw)
     st.push_dir[env_ids] = torch.tensor([1.0, 0.0, 0.0], device=dev)
     st.goal_offset[env_ids] = 0.0
@@ -264,8 +306,8 @@ class WristTargetCommand(CommandTerm):
     def _resample_command(self, env_ids) -> None:
         pass  # the reset event fills the buffer (box-dependent); no auto-resample
 
-    def _update_command(self, env_ids) -> None:
-        pass
+    def _update_command(self) -> None:
+        pass  # NOTE: no env_ids in this Isaac Lab build (see command_manager)
 
     def _update_metrics(self) -> None:
         pass
@@ -296,11 +338,11 @@ def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     pos = box.data.root_pos_w.torch[env_ids]
     half = st.half_extents[env_ids]
     n = len(env_ids)
-    near_x = pos[:, 0:1] - half[:, 0:1]                     # face toward the robot
-    y = pos[:, 1:2] + torch.stack([-0.35 * half[:, 1], 0.35 * half[:, 1]], dim=-1)
-    z = pos[:, 2:3] + 0.55 * half[:, 2:3]
-    tgt_w = torch.cat([near_x.expand(n, 2), y, z], dim=-1)  # (n,2,3) world
-    tgt = _to_base(env, tgt_w)
+    near_x = (pos[:, 0:1] - half[:, 0:1]).expand(n, 2)                  # face toward the robot
+    y = pos[:, 1:2] + torch.stack([-0.35 * half[:, 1], 0.35 * half[:, 1]], dim=-1)   # (n,2)
+    z = (pos[:, 2:3] + 0.55 * half[:, 2:3]).expand(n, 2)                # (n,2)
+    tgt_w = torch.stack([near_x, y, z], dim=-1)                         # (n,2,3) world
+    tgt = _to_base(env, tgt_w, env_ids=env_ids)
     tgt[..., 0] = tgt[..., 0].clamp(0.30, 0.75)
     tgt[..., 1] = tgt[..., 1].clamp(-0.45, 0.45)
     tgt[..., 2] = tgt[..., 2].clamp(0.35, 1.15)
@@ -312,7 +354,7 @@ def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
 # ---------------------------------------------------------------------------
 def push_box_teacher(env: ManagerBasedRLEnv) -> torch.Tensor:
     """mass 1 | half-extents 3 | corners 24 | vel 6 | goal pose 7 | goal offset 3 | goal corners 24 = 68."""
-    from isaaclab.utils.math import quat_apply_inverse
+    from isaaclab.utils.math import quat_apply_inverse, quat_inv, quat_mul
 
     st = _state(env)
     robot = env.scene["robot"]
@@ -324,7 +366,7 @@ def push_box_teacher(env: ManagerBasedRLEnv) -> torch.Tensor:
     goal_pos_bf = quat_apply_inverse(
         robot.data.root_quat_w.torch, (box.data.root_pos_w.torch + st.goal_offset) - robot.data.root_pos_w.torch
     )
-    goal_quat_bf = quat_apply_inverse(robot.data.root_quat_w.torch[:, None], box.data.root_quat_w.torch[:, None])[:, 0]
+    goal_quat_bf = quat_mul(quat_inv(robot.data.root_quat_w.torch), box.data.root_quat_w.torch)
     goal_offset_bf = quat_apply_inverse(robot.data.root_quat_w.torch, st.goal_offset)
     return torch.cat(
         [st.mass[:, None] / 25.0, st.half_extents, corners_bf, vel_bf, ang_bf,
@@ -380,16 +422,25 @@ def wrist_target_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 
 def wrist_box_proximity(env: ManagerBasedRLEnv, scale: float = 0.08) -> torch.Tensor:
-    """exp(-mean wrist-to-box-surface gap / scale): contact-ready shaping."""
+    """exp(-mean wrist-to-box-surface gap / scale): contact-ready shaping.
+
+    Gap = distance from each wrist to the box surface (0 inside), computed in
+    the BOX frame so the clamp uses the true half-extents regardless of yaw.
+    """
+    from isaaclab.utils.math import quat_inv, quat_mul
+
     st = _state(env)
+    robot = env.scene["robot"]
     wrist_bf = wrist_positions_base(env)                     # (n,2,3)
-    corners_bf = box_corners_base(env)                        # (n,8,3)
-    center = corners_bf.mean(1, keepdim=True)
-    half = st.half_extents[:, None, :]
-    wrist_local = wrist_bf[:, None, :] - center               # (n,1,3) vs (n,8,3) AABB
-    clamped = torch.maximum(torch.minimum(wrist_local.expand_as(corners_bf - center), half), -half)
-    gap = (wrist_local.expand_as(corners_bf - center) - clamped).norm(dim=-1).min(-1).values
-    return torch.exp(-gap.mean(-1) / scale)
+    corners_bf = box_corners_base(env)                       # (n,8,3)
+    center = corners_bf.mean(1, keepdim=True)                # (n,1,3)
+    half = st.half_extents[:, None, :]                       # (n,1,3)
+    # box orientation expressed in the robot base frame -> wrist in box frame
+    box_q_bf = quat_mul(quat_inv(robot.data.root_quat_w.torch), env.scene["box"].data.root_quat_w.torch)
+    wrist_box = _rot_batch(box_q_bf, wrist_bf - center, inverse=True)               # (n,2,3)
+    inside = torch.maximum(torch.minimum(wrist_box, half), -half)
+    gap = (wrist_box - inside).norm(dim=-1)                  # (n,2)
+    return torch.exp(-gap.mean(-1) / scale)                  # (n,)
 
 
 def track_cmd_lin_vel_exp(env: ManagerBasedRLEnv, std: float = 0.5) -> torch.Tensor:
@@ -507,7 +558,8 @@ class FrozenBaseVelocityAction(ActionTerm):
         for name in ("set_joint_position_target", "write_joint_position_target_to_sim"):
             fn = getattr(robot, name, None)
             if fn is not None:
-                fn(targets, joint_ids=self._ids14)
+                # joint_ids must be int32: the physx warp kernel rejects int64
+                fn(targets, joint_ids=self._ids14.to(torch.int32))
                 break
 
     def apply_actions(self) -> None:
