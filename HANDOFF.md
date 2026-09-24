@@ -28,7 +28,7 @@ the student will consume P3 + the vision estimator).
 - Smokes/verifiers: `scripts/smoke_p3_head.sh`, `scripts/smoke_p4_teacher.sh`,
   `scripts/zero_step.sh Isaac-HeadTrack-K1-v0 cameras` (zero-agent, ~5 min).
 
-**Status (2026-09-24 14:38 UTC):**
+**Status (2026-09-24 15:03 UTC):**
 - Deployability gate is green for **16 tasks**. P3 zero-step and the real
   camera+YOLO 16×3 smoke both pass; the smoke loaded `yolov8n`, exercised
   periodic resets, produced `model_2.pt` and three non-black clips.
@@ -38,9 +38,10 @@ the student will consume P3 + the vision estimator).
   added log-marker gates because `python.sh` can return 0 after a crash.
 - **P3 full is TRAINING on spark02**: tmux `k1_spark_p3`, 512 envs × 2000,
   log `scripts/p3.full.train.log`, run
-  `logs/rsl_rl/p3_head_track/2026-09-24_14-28-16_p3_head_track/`, W&B
-  [`5e43gwwj`](https://wandb.ai/thakk100-dhyan-home/booster_k1_soccer_hrl/runs/5e43gwwj).
-  Initial rate is ≈42–51 s/iter (ETA ≈2.2 h); steady process memory ≈10 GB.
+  `logs/rsl_rl/p3_head_track/2026-09-24_14-58-47_p3_head_track/`, W&B
+  [`oavkxiwf`](https://wandb.ai/thakk100-dhyan-home/booster_k1_soccer_hrl/runs/oavkxiwf).
+  Initial rate is ≈33–41 s/iter (full ETA ≈19 h; hard timeout 26 h); steady
+  process memory ≈10 GB. Inference is 10 Hz, full-batch, FP16, 320 px.
   Videos are every 6400 control steps = 200 iterations.
 - **P4 teacher 16×3 smoke PASSED** (`P4T_SMOKE_RC=0`,
   `P4T_SMOKE_MARKER=OK`): teacher obs `(55,)`, legs+head action `(14,)`,

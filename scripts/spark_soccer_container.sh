@@ -39,9 +39,9 @@ p3)
     echo "SOC_GATE=SMOKE_FAILED_NO_FULL_RUN"
     exit 10
   fi
-  echo "=== SOC FULL $TASK ${ENVS}x${ITERS} (timeout 28800s)"
+  echo "=== SOC FULL $TASK ${ENVS}x${ITERS} (timeout 93600s)"
   FULL_LOG="$REPO/scripts/${WHICH}.full.train.log"
-  timeout 28800 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \
+  timeout 93600 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \
     --task "$TASK" --num_envs "$ENVS" --max_iterations "$ITERS" --seed 42 \
     --viz none --video --video_length 1500 --video_interval 6400 2>&1 | tee "$FULL_LOG"
   RC=${PIPESTATUS[0]}

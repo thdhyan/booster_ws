@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 HEAD_JOINTS = ["AAHead_yaw", "Head_pitch"]
 HEAD_CAM_PRIM = "head_cam"
 DETECT_EVERY = 5          # control steps between detections (50 Hz -> 10 Hz)
-DETECT_EPS = 2e-3         # per-env chunking to bound YOLO batch memory
+DETECT_BATCH = 512        # full P3 batch; FP16 320px fits comfortably on GB10
 CAM_HFOV_DEG = 69.4       # ZED 2c @ 320x240 crop (approx, f=238px)
 YOLO_CLASS = 32           # COCO "sports ball"
 _yolo_model = None        # lazily loaded ultralytics YOLO (None -> fallback)
@@ -140,10 +140,18 @@ def _detect_yolo(env: ManagerBasedRLEnv) -> torch.Tensor:
     # ultralytics' native list-of-HWC-uint8 path: it letterboxes internally and
     # returns boxes in ORIGINAL pixel coords (tensor input requires stride-32 dims)
     with torch.inference_mode():
-        for s in range(0, n, 256):
-            e = min(s + 256, n)
+        for s in range(0, n, DETECT_BATCH):
+            e = min(s + DETECT_BATCH, n)
             frames = [f.cpu().numpy() for f in rgb[s:e]]
-            res = model.predict(frames, verbose=False, device=0, classes=[YOLO_CLASS])
+            res = model.predict(
+                frames,
+                verbose=False,
+                device=0,
+                classes=[YOLO_CLASS],
+                imgsz=320,
+                half=True,
+                max_det=1,
+            )
             if not isinstance(res, (list, tuple)):
                 res = [res]
             for j, r in enumerate(res):
