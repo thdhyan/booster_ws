@@ -156,30 +156,41 @@ change — actual = 48):
 
 ### Commands
 
-`UniformVelocityCommand`: `v_x, v_y, ω_z ∈ [−1, 1]`, heading mode on
-(stiffness 0.5), 2 % standing envs, resample every 10 s.
+`UniformVelocityCommand` (**gait-v2, 2026-09-24**): direct Cartesian commands
+`v_x ∈ [−1.5, 1.5]`, `v_y ∈ [−0.75, 0.75]`, `ω_z ∈ [−1.5, 1.5]` — heading mode
+**off** (the old heading-everywhere mode hid the requested ranges and made
+lateral commands hard to learn), 5 % standing envs, resample every 8–12 s.
+Play/eval cfgs pin a directly expressed `(0.8, 0, 0)` walking command.
 
 ### Rewards
 
+**Gait-v2** — H1/G1-style bipedal shaping (reviewed against IsaacLab
+`core/velocity` + G1 `rough_env_cfg`; every term verified firing on the
+training image via `scripts/reward_probe.sh`, 2026-09-24):
+
 | Term | Weight | Meaning |
 |---|---|---|
-| `track_lin_vel_xy_exp` | +1.0 | track commanded linear velocity (exp kernel, std² = 0.25) |
-| `track_ang_vel_z_exp` | +2.0 | track commanded yaw rate (exp kernel, std² = 0.25) |
-| `feet_air_time` | +0.25 | biped gait (air time > 0.4 s) |
-| `feet_slide` | −0.1 | no foot skating |
+| `track_lin_vel_xy_exp` | +1.5 | track commanded linear velocity (exp kernel, std² = 0.25) |
+| `track_ang_vel_z_exp` | +1.5 | track commanded yaw rate (exp kernel, std² = 0.25) |
+| `feet_air_time` | +0.5 | biped gait — single-stance air time, threshold 0.3 s (short K1 steps get signal) |
+| `feet_slide` | −0.25 | no foot skating (anti static-slide) |
 | `termination_penalty` | −200.0 | fall penalty |
-| `lin_vel_z_l2` | 0.0 | (disabled) vertical velocity |
+| `lin_vel_z_l2` | −2.0 | no hopping (core default; G1 zeroes it) |
+| `ang_vel_xy_l2` | −0.05 | no roll/pitch sway (G1 inherits the same from core) |
 | `flat_orientation_l2` | −1.0 | upright torso |
-| `action_rate_l2` | −0.005 | smooth actions |
-| `dof_acc_l2` | −1.25e−7 | joint acceleration (hips/knees) |
-| `dof_torques_l2` | −1.5e−7 | torque regularization (legs) |
+| `action_rate_l2` | −0.01 | smooth actions |
+| `dof_acc_l2` | −2.5e−7 | joint acceleration (hips/knees) |
+| `dof_torques_l2` | −2.0e−6 | torque regularization (legs) |
 | `dof_pos_limits` | −1.0 | ankle limits |
-| `joint_deviation_arms` | −0.05 | arms/head near default |
+| `joint_deviation_arms` | −0.1 | arms/head near default |
+| `stand_still` | −0.5 | near-zero command → hold default pose, don't march in place |
+| `undesired_contacts` | −1.0 | Trunk/hip ground contact — no crawling/kneeling to solve velocity |
 
 **Curriculum:** `terrain_levels` (`terrain_levels_vel` — promote envs that
-track their terrain level, demote failures). **Events:** `push_robot`
-impulses (10–15 s), `add_base_mass` ±2 kg. **Terminations:** `time_out`,
-`root_height < 0.35`, `|tilt| > 0.8`.
+track their terrain level, demote failures; `max_init_terrain_level = 0` so
+the gait is learned on the flat curriculum-start tiles first).
+**Events:** `push_robot` impulses (10–15 s), `add_base_mass` ±2 kg.
+**Terminations:** `time_out`, `root_height < 0.35`, `|tilt| > 0.8`.
 
 ### Checkpoints & video
 
@@ -257,10 +268,12 @@ The velocity task's locked set, with `joint_deviation_arms` (deviation from the
 |---|---|---|
 | `arm_pose_deviation` | −0.05 | hold arms at the **episode's randomized target** (`joint_deviation_from_target_l1`) |
 
-(plus the velocity set: `track_lin_vel_xy_exp` +1.0, `track_ang_vel_z_exp` +2.0,
-`feet_air_time` +0.25, `feet_slide` −0.1, `termination_penalty` −200,
-`flat_orientation_l2` −1.0, `action_rate_l2` −0.005, `dof_acc_l2` −1.25e−7,
-`dof_torques_l2` −1.5e−7, `dof_pos_limits` −1.0, `lin_vel_z_l2` 0.0.)
+(inherits the gait-v2 velocity set: `track_lin_vel_xy_exp` +1.5,
+`track_ang_vel_z_exp` +1.5, `feet_air_time` +0.5 (thr 0.3),
+`feet_slide` −0.25, `termination_penalty` −200, `lin_vel_z_l2` −2.0,
+`ang_vel_xy_l2` −0.05, `flat_orientation_l2` −1.0, `action_rate_l2` −0.01,
+`dof_acc_l2` −2.5e−7, `dof_torques_l2` −2.0e−6, `dof_pos_limits` −1.0,
+`stand_still` −0.5, `undesired_contacts` −1.0.)
 
 ### Curricula & events
 

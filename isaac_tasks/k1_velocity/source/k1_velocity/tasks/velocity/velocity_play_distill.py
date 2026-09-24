@@ -28,7 +28,8 @@ class K1VelocityDistillPlayEnvCfg(K1VelocityDistillEnvCfg):
         # Disable contact-based rewards (require contact sensor setup)
         self.rewards.feet_air_time = None
         self.rewards.feet_slide = None
-        # Fixed command for play
-        self.commands.base_velocity.ranges.lin_vel_x = (0.0, 0.0)
+        # Fixed, directly expressed walking command for deployable recordings.
+        self.commands.base_velocity.heading_command = False
+        self.commands.base_velocity.ranges.lin_vel_x = (0.8, 0.8)
         self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
         self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)

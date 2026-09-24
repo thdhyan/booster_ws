@@ -248,19 +248,28 @@ class ActionsCfg:
 # ---------------------------------------------------------------------------
 @configclass
 class CommandsCfg:
+    """Direct Cartesian velocity commands for walking practice.
+
+    P2 previously generated heading-mode commands for every environment.  That
+    made lateral commands hard to learn and hid the requested ``vx/vy/wz``
+    ranges.  Keep a small standing fraction, but sample the full Cartesian
+    command space directly; terrain curriculum handles difficulty separately.
+    """
+
     base_velocity = mdp.UniformVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.02,
-        rel_heading_envs=1.0,
-        heading_command=True,
+        resampling_time_range=(8.0, 12.0),
+        rel_standing_envs=0.05,
+        rel_heading_envs=0.0,
+        heading_command=False,
         heading_control_stiffness=0.5,
         debug_vis=True,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0),
-            lin_vel_y=(-1.0, 1.0),
-            ang_vel_z=(-1.0, 1.0),
-            heading=(-math.pi, math.pi),
+            lin_vel_x=(-1.5, 1.5),
+            lin_vel_y=(-0.75, 0.75),
+            ang_vel_z=(-1.5, 1.5),
+            # Kept in the schema but inactive while heading_command=False.
+            heading=(0.0, 0.0),
         ),
     )
 
@@ -270,30 +279,39 @@ class CommandsCfg:
 # ---------------------------------------------------------------------------
 @configclass
 class RewardsCfg:
+    """Velocity tracking plus H1/G1-style bipedal gait shaping.
+
+    The air-time term explicitly rewards single-support phases (one foot in the
+    air while the other is loaded), while the slide and vertical/angular terms
+    stop the policy from solving walking by skating or hopping.  These are the
+    same core ingredients used by Isaac Lab's H1/G1 velocity tasks.
+    """
+
     # Velocity tracking
     track_lin_vel_xy_exp = RewTerm(
         func=mdp.track_lin_vel_xy_yaw_frame_exp,
-        weight=1.0,
+        weight=1.5,
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
     track_ang_vel_z_exp = RewTerm(
         func=mdp.track_ang_vel_z_world_exp,
-        weight=2.0,
+        weight=1.5,
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
-    # Gait shaping via contacts — contact sensors re-enabled via flatten_k1_usd.py
+    # Gait: one-foot-at-a-time stepping, with a shorter threshold so short K1
+    # steps receive signal instead of a sparse late reward.
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
-        weight=0.25,
+        weight=0.5,
         params={
             "command_name": "base_velocity",
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
-            "threshold": 0.4,
+            "threshold": 0.3,
         },
     )
     feet_slide = RewTerm(
         func=mdp.feet_slide,
-        weight=-0.1,
+        weight=-0.25,
         params={
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
             "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
@@ -301,26 +319,48 @@ class RewardsCfg:
     )
     # Termination
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
-    # Regularization
-    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=0.0)
+    # Regularization / posture
+    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
+    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.005)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
     dof_acc_l2 = RewTerm(
-        func=mdp.joint_acc_l2, weight=-1.25e-7,
+        func=mdp.joint_acc_l2, weight=-2.5e-7,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Hip_.*", ".*_Knee_.*"])},
     )
     dof_torques_l2 = RewTerm(
-        func=mdp.joint_torques_l2, weight=-1.5e-7,
+        func=mdp.joint_torques_l2, weight=-2.0e-6,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Hip_.*", ".*_Knee_.*", ".*_Ankle_.*"])},
     )
     dof_pos_limits = RewTerm(
         func=mdp.joint_pos_limits, weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Ankle_.*"])},
     )
-    # Arm/head joint deviation — keep near default
+    # Keep the non-locomotion arms/head near the K1 default pose.
     joint_deviation_arms = RewTerm(
-        func=mdp.joint_deviation_l1, weight=-0.05,
+        func=mdp.joint_deviation_l1, weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_ARM_HEAD_JOINTS)},
+    )
+    # A true stand command should not be turned into marching in place.
+    stand_still = RewTerm(
+        func=mdp.stand_still_joint_deviation_l1,
+        weight=-0.5,
+        params={
+            "command_name": "base_velocity",
+            "command_threshold": 0.1,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS),
+        },
+    )
+    # Do not use hip/trunk ground contact to crawl or kneel forward.
+    undesired_contacts = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-1.0,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces", body_names=["Trunk", ".*_Hip_Pitch", ".*_Hip_Roll", ".*_Hip_Yaw"]
+            ),
+            "threshold": 1.0,
+        },
     )
 
 
@@ -407,4 +447,7 @@ class K1VelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
         self.episode_length_s = 20.0
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
+        # Learn the gait on the flat/curriculum-start tiles first; the existing
+        # terrain-level curriculum then advances the same policy to rougher tiles.
+        self.scene.terrain.max_init_terrain_level = 0
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
