@@ -1,190 +1,147 @@
 # Booster K1 Workspace — Handoff
 
-## 📌 SESSION HANDOFF — 2026-09-24 (read this section first; older history below)
+## 📌 SESSION HANDOFF — 2026-09-24 (read this first; older history below)
 
-> **Branches:** `dev/soccer-p3p4` @ `f249c95` (active, pushed — P3/P4/push work) ·
-> `dev/phase-6-soccer-hrl` @ `f3000d6` (pushed — recordings/docs; videos+models live here on GitHub) ·
-> the original `dev/box-push-wrist-ik` branch was **renamed** to `dev/soccer-p3p4` (box-push env is authored on it, same branch).
+> **Branches:** `dev/soccer-p3p4` (active, pushed @ `09f18b3` — holds BOTH tracks) ·
+> `dev/phase-6-soccer-hrl` @ `f3000d6` (pushed — policy recordings, docs, videos, exports).
 > **GitHub:** https://github.com/thdhyan/booster_ws · **Plan:** `PLAN_PHASE6_SOCCER_HRL.md` · **Run log:** `TRAINING.md`
-> **Drive:** [policy videos folder](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy) · [Slide deck (4 videos embedded)](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit) ·
-> training videos auto-mirror from the sparks (below).
+> **Drive:** [policy videos folder](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy) ·
+> [Slide deck (4 videos embedded)](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit)
 
-### What is RUNNING right now (all remote, in tmux, survive disconnects)
+---
 
-| Box | tmux | What | Log |
-|---|---|---|---|
-| spark02 | `k1_spark_hp` | **Run-11** partial-control + arm-delta curriculum (smoke-gated → 512×3000) — relaunched 13:17 UTC after the server restart | `scripts/hp.full.log` (Run-10 archived as `scripts/hp.run10.log`, `HP_FULL_RC=0` @ iter 2999) |
-| spark02 | `k1_gdrive_sync` | rclone loop → Drive `gdrive-thakk100:Booster/logs` (`*.mp4`, every 10 min) ✅ live | `scripts/gdrive_sync.log` |
-| spark02 | `k1_p3smoke` | P3 head-track smoke (16×3, cameras+YOLO), 1-D-reward build — relaunched 13:17 UTC | `scripts/p3smoke.log` |
-| — | — | Frozen-base export from Run-10 `model_2999` **DONE** (parity 2.87e-03): `models/k1_partialctrl_base.pt` on local + spark02 + spark04 | `scripts/export_base.log` |
-| spark04 | `k1_spark_p1f` | P1f chain **resumed from teacher `model_1999.pt`** (1 iter left, then student 256×1500) | `scripts/p1f.f.log` |
-| spark04 | `k1_spark_p2f` | P2f chain **resumed from teacher `model_1800.pt`** (1200 iters left, then student 512×3000) | `scripts/p2f.f.log` |
-| spark04 | `k1_gdrive_sync` | Drive mirror (same as spark02) ✅ live | `scripts/gdrive_sync.log` |
-| spark04 | `k1_pushsmoke` | **Box-push smoke** (16×3, video), event-signature fix — relaunched 13:17 UTC | `scripts/pushsmoke.log` |
+# 🟠 TRACK A — SOCCAR... sorry: **TRACK A — SOCCER** (P3 head-track, P4 kick teacher) — *agent A owns this*
 
-spark01/03 are busy with other tenants (GPU 83/95 %). Do not touch.
+**Goal:** make the K1 see and kick a ball without ground truth in its inputs
+(P3 keeps the ball in frame from camera detections; P4 teacher knows the ball;
+the student will consume P3 + the vision estimator).
 
-### ⚠️ Server restart incident (2026-09-24 ~12:55 UTC) — RECOVERED
+**Code map (all in `isaac_tasks/k1_velocity/source/k1_velocity/`):**
+- `tasks/head/` — P3 `Isaac-HeadTrack-K1-v0` (head-only; obs 12 = YOLO
+  detection(3)+head(4)+ang-vel(3)+action(2); centredness reward; ball-speed
+  curriculum 0→0.8 m/s; CCW search helper), `tasks/head/agents/rsl_rl_ppo_cfg.py`
+  (wandb `p3_head_track`).
+- `tasks/kick/` — P4. Teacher id now drives head+legs (14-dim) with
+  `ball_in_frame` + `head_ball_aim` (`K1KickTeacherEnvCfg`). Student id unchanged.
+- Launchers: `scripts/spark_soccer_{host,container}.sh p3|p4t` (smoke-gated,
+  tmux `k1_spark_p3`/`k1_spark_p4t`, logs `scripts/p3.soccer.log`/`p4t.soccer.log`).
+- Smokes/verifiers: `scripts/smoke_p3_head.sh`, `scripts/smoke_p4_teacher.sh`,
+  `scripts/zero_step.sh Isaac-HeadTrack-K1-v0 cameras` (zero-agent, ~5 min).
 
-Both sparks rebooted mid-flight: **every training container and tmux session was
-killed** (the `k1_gdrive_sync` loops came back / survived and were re-checked).
-Salvage + recovery already done:
+**Status (2026-09-24 13:20 UTC):**
+- Code complete; deployability gate green (`Isaac-HeadTrack-K1-v0` policy 5 terms OK).
+- P3 smoke: last attempts got past env build, curriculum manager, YOLO load and
+  wandb; the last real bug (1-D reward shapes) is fixed; a server reboot killed
+  the verifying run; a fresh smoke + a zero-agent 3-step check are **running now**
+  on spark02 (`k1_p3smoke`, `k1_soccerzero`).
+- P4 teacher smoke: not run yet — queue it right after P3 goes green.
+- **Not yet training.** Full runs: 512×2000 (P3), 512×3000 (P4T).
 
-- **p1f teacher reached 1999/2000** → `model_1999.pt` survived. **p2f teacher at
-  1854/3000** → `model_1800.pt`. Both chains relaunched **with resume** (new
-  `train.py --checkpoint <path>` flag + `RESUME_CKPT` env in
-  `scripts/spark_force_{host,container}.sh`) instead of restarting from zero.
-- **Run-10 completed before the reboot** (`HP_FULL_RC=0`), `model_2999.pt`
-  pulled to `logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/`,
-  log archived as `hp.run10.log`, **frozen base re-exported from it** (parity
-  2.87e-03) and copied to local + spark04.
-- **Lesson:** remote jobs are NOT reboot-safe in tmux alone — checkpoints every
-  100 iters are the only durability. After any restart, check
-  `ls -t logs/rsl_rl/*/*/model_*.pt` and relaunch with `--checkpoint`.
+**Agent A — next steps (in order):**
+1. `ssh aim_spark02 'grep -E "ZERO_STEP_DONE|P3_SMOKE_RC|reward .* returned" ~/Projects/booster_ws/scripts/{soccerzero,p3smoke}.log | tail -5'`
+2. Green → `ssh aim_spark02 'cd ~/Projects/booster_ws && bash scripts/spark_soccer_host.sh p3'`
+   (it re-smokes internally, then 512×2000). Then the P4T smoke + full:
+   `bash scripts/smoke_p4_teacher.sh`-equivalent via `spark_soccer_host.sh p4t`.
+3. Videos land in `logs/rsl_rl/p3_head_track/*/videos/` and auto-mirror to Drive.
+   When P3 has a ckpt: play-record it (see Track B's recording recipe) and add a
+   slide to the deck.
+4. Update `TRAINING.md` campaign table (P3/P4 rows) + this handoff.
 
-### First 5 commands when you return
+**Watch-outs:** `WLANDB_API_KEY` must come from `logs/.wandb_key`; ultralytics
+gets a **list of HWC uint8 frames** (not tensors); curriculum signature is
+`(env, env_ids, defaults...)`; reward terms return 1-D `(N,)`.
 
-```bash
-# 1. both smokes + Run-10 status
-ssh aim_spark04 'grep -E "PUSH_SMOKE_RC|\[push\]|frozen base|Error" ~/Projects/booster_ws/scripts/pushsmoke.log | tail'
-ssh aim_spark02 'grep -E "reward .* returned|P3_SMOKE_RC" ~/Projects/booster_ws/scripts/p3smoke.log | tail -3; grep -E "Learning iteration|HP_FULL_RC" ~/Projects/booster_ws/scripts/hp.full.log | tail -2'
-# 2. push-smoke artifacts (the video the user asked to see) — see "Pending" below
-ssh aim_spark04 'ls -la ~/Projects/booster_ws/logs/rsl_rl/p6_push/*/videos/ 2>/dev/null'
-# 3. force-run progress
-ssh aim_spark04 'grep "Learning iteration" ~/Projects/booster_ws/scripts/p1f.f.log | tail -1; grep "Learning iteration" ~/Projects/booster_ws/scripts/p2f.f.log | tail -1'
-```
+---
 
-### Pending — in priority order
+# 🟢 TRACK B — BOX PUSHING (P6: hierarchical velocity + wrist-IK controller) — *agent B owns this*
 
-1. **Box-push (P6): green smoke → video + screenshots + README.** The smoke
-   (`Isaac-Push-K1-v0`, 16 envs, `--video`) is the user's explicit deliverable:
-   on `PUSH_SMOKE_RC` success, (a) rsync
-   `aim_spark04:.../logs/rsl_rl/p6_push/*/videos/*.mp4` → local
-   `isaac_tasks/k1_velocity/videos/push_smoke.mp4`; (b) extract 2–3 PNG frames
-   (in-container `ffmpeg -i ... -vf "select=eq(n\,K)" -vframes 1`; ffmpeg is in
-   the image) into `videos/push_smoke_frame*.png`; (c) add a **P6 box-push
-   section to `isaac_tasks/k1_velocity/README.md`** (obs/action/reward tables +
-   video embed + screenshots); (d) commit + push; (e) upload the video to the
-   Drive folder (permission anyone/reader) and add a slide to the deck
-   (`GOOGLESLIDES_PRESENTATIONS_BATCH_UPDATE` with `createVideo`, **source
-   enum is `DRIVE`**, not `DRIVE_FILE`; Composio session id `trip`).
-   If the smoke still fails: the remaining suspects are the two IK action
-   terms and the frozen-base action term (everything else was verified: cfg
-   validation passed, obs/actions/rewards/events all instantiate).
-2. **P3 smoke green → launch full runs** on spark02:
-   `bash scripts/spark_soccer_host.sh p3` (tmux `k1_spark_p3`, log
-   `scripts/p3.soccer.log`; smoke-gated internally, then 512×2000) and
-   `bash scripts/spark_soccer_host.sh p4t` (P4 teacher, 512×3000). Only one
-   Isaac stack at a time on spark02 beyond Run-11 (RAM ~121 GB total).
-3. ~~**Run-10 → Run-11 handoff**~~ — **DONE 2026-09-24 03:35 UTC**: Run-10
-   finished `HP_FULL_RC=0` (iter 2999/3000); `hp.full.log` archived as
-   `hp.run10.log`; `model_2999.pt` pulled to
-   `logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/`;
-   Run-11 launched (tmux `k1_spark_hp`). Remaining from that step:
-   (a) `scripts/export_base_policy.sh` is re-exporting the frozen base from
-   the final ckpt — pull `models/k1_partialctrl_base.pt` (local→spark04) when
-   `BASE_EXPORT_DONE` appears; (b) partial-control play video on spark04:
-   `ssh aim_spark04 'cd ~/Projects/booster_ws && SKIP_CORE=1 bash scripts/record_policies_host.sh'`.
-   Original commands kept for reference:
-   ```bash
-   ssh aim_spark02 'cd ~/Projects/booster_ws && cp scripts/hp.full.log scripts/hp.run10.log && tmux kill-session -t k1_spark_hp 2>/dev/null'
-   rsync -az aim_spark02:Projects/booster_ws/logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/model_2999.pt logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/
-   # ship code local->spark02, re-export the frozen base from the FINAL ckpt, then:
-   ssh aim_spark02 'cd ~/Projects/booster_ws && bash scripts/spark_partial_host.sh'   # Run-11, tmux k1_spark_hp
-   # partial-control play video (SKIP_CORE=1) on spark04:
-   ssh aim_spark04 'cd ~/Projects/booster_ws && SKIP_CORE=1 bash scripts/record_policies_host.sh'
-   ```
-   Re-export the frozen base for P6 after Run-10/11 final:
-   `scripts/export_base_policy.sh` (container-side) → `models/k1_partialctrl_base.pt`.
-4. Force chains (p1f/p2f) finish on their own (teacher→student chained);
-   record + upload their videos when done (same recipe as #1).
-5. Commit anything uncommitted; branches are pushed at `f249c95`.
+**Goal:** a policy that walks the K1 up to a box, places both wrist stubs on it
+and pushes its corners to a moving goal set. Hierarchy: **velocity command
+override → frozen Run-11 locomotion policy → legs**; **wrist-stub targets →
+DifferentialIK → arms**.
 
-### Architecture decisions LOCKED this session (user-confirmed)
+**Code map:** `tasks/push/` — `push_env_cfg.py` (`K1PushEnvCfg`,
+`K1PushReachEnvCfg`), `push_mdp.py` (frozen-base action term, wrist command,
+corner/goal math, USD DR, green alpha), `agents/rsl_rl_ppo_cfg.py`
+(wandb `p6_push_reach` → `p6_push`). Ids: `Isaac-Push-Reach-K1-v0`,
+`Isaac-Push-K1-v0`. Frozen base: `models/k1_partialctrl_base.pt` (exported from
+Run-10 `model_2999`, JIT parity 2.87e-03; present on local + spark02 + spark04;
+re-export with `scripts/export_base_policy.sh` if Run-11 supersedes it).
 
-- **P3 head tracking** (`Isaac-HeadTrack-K1-v0`): head-only (legs PD-held),
-  deployable obs = **camera detections only** (YOLOv8n `sports ball` bbox on a
-  head cam mounted on `Head_2`, 320×240 @10 Hz → `(visible, du, dv)`), no GT;
-  primary reward = centredness of the detection; **ball-speed curriculum
-  0→0.8 m/s (iters 200→1200)**; **CCW search**: no detection 0.5 s → in-place
-  counter-clockwise command `(0,0,+0.6)` to the locomotion policy
-  (`head_mdp.ccw_search_command` + compose `update_search`).
-- **P4 teacher** (`Isaac-Kick-Ball-K1-Teacher-v0`): now also drives the head
-  (14-dim action) + `ball_in_frame`/`head_ball_aim` shaping; student path
-  unchanged (needs P3 + vision estimator later).
-- **P6 box-push** (`Isaac-Push-Reach-K1-v0` → `Isaac-Push-K1-v0`):
-  - **9-dim action = velocity override (3) + left/right wrist EE deltas (3+3)**;
-    the velocity slice feeds a **frozen Run-11 partial-control TorchScript**
-    (`models/k1_partialctrl_base.pt`, obs assembled in the exact 68-dim partial
-    order inside `FrozenBaseVelocityAction`); wrists via two stock
-    `DifferentialInverseKinematicsActionCfg` terms (`body_name=left/right_hand_link`,
-    `scale=0.05`, dls, position mode, relative). Contact-only (no welds).
-  - Box = 1 m prototype cube; **USD-time per-env DR** (mode `"usd"`,
-    `replicate_physics=False`): edge 0.7–1.5 m, mass 3–25 kg (Reach: 12–25),
-    friction 0.3–1.2, fixed per env; semi-transparent green (pxr
-    `UsdPreviewSurface` opacity 0.35, startup event).
-  - Goals: **corner corners + corner centroid ("cumulative sum")** tracking
-    against a cumulative goal-offset integrator along the push heading
-    (curriculum 0.3→1.5 m). Fully observable **teacher** obs group (mass,
-    size, 8 corners, goal pose + corners, offset, wrist targets, proprio).
-  - Wrist-target command = 2 contact points on the box near face (base frame,
-    clamped to reach); wrist action = deltas around current EE pose.
-- **Deployability test**: push uses the `TeacherCfg` group name (privileged
-  convention) so the static gate still enforces the no-GT rule everywhere
-  else. Gate currently **HOLDS — 14 tasks** incl. head + kick + push.
+**Design (locked):** action 9 = `[vel override 3 | left wrist EE delta 3 | right 3]`;
+frozen base assembled with the exact 68-dim partial obs; IK `body_name=*_hand_link`,
+`scale=0.05`, dls, position/relative; box = 1 m prototype with USD-time per-env DR
+(edge 0.7–1.5 m, mass 3–25 kg / 12–25 for Reach, friction 0.3–1.2,
+`replicate_physics=False`), green alpha 0.35; goals = box pose + cumulative
+offset integrator (curriculum 0.3→1.5 m), rewards on 8 corners + corner
+centroid + progress; teacher-group obs (fully observable by design).
 
-### Gotchas that cost hours (do not rediscover)
+**Status (2026-09-24 13:20 UTC):**
+- Env cfg fully instantiates (validated by configclass; complete cfg dump in
+  `scripts/pushsmoke.log` history). Gate green. **No completed sim step yet** —
+  three first-step blockers fixed in sequence: `body_name` field, 1-D reward
+  shapes, event signature `(env, env_ids, scale_range, mass_range)`. A smoke
+  (`k1_pushsmoke`, spark04) and a zero-agent 3-step check (`k1_pushzero`,
+  spark04) are **running now**.
+- Residual risk if it still fails: the frozen-base action term (TorchScript call
+  + joint-target writer name) or the two IK terms at step 0.
 
-- **Reward terms must return 1-D `(N,)`** — the reward buffer is 1-D, so a
-  `(N,1)` term broadcasts to `(N,N)` and throws
-  `output with shape [N] doesn't match the broadcast shape [N, N]` inside
-  `reward_manager.compute` (the traceback does NOT name the term — guard your
-  custom terms or bisect).
-- Event/curriculum/obs term signatures are validated against
-  `(env, env_ids, …)` (min_argc=2 for events/curricula): a missing `env_ids`
-  parameter or non-defaulted names fails env construction with
-  "expects mandatory/optional parameters".
-- `python.sh` returns **rc=0 on crashes** — always read the log, gate on
-  artifacts (mp4 size, trace, export), never on rc alone.
-- **Curriculum terms** must be `def f(env, env_ids, <all-defaults>)` — the
-  manager validates the signature skipping TWO params and rejects unexpected
-  names. Iterations come from
-  `(sim.get_physics_step_count() // decimation) / steps_per_iter`, not
-  `common_step_counter`.
-- Tensor indexing: `joint_pos[:, ids][:, 0]`; `joint_pos[:, ids, 0]` silently
-  yields `(N, 2)` (bit P3 and kick once already).
-- `randomize_rigid_body_scale` is **USD-cooked**: only before sim start
-  (`mode="usd"`, per-env fixed) and requires `replicate_physics=False`.
-- ultralytics `model.predict` on a **tensor** requires stride-32 dims
-  (240×320 rejected); pass a **list of HWC uint8 frames** instead.
-- configclass: `class_type` must be set **at decoration time** (assigning it
-  after `@configclass` leaves `None` → "Missing values detected").
-- `DifferentialInverseKinematicsActionCfg` field is **`body_name`**, not `body`.
-- Smoke scripts must export `WANDB_API_KEY` from `logs/.wandb_key` (or die at
-  runner init). `scripts/spark_soccer_container.sh` does this for full runs.
-- Drive remote on the sparks is **`gdrive-thakk100`** (dl uses a different
-  alias); rclone linux-arm64 binary + config are installed on spark02/04 and
-  synced in tmux `k1_gdrive_sync`.
-- Sparks: container-created files are **root-owned** (videos, `__pycache__`) —
-  rsync with `--no-owner --no-group --no-perms --exclude='__pycache__'`.
-  Occasional `ssh: Could not resolve hostname aim_sparkNN` blips → retry.
-- Never `git add src/k1_description/assets` (pre-existing dirty submodule).
-- The box-push env lives in `isaac_tasks/k1_velocity/source/k1_velocity/tasks/push/`
-  (not a separate package); all 4 registration sites import it
-  (`tasks/__init__.py`, `register_tasks.py`, `scripts/train.py`,
-  `scripts/play_record.py`).
+**Agent B — next steps (in order):**
+1. `ssh aim_spark04 'grep -E "ZERO_STEP_DONE|step 0|\[push\]|frozen base|Error|Traceback" ~/Projects/booster_ws/scripts/pushzero.log | tail -8'`
+2. Green smoke → the user-visible deliverable: pull
+   `aim_spark04:.../logs/rsl_rl/p6_push/*/videos/*.mp4` to
+   `isaac_tasks/k1_velocity/videos/push_smoke.mp4`, extract 2–3 PNG frames
+   (in-container ffmpeg), add a **P6 section to `isaac_tasks/k1_velocity/README.md`**
+   (obs/action/reward tables + video embed + frames), commit + push, upload the
+   video to the Drive folder (permission anyone/reader) and add a slide to the
+   deck (Composio session `trip`; `createVideo` with **source `DRIVE`**).
+3. Full training (after the smoke gate): Reach 256×1500 → warm-start Push 256×3000.
+   Launcher: copy `scripts/smoke_push.sh` pattern into `spark_push_{host,container}.sh`
+   (same tmux/log recipe as `spark_soccer_*`).
+4. Keep Track B commits limited to `tasks/push/`, `scripts/*push*`, README section.
 
-### Completed earlier the same day (for context)
+---
 
-- Recorded + verified 4 policy videos (P1 t/s, P2 t/s) with HUD, JIT parity
-  2.2–3.7e-03, TorchScript exports in `models/` (LFS) — committed on
-  `dev/phase-6-soccer-hrl`, embedded in READMEs, mirrored to Drive + Slides.
-- P1f/P2f force-variant tasks (teacher sees the 6-dim shove wrench, students
-  blind) — smoke-gated chains launched on spark04.
-- Run-10 partial-control base (arm-pose curriculum) + Run-11 arm-delta
-  curriculum implemented (`arm_delta_change` 0→1 over iters 600→2500, play cfg
-  pins 0).
-- k1_soccer_compose.py: 12-dim detection head-obs + CCW search state machine.
+# 🔧 SHARED INFRASTRUCTURE (both tracks)
+
+- **Registration chain (a new family must touch all 4):**
+  `tasks/__init__.py`, `source/k1_velocity/register_tasks.py`,
+  `scripts/train.py`, `scripts/play_record.py` (+ `tests/test_deployability.py`
+  conventions: obs group classes end in `Cfg`; `TeacherCfg` is the privileged
+  exemption). Gate: container on spark04/02 —
+  `python tests/test_deployability.py` → currently **HOLDS, 14 tasks**.
+- **Container:** `nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1`, in-container
+  python `/isaac-sim/python.sh`, repo mounted at `/workspace/booster_ws`, wandb
+  project `booster_k1_soccer_hrl` (entity `thakk100-dhyan-home`).
+- **Drive video mirror:** rclone linux-arm64 + `gdrive-thakk100` remote, tmux
+  `k1_gdrive_sync` on spark02 AND spark04 (copies `logs/**/*.mp4` every 10 min).
+  Config lives in `~/.config/rclone/rclone.conf` on both.
+- **Server restart lesson (2026-09-24 ~12:55 UTC):** both sparks rebooted and
+  killed every container/tmux session. Only `k1_gdrive_sync` survived. Salvage
+  came from per-100-iter checkpoints + the new `train.py --checkpoint` resume
+  flag (`RESUME_CKPT` env in `spark_force_*`). After any restart: list
+  `logs/rsl_rl/*/*/model_*.pt`, then relaunch with `--checkpoint`.
+  Run-10 had already finished cleanly (`HP_FULL_RC=0`).
+- **Gotchas (full list was in the previous revision — top ones):**
+  - `python.sh` returns rc=0 on crashes → gate on log markers/artifacts
+    (`ZERO_STEP_RESULT=OK`, `REC_VERIFY_OK_*`), never rc.
+  - Reward terms: 1-D `(N,)`. `(N,1)` broadcasts to `(N,N)` and the reward
+    manager traceback does NOT name the term — guard or bisect.
+  - Event/curriculum term signatures: `(env, env_ids, …)`; all names must be
+    passed in cfg params (defaults make the validation fail).
+  - `joint_pos[:, ids][:, 0]`; `joint_pos[:, ids, 0]` silently gives `(N, 2)`.
+  - `randomize_rigid_body_scale`/mass/material are USD-cooked: `mode="usd"`,
+    `replicate_physics=False`, per-env fixed.
+  - ultralytics: pass a list of HWC uint8 frames, not a tensor.
+  - `DifferentialInverseKinematicsActionCfg(body_name=...)`, not `body`.
+  - configclass `class_type` must be set at decoration time.
+  - Sparks: container files are root-owned; rsync with
+    `--no-owner --no-group --no-perms --exclude='__pycache__'`.
+    Occasional `Could not resolve hostname aim_sparkNN` → retry.
+  - Never `git add src/k1_description/assets`.
+  - tmux launchers that CREATE their own session (`spark_*_host.sh`,
+    `record_policies_host.sh`) must be invoked directly, not wrapped in another
+    `tmux new-session` (duplicate-session error).
 
 ---
 
