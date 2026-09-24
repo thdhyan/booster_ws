@@ -290,10 +290,44 @@ Reference SDK example: `sdk/booster_robotics_sdk/example/low_level/b1_low_sdk_ex
 
 ---
 
+## Policy I/O Reference (ASCII Diagrams)
+
+See **[docs/policy_io_reference.md](docs/policy_io_reference.md)** for complete ASCII diagrams of every policy's input/output tensors, joint mappings, and data flows.
+
+### Quick Summary
+
+| Policy | Input | Output | Mode | Use Case |
+|--------|-------|--------|------|----------|
+| `k1_velocity_policy.pt` | 48 (latest) | 12 leg Δq | `latest` | **Default walking** |
+| `k1_velocity_student.pt` | 480 (48×10 history) | 12 leg Δq | `stacked` | Smoother gait |
+| `p2_move_student.pt` | 480 (48×10 history) | 12 leg Δq | `stacked` | Alt. distilled |
+| `p1_basic_student.pt` | 42 | 12 leg Δq | `latest` | Stand only |
+| `k1_partialctrl_base.pt` | 68 | 14 (12 leg + 2 head) | `latest` | Walk + head |
+
+---
+
+## SDK Bridge Implementation
+
+The C++ SDK bridge is now implemented at:
+- `src/k1_control/k1_control/sdk_bridge_node.cpp` — Full FastDDS LowCmd/LowState bridge
+- Maps ROS2 `JointCommand` → SDK `LowCmd` (22 motors, PARALLEL mode)
+- Maps SDK `LowState` → ROS2 `joint_states` / `imu` / `odom`
+- Per-joint PD gains from booster actuator specs
+- Rate-limited position commands for safety
+
+Build with:
+```bash
+colcon build --packages-select k1_control --cmake-args -DCMAKE_BUILD_TYPE=Release
+```
+
+---
+
 ## References
 
 - `src/k1_locomotion/k1_locomotion/locomotion_node.py` — policy inference node (read the docstring!)
-- `src/k1_bringup/launch/real.launch.py` — real robot launch (currently placeholder)
-- `src/k1_control/k1_control/sdk_bridge_node.py` — SDK bridge stub
+- `src/k1_bringup/launch/real.launch.py` — real robot launch (now complete)
+- `src/k1_control/k1_control/sdk_bridge_node.cpp` — **C++ SDK bridge (implemented)**
+- `src/k1_control/k1_control/sdk_bridge_node.py` — Python stub (deprecated)
 - `isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/velocity_env_cfg.py` — training observation/action definition
+- `docs/policy_io_reference.md` — **ASCII diagrams for all policies**
 - `models/` — trained TorchScript policies (Git LFS)

@@ -18,7 +18,6 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'sdk_bridge = k1_control.sdk_bridge_node:main',
             'sim_bridge = k1_control.sim_bridge_node:main',
             'joint_state_pub = k1_control.joint_state_publisher:main',
         ],
