@@ -288,7 +288,8 @@ def maintain_ball_velocity(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> Non
     vel = ball.data.root_lin_vel_w.torch[env_ids].clone()
     vel[:, :2] = st.ball_dir[env_ids, :2] * st.ball_speed
     vel[:, 2] = 0.0
-    ball.write_root_velocity_to_sim_index(root_velocity=vel, env_ids=env_ids)
+    root_velocity = torch.cat((vel, torch.zeros_like(vel)), dim=-1)
+    ball.write_root_velocity_to_sim_index(root_velocity=root_velocity, env_ids=env_ids)
 
 
 # ---------------------------------------------------------------------------

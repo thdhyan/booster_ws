@@ -108,7 +108,7 @@ class K1KickSceneCfg(InteractiveSceneCfg):
     # Posts and crossbar at +x end (FIELD_L/2 = 4.0m)
     # Positive side goal (at x = FIELD_L/2 = 4.0m)
     goal_post_pos_0 = AssetBaseCfg(
-        prim_path="/World/goal_post_pos_0",
+        prim_path="{ENV_REGEX_NS}/goal_post_pos_0",
         spawn=sim_utils.CylinderCfg(
             radius=0.04,
             height=mdp.GOAL_H,
@@ -118,7 +118,7 @@ class K1KickSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(mdp.FIELD_L / 2, mdp.GOAL_W / 2, mdp.GOAL_H / 2)),
     )
     goal_post_pos_1 = AssetBaseCfg(
-        prim_path="/World/goal_post_pos_1",
+        prim_path="{ENV_REGEX_NS}/goal_post_pos_1",
         spawn=sim_utils.CylinderCfg(
             radius=0.04,
             height=mdp.GOAL_H,
@@ -128,7 +128,7 @@ class K1KickSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(mdp.FIELD_L / 2, -mdp.GOAL_W / 2, mdp.GOAL_H / 2)),
     )
     goal_bar_pos = AssetBaseCfg(
-        prim_path="/World/goal_bar_pos",
+        prim_path="{ENV_REGEX_NS}/goal_bar_pos",
         spawn=sim_utils.CuboidCfg(
             size=(0.04, mdp.GOAL_W + 0.08, 0.04),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -139,7 +139,7 @@ class K1KickSceneCfg(InteractiveSceneCfg):
 
     # Negative side goal (at x = -FIELD_L/2 = -4.0m) — optional, not used in base kick task
     goal_post_neg_0 = AssetBaseCfg(
-        prim_path="/World/goal_post_neg_0",
+        prim_path="{ENV_REGEX_NS}/goal_post_neg_0",
         spawn=sim_utils.CylinderCfg(
             radius=0.04,
             height=mdp.GOAL_H,
@@ -149,7 +149,7 @@ class K1KickSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-mdp.FIELD_L / 2, mdp.GOAL_W / 2, mdp.GOAL_H / 2)),
     )
     goal_post_neg_1 = AssetBaseCfg(
-        prim_path="/World/goal_post_neg_1",
+        prim_path="{ENV_REGEX_NS}/goal_post_neg_1",
         spawn=sim_utils.CylinderCfg(
             radius=0.04,
             height=mdp.GOAL_H,
@@ -159,7 +159,7 @@ class K1KickSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(-mdp.FIELD_L / 2, -mdp.GOAL_W / 2, mdp.GOAL_H / 2)),
     )
     goal_bar_neg = AssetBaseCfg(
-        prim_path="/World/goal_bar_neg",
+        prim_path="{ENV_REGEX_NS}/goal_bar_neg",
         spawn=sim_utils.CuboidCfg(
             size=(0.04, mdp.GOAL_W + 0.08, 0.04),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -221,9 +221,10 @@ class ObservationsCfg:
         )
         # Last action
         actions = ObsTerm(func=mdp.last_action)
-        # Ball state in robot frame (privileged)
+        # Ball and goal state in robot frame (privileged)
         ball_pos = ObsTerm(func=mdp.ball_pos_in_robot_frame)
         ball_lin_vel = ObsTerm(func=mdp.ball_lin_vel_in_robot_frame)
+        goal_pos = ObsTerm(func=mdp.goal_pos_in_robot_frame)
 
         def __post_init__(self):
             self.enable_corruption = False  # privileged: no sensor noise
@@ -266,6 +267,21 @@ class RewardsCfg:
         weight=1.0,
         params={},
     )
+    approach_ball = RewTerm(
+        func=mdp.approach_ball,
+        weight=1.0,
+        params={"min_dist": 0.5},
+    )
+    kick_toward_goal = RewTerm(
+        func=mdp.kick_toward_goal,
+        weight=2.0,
+        params={"speed_scale": 0.5},
+    )
+    align_stance = RewTerm(
+        func=mdp.align_stance,
+        weight=0.5,
+        params={"max_dist": 0.75},
+    )
 
     # REGULARIZATION: velocity, action, joint constraints
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
@@ -275,10 +291,10 @@ class RewardsCfg:
         weight=-1.5e-7,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Hip_.*", ".*_Knee_.*", ".*_Ankle_.*"])},
     )
-    dof_pos_limits = RewTerm(
+    joint_pos_limits = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Ankle_.*"])},
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
     )
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1,

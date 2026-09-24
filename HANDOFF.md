@@ -2,7 +2,7 @@
 
 ## 📌 SESSION HANDOFF — 2026-09-24 (read this first; older history below)
 
-> **Branches:** `dev/soccer-p3p4` (active, pushed @ `09f18b3` — holds BOTH tracks) ·
+> **Branches:** `dev/soccer-p3p4` (active — holds BOTH tracks; Track A gates landed) ·
 > `dev/phase-6-soccer-hrl` @ `f3000d6` (pushed — policy recordings, docs, videos, exports).
 > **GitHub:** https://github.com/thdhyan/booster_ws · **Plan:** `PLAN_PHASE6_SOCCER_HRL.md` · **Run log:** `TRAINING.md`
 > **Drive:** [policy videos folder](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy) ·
@@ -28,36 +28,47 @@ the student will consume P3 + the vision estimator).
 - Smokes/verifiers: `scripts/smoke_p3_head.sh`, `scripts/smoke_p4_teacher.sh`,
   `scripts/zero_step.sh Isaac-HeadTrack-K1-v0 cameras` (zero-agent, ~5 min).
 
-**Status (2026-09-24 13:20 UTC):**
-- Code complete; deployability gate green (`Isaac-HeadTrack-K1-v0` policy 5 terms OK).
-- P3 smoke: last attempts got past env build, curriculum manager, YOLO load and
-  wandb; the last real bug (1-D reward shapes) is fixed; a server reboot killed
-  the verifying run; a fresh smoke + a zero-agent 3-step check are **running now**
-  on spark02 (`k1_p3smoke`, `k1_soccerzero`).
-- P4 teacher smoke: not run yet — queue it right after P3 goes green.
-- **Zero-agent step check PASSED** for P3 (`ZERO_STEP_RESULT=OK`: 3 full
-  steps, obs `(4,12)`, rewards compute, no terminations — detector via the
-  geometric fallback in that container since zero_step.sh does not install
-  ultralytics; the smoke is the real-detector check).
-- **Run-11 (partial + arm-delta, 512×3000) is TRAINING on spark02** — its
-  smoke passed (`HP_SMOKE_RC=0`, tmux `k1_spark_hp`, log `hp.full.log`).
-- The P3 smoke is still running (16 envs, cameras + ultralytics, sharing the
-  GPU with Run-11). On `P3_SMOKE_RC` success: `bash scripts/spark_soccer_host.sh p3`
-  (smoke-gated → 512×2000), then `… p4t` for the P4 teacher (512×3000).
+**Status (2026-09-24 14:38 UTC):**
+- Deployability gate is green for **16 tasks**. P3 zero-step and the real
+  camera+YOLO 16×3 smoke both pass; the smoke loaded `yolov8n`, exercised
+  periodic resets, produced `model_2.pt` and three non-black clips.
+- Fixed the P3 runtime blocker: `write_root_velocity_to_sim_index` requires
+  linear+angular velocity `(N,6)` in this build. Also gave P3/P4 separate Isaac
+  caches (the shared cache could hang OmniHub), switched to `--viz none`, and
+  added log-marker gates because `python.sh` can return 0 after a crash.
+- **P3 full is TRAINING on spark02**: tmux `k1_spark_p3`, 512 envs × 2000,
+  log `scripts/p3.full.train.log`, run
+  `logs/rsl_rl/p3_head_track/2026-09-24_14-28-16_p3_head_track/`, W&B
+  [`5e43gwwj`](https://wandb.ai/thakk100-dhyan-home/booster_k1_soccer_hrl/runs/5e43gwwj).
+  Initial rate is ≈42–51 s/iter (ETA ≈2.2 h); steady process memory ≈10 GB.
+  Videos are every 6400 control steps = 200 iterations.
+- **P4 teacher 16×3 smoke PASSED** (`P4T_SMOKE_RC=0`,
+  `P4T_SMOKE_MARKER=OK`): teacher obs `(55,)`, legs+head action `(14,)`,
+  `model_2.pt` + video, W&B smoke
+  [`b4f5ag2d`](https://wandb.ai/thakk100-dhyan-home/booster_k1_soccer_hrl/runs/b4f5ag2d).
+  Fixed per-environment goal replication/scoring, added teacher goal obs and
+  the locked approach/kick/align shaping terms.
+- Server-side tmux `k1_soccer_chain` waits for P3's explicit
+  `SOC_FULL_MARKER=OK`, then runs `spark_soccer_host.sh p4t` (fresh smoke-gated
+  512×3000 full). It aborts P4 if P3 lacks the final marker.
+- Run-11 remains independently training on spark02 in tmux `k1_spark_hp`.
 
 **Agent A — next steps (in order):**
-1. `ssh aim_spark02 'grep -E "ZERO_STEP_DONE|P3_SMOKE_RC|reward .* returned" ~/Projects/booster_ws/scripts/{soccerzero,p3smoke}.log | tail -5'`
-2. Green → `ssh aim_spark02 'cd ~/Projects/booster_ws && bash scripts/spark_soccer_host.sh p3'`
-   (it re-smokes internally, then 512×2000). Then the P4T smoke + full:
-   `bash scripts/smoke_p4_teacher.sh`-equivalent via `spark_soccer_host.sh p4t`.
-3. Videos land in `logs/rsl_rl/p3_head_track/*/videos/` and auto-mirror to Drive.
-   When P3 has a ckpt: play-record it (see Track B's recording recipe) and add a
-   slide to the deck.
-4. Update `TRAINING.md` campaign table (P3/P4 rows) + this handoff.
+1. Monitor without restarting healthy runs:
+   ```bash
+   ssh aim_spark02 'cd ~/Projects/booster_ws && grep -E "Learning iteration|Mean reward|SOC_FULL_MARKER|Traceback|Error" scripts/{p3,p4t}.full.train.log | tail -20'
+   ```
+2. Require final markers, not just process exit: P3 `SOC_FULL_MARKER=OK` plus
+   `model_1999.pt`; P4T marker plus `model_2999.pt`. If either run dies, relaunch
+   with the newest checkpoint via `scripts/train.py --checkpoint ...`.
+3. Pull representative P3/P4 clips, play-record final checkpoints using the
+   Track B recipe, mirror them to Drive, and add slides to the existing deck.
+4. Replace these running/queued statuses with final W&B/reward/video evidence in
+   `TRAINING.md` and this handoff.
 
-**Watch-outs:** `WLANDB_API_KEY` must come from `logs/.wandb_key`; ultralytics
-gets a **list of HWC uint8 frames** (not tensors); curriculum signature is
-`(env, env_ids, defaults...)`; reward terms return 1-D `(N,)`.
+**Watch-outs:** `WANDB_API_KEY` comes from `logs/.wandb_key`; ultralytics gets
+a **list of HWC uint8 frames**; rigid-body root velocity is `(N,6)`; reward
+terms return 1-D `(N,)`; P3 smoke/full share no Isaac cache with P4 or Run-11.
 
 ---
 

@@ -59,4 +59,5 @@ class K1KickPPOTeacherRunnerCfg(K1KickPPORunnerCfg):
     """
 
     experiment_name = "p4_kick_teacher"
+    run_name = "p4_chase_kick"
     obs_groups = {"actor": ["teacher"], "critic": ["teacher"]}

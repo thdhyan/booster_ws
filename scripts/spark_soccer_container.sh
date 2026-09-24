@@ -29,17 +29,28 @@ p3)
     || { echo "YOLO_WEIGHTS_DOWNLOAD_FAIL (geometric proxy will be used)"; }
   export YOLO_WEIGHTS="$YOLO"
   echo "=== SOC SMOKE $TASK 16x3 (cameras + YOLO)"
-  timeout 3600 "$PY" isaac_tasks/k1_velocity/scripts/train.py \
+  SMOKE_LOG="$REPO/scripts/${WHICH}.smoke.train.log"
+  timeout 3600 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \
     --task "$TASK" --num_envs 16 --max_iterations 3 --seed 42 \
-    --headless --video --video_length 300 --video_interval 48
-  RC=$?
+    --viz none --video --video_length 64 --video_interval 32 2>&1 | tee "$SMOKE_LOG"
+  RC=${PIPESTATUS[0]}
   echo "SOC_SMOKE_RC=$RC"
-  if [ "$RC" -ne 0 ]; then echo "SOC_GATE=SMOKE_FAILED_NO_FULL_RUN"; exit 10; fi
+  if [ "$RC" -ne 0 ] || ! grep -q "Learning iteration 2/3" "$SMOKE_LOG"; then
+    echo "SOC_GATE=SMOKE_FAILED_NO_FULL_RUN"
+    exit 10
+  fi
   echo "=== SOC FULL $TASK ${ENVS}x${ITERS} (timeout 28800s)"
-  timeout 28800 "$PY" isaac_tasks/k1_velocity/scripts/train.py \
+  FULL_LOG="$REPO/scripts/${WHICH}.full.train.log"
+  timeout 28800 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \
     --task "$TASK" --num_envs "$ENVS" --max_iterations "$ITERS" --seed 42 \
-    --headless --video --video_length 1500 --video_interval 4800
-  RC=$?
+    --viz none --video --video_length 1500 --video_interval 6400 2>&1 | tee "$FULL_LOG"
+  RC=${PIPESTATUS[0]}
+  if grep -q "Learning iteration $((ITERS - 1))/$ITERS" "$FULL_LOG"; then
+    echo "SOC_FULL_MARKER=OK"
+  else
+    echo "SOC_FULL_MARKER=FAIL"
+    RC=1
+  fi
   echo "SOC_FULL_RC=$RC"
   echo "SOC_CONTAINER_DONE WHICH=$WHICH RC=$RC"
   exit $RC
@@ -48,17 +59,28 @@ p4t)
   TASK=Isaac-Kick-Ball-K1-Teacher-v0
   ENVS=512; ITERS=3000
   echo "=== SOC SMOKE $TASK 16x3"
-  timeout 3600 "$PY" isaac_tasks/k1_velocity/scripts/train.py \
+  SMOKE_LOG="$REPO/scripts/${WHICH}.smoke.train.log"
+  timeout 3600 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \
     --task "$TASK" --num_envs 16 --max_iterations 3 --seed 42 \
-    --headless --video --video_length 300 --video_interval 48
-  RC=$?
+    --viz none --video --video_length 48 --video_interval 24 2>&1 | tee "$SMOKE_LOG"
+  RC=${PIPESTATUS[0]}
   echo "SOC_SMOKE_RC=$RC"
-  if [ "$RC" -ne 0 ]; then echo "SOC_GATE=SMOKE_FAILED_NO_FULL_RUN"; exit 10; fi
+  if [ "$RC" -ne 0 ] || ! grep -q "Learning iteration 2/3" "$SMOKE_LOG"; then
+    echo "SOC_GATE=SMOKE_FAILED_NO_FULL_RUN"
+    exit 10
+  fi
   echo "=== SOC FULL $TASK ${ENVS}x${ITERS} (timeout 43200s)"
-  timeout 43200 "$PY" isaac_tasks/k1_velocity/scripts/train.py \
+  FULL_LOG="$REPO/scripts/${WHICH}.full.train.log"
+  timeout 43200 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \
     --task "$TASK" --num_envs "$ENVS" --max_iterations "$ITERS" --seed 42 \
-    --headless --video --video_length 1500 --video_interval 4800
-  RC=$?
+    --viz none --video --video_length 1500 --video_interval 4800 2>&1 | tee "$FULL_LOG"
+  RC=${PIPESTATUS[0]}
+  if grep -q "Learning iteration $((ITERS - 1))/$ITERS" "$FULL_LOG"; then
+    echo "SOC_FULL_MARKER=OK"
+  else
+    echo "SOC_FULL_MARKER=FAIL"
+    RC=1
+  fi
   echo "SOC_FULL_RC=$RC"
   echo "SOC_CONTAINER_DONE WHICH=$WHICH RC=$RC"
   exit $RC

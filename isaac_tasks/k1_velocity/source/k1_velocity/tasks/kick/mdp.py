@@ -6,19 +6,20 @@ progress), and reset-family samplers for curriculum learning.
 
 Key design:
   - Ball is a moving RigidObject (not kinematic).
-  - Goal posts are kinematic (just for contact detection in future; currently
-    ball-to-goal progress uses a fixed goal position at +x end of field).
+  - Goal posts are kinematic and replicated per environment at the +x field end.
   - Observations: policy obs for blind learner + teacher obs for privileged training.
-  - Rewards: sparse goal_scored (dominant) + light ball_to_goal_progress +
-    locomotion regularization (no contact shaping).
+  - Rewards: sparse goal_scored plus approach, goal-direction, stance, and
+    ball-to-goal progress shaping with locomotion regularization.
   - Resets: OmniReset with three families (at_ball_shoot / stand_ready / walk_up),
     population-sampled with uniform distribution.
 """
 
 from __future__ import annotations
 
-import torch
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
+
+import torch
 
 # Re-export all standard mdp functions from isaaclab's velocity task.
 # Isaac Lab 3.0-EA (dl) keeps this at isaaclab_tasks.core.velocity; the
@@ -103,8 +104,26 @@ GOAL_H = 0.9
 BALL_RADIUS = 0.11
 BALL_MASS = 0.43
 
-# Goal position (fixed, at +x end of field)
+# Goal position in each environment's local frame (fixed at +x).
 GOAL_POS = torch.tensor([FIELD_L / 2, 0.0, GOAL_H / 2], dtype=torch.float32)
+
+
+def _goal_positions_w(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Return the per-environment goal centres in world coordinates."""
+    goal = GOAL_POS.to(device=env.device, dtype=env.scene.env_origins.dtype)
+    return goal.expand(env.num_envs, -1) + env.scene.env_origins
+
+
+def _progress_state(env: ManagerBasedRLEnv) -> SimpleNamespace:
+    """Per-environment reset distances used by the two progress rewards."""
+    state = getattr(env, "kick_progress", None)
+    if state is None:
+        state = SimpleNamespace(
+            initial_goal_dist=torch.zeros(env.num_envs, device=env.device),
+            initial_robot_ball_dist=torch.zeros(env.num_envs, device=env.device),
+        )
+        env.kick_progress = state
+    return state
 
 
 # ============================================================================
@@ -146,64 +165,80 @@ def ball_lin_vel_in_robot_frame(env: ManagerBasedRLEnv) -> torch.Tensor:
     return ball_lin_vel_robot
 
 
-def goal_distance(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Distance from ball to goal (scalar per env).
+def goal_pos_in_robot_frame(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Privileged goal centre (x, y) in the robot base frame."""
+    from isaaclab.utils.math import quat_apply_inverse
 
-    Returns:
-        torch.Tensor: (num_envs, 1) Euclidean distance from ball to goal.
-    """
+    robot = env.scene["robot"]
+    goal_rel_w = _goal_positions_w(env) - robot.data.root_pos_w.torch
+    return quat_apply_inverse(robot.data.root_quat_w.torch, goal_rel_w)[:, :2]
+
+
+def goal_distance(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Distance from ball to the per-environment goal centre: shape ``(N,)``."""
     ball_pos_w = env.scene["ball"].data.root_pos_w.torch
-    goal_pos = GOAL_POS.to(ball_pos_w.device)
-    dist = torch.norm(ball_pos_w - goal_pos, dim=-1, keepdim=True)
-    return dist
+    return torch.norm(ball_pos_w - _goal_positions_w(env), dim=-1)
 
 
 def goal_scored(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Binary indicator: ball reached goal (within goal volume).
-
-    The goal is a box at (+x, y=±1m, z=0.45±0.45m).
-    Simplified: score if ball is within goal volume (x>FIELD_L/2-0.1, |y|<GOAL_W/2, 0<z<GOAL_H).
-
-    Returns:
-        torch.Tensor: (num_envs,) binary score indicator as bool.
-    """
+    """Binary indicator: ball reached its environment's goal volume."""
     ball_pos_w = env.scene["ball"].data.root_pos_w.torch
-    goal_x_threshold = FIELD_L / 2 - 0.1  # 0.1m margin for goal line
-
-    scored = (
-        (ball_pos_w[:, 0] > goal_x_threshold) &  # past goal line
-        (torch.abs(ball_pos_w[:, 1]) < GOAL_W / 2) &  # within goal width
-        (ball_pos_w[:, 2] > 0.0) &  # above ground
-        (ball_pos_w[:, 2] < GOAL_H)  # below crossbar
+    goal_pos_w = _goal_positions_w(env)
+    rel = ball_pos_w - goal_pos_w
+    return (
+        (rel[:, 0] > -0.1)
+        & (rel[:, 0] < 0.2)
+        & (rel[:, 1].abs() < GOAL_W / 2)
+        & (rel[:, 2].abs() < GOAL_H / 2)
     )
-
-    return scored
 
 
 def ball_to_goal_progress(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Normalized progress toward goal (distance decrease).
+    """Fraction of this reset's initial ball-to-goal distance closed."""
+    state = _progress_state(env)
+    current_dist = goal_distance(env)
+    uninitialised = state.initial_goal_dist < 1e-6
+    state.initial_goal_dist[uninitialised] = current_dist[uninitialised]
+    initial_dist = state.initial_goal_dist.clamp_min(1e-6)
+    return ((initial_dist - current_dist) / initial_dist).clamp(0.0, 1.0)
 
-    Reward for reducing ball-to-goal distance. Measured as fraction of initial
-    distance closed (capped at 1.0 for overshooting).
 
-    Returns:
-        torch.Tensor: (num_envs, 1) progress in range [0, 1].
-    """
+def approach_ball(env: ManagerBasedRLEnv, min_dist: float = 0.5) -> torch.Tensor:
+    """Reward closing the initial robot-to-ball distance while still far away."""
+    state = _progress_state(env)
     ball_pos_w = env.scene["ball"].data.root_pos_w.torch
-    goal_pos = GOAL_POS.to(ball_pos_w.device)
+    robot_pos_w = env.scene["robot"].data.root_pos_w.torch
+    current_dist = torch.norm(ball_pos_w[:, :2] - robot_pos_w[:, :2], dim=-1)
+    uninitialised = state.initial_robot_ball_dist < 1e-6
+    state.initial_robot_ball_dist[uninitialised] = current_dist[uninitialised]
+    initial_dist = state.initial_robot_ball_dist.clamp_min(1e-6)
+    progress = ((initial_dist - current_dist) / initial_dist).clamp(0.0, 1.0)
+    return progress * (current_dist > min_dist).float()
 
-    # Current distance to goal
-    current_dist = torch.norm(ball_pos_w - goal_pos, dim=-1)  # (num_envs,)
 
-    # Initial distance (ball spawn at origin, goal at +x)
-    init_ball_pos = torch.zeros_like(ball_pos_w)
-    init_ball_pos[:, 2] = BALL_RADIUS  # z
-    init_dist = torch.norm(init_ball_pos - goal_pos, dim=-1)  # (num_envs,)
+def kick_toward_goal(env: ManagerBasedRLEnv, speed_scale: float = 0.5) -> torch.Tensor:
+    """Exponential reward for ball velocity directed toward the goal."""
+    ball = env.scene["ball"]
+    velocity = ball.data.root_lin_vel_w.torch
+    speed = torch.norm(velocity, dim=-1)
+    goal_axis = _goal_positions_w(env) - ball.data.root_pos_w.torch
+    goal_axis = goal_axis / goal_axis.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    along_goal = (velocity * goal_axis).sum(dim=-1)
+    quality = torch.exp((along_goal / speed_scale).clamp(0.0, 2.0))
+    return quality * (speed > 0.05).float()
 
-    # Progress: (init_dist - current_dist) / init_dist, clamped to [0, 1]
-    progress = torch.clamp((init_dist - current_dist) / (init_dist + 1e-6), 0.0, 1.0)
 
-    return progress
+def align_stance(env: ManagerBasedRLEnv, max_dist: float = 0.75) -> torch.Tensor:
+    """Reward lining the robot up behind the ball relative to the goal."""
+    ball_pos_w = env.scene["ball"].data.root_pos_w.torch
+    robot_pos_w = env.scene["robot"].data.root_pos_w.torch
+    robot_to_ball = ball_pos_w[:, :2] - robot_pos_w[:, :2]
+    ball_to_goal = _goal_positions_w(env)[:, :2] - ball_pos_w[:, :2]
+    robot_to_ball = robot_to_ball / robot_to_ball.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    ball_to_goal = ball_to_goal / ball_to_goal.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    cosine = (robot_to_ball * ball_to_goal).sum(dim=-1).clamp(-1.0, 1.0)
+    distance = torch.norm(ball_pos_w[:, :2] - robot_pos_w[:, :2], dim=-1)
+    return 0.5 * (cosine + 1.0) * (distance < max_dist).float()
 
 
 # ============================================================================
@@ -222,6 +257,15 @@ def _set_ball_pos(env: ManagerBasedRLEnv, env_ids: torch.Tensor, ball_pos_w: tor
     # (root_state layout: pos xyz, quat xyzw | lin vel, ang vel)
     ball.write_root_pose_to_sim_index(root_pose=root_state[:, :7], env_ids=env_ids)
     ball.write_root_velocity_to_sim_index(root_velocity=root_state[:, 7:], env_ids=env_ids)
+
+
+def _reset_progress(env: ManagerBasedRLEnv, env_ids: torch.Tensor, ball_pos: torch.Tensor) -> None:
+    """Record reset distances before rewards can observe the new ball pose."""
+    state = _progress_state(env)
+    robot_local_xy = torch.tensor(env.scene["robot"].cfg.init_state.pos[:2], device=env.device)
+    robot_pos_w = env.scene.env_origins[env_ids, :2] + robot_local_xy
+    state.initial_goal_dist[env_ids] = torch.norm(ball_pos - GOAL_POS.to(env.device), dim=-1)
+    state.initial_robot_ball_dist[env_ids] = torch.norm(ball_pos[:, :2] - robot_pos_w[:, :2], dim=-1)
 
 
 def reset_ball_omnireset(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
@@ -261,6 +305,7 @@ def reset_ball_omnireset(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
         ball_pos[mask_walk, 1] = y
 
     _set_ball_pos(env, env_ids, ball_pos)
+    _reset_progress(env, env_ids, ball_pos)
 
 
 # ============================================================================
