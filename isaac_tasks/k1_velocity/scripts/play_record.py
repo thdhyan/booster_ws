@@ -101,6 +101,39 @@ def _load_fonts():
         return f, f
 
 
+def _set_recording_camera(base_env, robot, eye_offset, lookat_offset) -> None:
+    """Aim the RGB recorder at env 0, including while the robot moves.
+
+    ``ManagerBasedRLEnv`` creates the RGB recorder before the first reset.  Its
+    camera is initialized from absolute coordinates, so an env-relative viewer
+    setting alone is not enough for terrain envs whose origin is far from zero.
+    Update both the capture config (first frame) and the Kit viewport (later
+    frames); this keeps the P1 stand clips and P2 walking clips centered.
+    """
+    try:
+        from isaacsim.core.rendering_manager import ViewportManager
+    except (ImportError, ModuleNotFoundError):
+        return
+    if eye_offset is None or lookat_offset is None:
+        return
+    root = robot.data.root_pos_w.torch[0].detach().cpu().numpy()
+    eye = tuple(float(v) for v in (root + np.asarray(eye_offset, dtype=np.float64)))
+    target = tuple(float(v) for v in (root + np.asarray(lookat_offset, dtype=np.float64)))
+    recorder = getattr(base_env, "video_recorder", None)
+    capture = getattr(recorder, "_capture", None)
+    if capture is not None and getattr(capture, "cfg", None) is not None:
+        capture.cfg.eye = eye
+        capture.cfg.lookat = target
+    try:
+        camera_path = "/OmniverseKit_Persp"
+        if capture is not None and getattr(capture, "cfg", None) is not None:
+            camera_path = capture.cfg.camera_prim_path
+        ViewportManager.set_camera_view(camera_path, eye=list(eye), target=list(target))
+    except (AttributeError, RuntimeError, TypeError):
+        # The recorder will report a hard failure itself if no camera exists.
+        pass
+
+
 class Hud:
     """Draws commands / obs / actions / reward over a rendered frame."""
 
@@ -193,14 +226,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device else env_cfg.sim.device
 
-    # -- camera: explicit viewer + Kit visualizer pose (env-relative on EA,
-    #    world-origin framing on the isaac-lab image; env 0 sits at the origin)
+    # -- camera: explicit viewer + Kit visualizer pose ----------------------
+    # The image build's viewer controller can follow an asset root.  This is
+    # required for rough-terrain recordings: env 0 is often at (5, -55, ...),
+    # not the world origin, so a world-framed camera otherwise records empty
+    # terrain.  Keep the fallback for older viewer configs.
     eye = _parse_vec3(args_cli.eye)
     lookat = _parse_vec3(args_cli.lookat)
-    if eye is not None:
-        env_cfg.viewer.eye = eye
-    if lookat is not None:
-        env_cfg.viewer.lookat = lookat
+    viewer = getattr(env_cfg, "viewer", None)
+    if viewer is not None:
+        if eye is not None:
+            viewer.eye = eye
+        if lookat is not None:
+            viewer.lookat = lookat
+        if hasattr(viewer, "origin_type"):
+            if hasattr(viewer, "asset_name"):
+                viewer.origin_type = "asset_root"
+                viewer.asset_name = "robot"
+            else:
+                viewer.origin_type = "env"
+        if hasattr(viewer, "env_index"):
+            viewer.env_index = 0
     vkw = dict(headless=True, focal_length=args_cli.focal,
                window_width=args_cli.width, window_height=args_cli.height)
     if eye is not None:
@@ -209,11 +255,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         vkw["lookat"] = lookat
     params = inspect.signature(KitVisualizerCfg).parameters
     vkw = {k: v for k, v in vkw.items() if k in params}
-    # EA-only fields: env-relative framing so a moving robot stays centered.
-    if "origin_type" in params:
-        vkw["origin_type"] = "env"
-    if "origin_env_index" in params:
-        vkw["origin_env_index"] = 0
     env_cfg.sim.visualizer_cfgs = [KitVisualizerCfg(**vkw)]
 
     # -- optional command pin (circle path keeps the robot in frame) -------
@@ -229,6 +270,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     # -- env + rgb render --------------------------------------------------
     gym_env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
+    base_env = gym_env.unwrapped
+    robot = base_env.scene["robot"]
     env = RslRlVecEnvWrapper(gym_env)
 
     # -- runner: PPO vs distillation (mirrors play.py / play_student.py) ---
@@ -281,8 +324,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         writer = imageio.get_writer(args_cli.video_out, fps=fps)
         print(f"[INFO] recording -> {args_cli.video_out} ({fps} fps)")
 
-    trace = {k: [] for k in ("actions", "rewards", "dones")}
+    trace = {k: [] for k in ("actions", "rewards", "dones", "root_pos", "root_lin_vel")}
     obs, _extras = env.reset()
+    eye_offset = eye if eye is not None else tuple(env_cfg.viewer.eye)
+    lookat_offset = lookat if lookat is not None else tuple(env_cfg.viewer.lookat)
+    _set_recording_camera(base_env, robot, eye_offset, lookat_offset)
     # obs is a TensorDict (RslRlVecEnvWrapper.reset/step): plain `for k in obs`
     # falls back to the SEQUENCE protocol (obs[0], obs[1]... = batch slices) and
     # never yields the group keys — iterate .keys() explicitly (plain dicts
@@ -303,6 +349,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             ep_reward[dones.bool()] = 0.0
 
             # ---- capture + overlay ------------------------------------
+            _set_recording_camera(base_env, robot, eye_offset, lookat_offset)
             frame = gym_env.render()
             if frame is None:
                 sys.exit("[ERROR] env.render() returned None — rgb_array "
@@ -319,6 +366,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             trace["actions"].append(actions.cpu().numpy())
             trace["rewards"].append(rew.cpu().numpy())
             trace["dones"].append(dones.cpu().numpy())
+            trace["root_pos"].append(robot.data.root_pos_w.torch[:, :3].cpu().numpy())
+            trace["root_lin_vel"].append(robot.data.root_lin_vel_w.torch[:, :3].cpu().numpy())
             for k, v in obs.items():
                 trace.setdefault(f"obs_{k}", []).append(v.cpu().numpy())
 
@@ -334,7 +383,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         os.makedirs(os.path.dirname(os.path.abspath(args_cli.trace_out)),
                     exist_ok=True)
         # skip empty lists (junk keys from the TensorDict reset-iteration era)
-        out = {k: np.stack(v).astype(np.float16) for k, v in trace.items() if v}
+        # Keep traces in float32: actions/observations can exceed float16 range
+        # and previously overflowed to inf during gait validation.
+        out = {k: np.stack(v).astype(np.float32) for k, v in trace.items() if v}
         np.savez_compressed(args_cli.trace_out, **out)
         print(f"[INFO] trace saved -> {args_cli.trace_out}")
 
