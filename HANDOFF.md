@@ -158,10 +158,20 @@ centroid + progress; teacher-group obs (fully observable by design).
   step-0 obs canonical (`gravity [0,0,−1]`, rest 0) but policy output
   ±5–15 → leg targets ±1.25 rad. Static wiring (joint lists, obs order, vmdp
   imports, sim dt/decimation, cmd ranges) verified identical partial↔push.
-  Leading suspect: **export-path semantics** (`play_record.py`
-  `policy.as_jit()` vs runner `policy()` — normalizer?). Next offline check:
-  run the exported `.pt` on a canonical 68-dim standing obs and diff vs
-  `as_jit()` from the runner checkpoint (`~/Projects/IsaacLab-ea/.venv/bin/python`).
+  **Export EXONERATED (offline parity, 2026-09-24):**
+  `scripts/push_export_parity.py` — shipped `models/k1_partialctrl_base.pt`
+  == Run-10 eager runner actor == fresh `as_jit()`, max|diff| **0.0**
+  (bit-exact) on both canonical (exact P6 reset) obs AND partial-style
+  jittered obs. `obs_normalization=False` — no normalizer to drift. The
+  ±5–6 raw action scale is the policy's NORMAL output everywhere (Run-11
+  actor too) — it walks in the partial env with those outputs. So the fall
+  is an **env-side difference** (dynamics/actuation/obs beyond step 0 —
+  e.g. exact-default arm pose the partial curriculum never visits, or
+  ground friction), NOT an export bug. Next: in-env A/B on a free GPU box
+  (NOT concurrent with spark04 training): run the shipped .pt in
+  `Isaac-Velocity-PartialCtrl-K1-Play-v0` — if it walks there, diff the
+  two envs' actuation/reset; if it falls there too, diff the play-path vs
+  frozen-path obs feeds step-by-step.
 - **Velocity gait-v2 review (2026-09-24) — APPROVED + committed:** the
   velocity cfg was reworked (H1/G1-style gait shaping + direct Cartesian
   commands; see README P2 tables). Verified on the training image via the new
@@ -187,9 +197,8 @@ centroid + progress; teacher-group obs (fully observable by design).
    re-export with `scripts/export_base_policy.sh` → run `scripts/diag_frozen.sh`
    (expect diag B done_rate → ~0.001) → relaunch reach:
    `ssh aim_spark04 '~/Projects/booster_ws/scripts/spark_push_host.sh reach'`.
-2. Offline (anytime, CPU): export-parity test of the CURRENT
-   `models/k1_partialctrl_base.pt` vs `as_jit()` from `run10_final.pt` — if
-   parity holds, the bug is env-side; if not, fix the export path itself.
+2. In-env A/B hunt for the fall (export is proven faithful — see parity note
+   above). Needs a free GPU box; never concurrent with spark04 training.
 3. Never run eval/record GPU containers concurrently with training on spark04
    (wedged Run-10's CUDA context). Monitor: `tmux ls` /
    `tail scripts/push_base.full.log` on spark04.
