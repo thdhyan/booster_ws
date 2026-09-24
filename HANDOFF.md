@@ -35,7 +35,14 @@ the student will consume P3 + the vision estimator).
   the verifying run; a fresh smoke + a zero-agent 3-step check are **running now**
   on spark02 (`k1_p3smoke`, `k1_soccerzero`).
 - P4 teacher smoke: not run yet — queue it right after P3 goes green.
-- **Not yet training.** Full runs: 512×2000 (P3), 512×3000 (P4T).
+- **Zero-agent step check PASSED** for P3 (`ZERO_STEP_RESULT=OK`: 3 full
+  steps, obs `(4,12)`, rewards compute, no terminations — detector via the
+  geometric fallback in that container since zero_step.sh does not install
+  ultralytics; the smoke is the real-detector check).
+- **Not yet training.** Full runs: 512×2000 (P3), 512×3000 (P4T). The P3
+  smoke + a Run-11 relaunch (its first attempt died on the now-fixed duplicate
+  `--checkpoint` argparse clash) are in flight on spark02; check
+  `scripts/p3smoke.log` / `scripts/hp.full.log` before launching full runs.
 
 **Agent A — next steps (in order):**
 1. `ssh aim_spark02 'grep -E "ZERO_STEP_DONE|P3_SMOKE_RC|reward .* returned" ~/Projects/booster_ws/scripts/{soccerzero,p3smoke}.log | tail -5'`
@@ -79,12 +86,22 @@ centroid + progress; teacher-group obs (fully observable by design).
 **Status (2026-09-24 13:20 UTC):**
 - Env cfg fully instantiates (validated by configclass; complete cfg dump in
   `scripts/pushsmoke.log` history). Gate green. **No completed sim step yet** —
-  three first-step blockers fixed in sequence: `body_name` field, 1-D reward
-  shapes, event signature `(env, env_ids, scale_range, mass_range)`. A smoke
-  (`k1_pushsmoke`, spark04) and a zero-agent 3-step check (`k1_pushzero`,
-  spark04) are **running now**.
-- Residual risk if it still fails: the frozen-base action term (TorchScript call
-  + joint-target writer name) or the two IK terms at step 0.
+  the zero-agent checker (`scripts/zero_step.sh Isaac-Push-K1-v0`, log
+  `scripts/pushzero.log`, ~4 min/run) has been walking the constructor and has
+  now cleared, in order: `body_name` field · 1-D reward shapes · event
+  signature `(env, env_ids, scale_range, mass_range)` · `class_type` at
+  decoration · `WristTargetCommand` needs **both** `_resample_command` and
+  `_update_command` · frozen-base ActionTerm needs `raw_actions` /
+  `processed_actions` properties · **`find_joints` returns python lists in this
+  build** (tensorize before `torch.cat` — the last fix, deployed 14:49 UTC,
+  zero-step rerunning). Each round is one surgical fix + one rerun; the next
+  suspects after this are the joint-target writer name in
+  `FrozenBaseVelocityAction.process_actions` (`set_joint_position_target` vs an
+  `_index` variant) and the two IK terms at step 0.
+- Loop recipe: patch → `rsync …/tasks/push/ aim_spark04:…/tasks/push/` (with
+  `--no-owner --no-group --no-perms --exclude='__pycache__'`) → relaunch
+  `k1_pushzero` → `grep -E "\[zero\]|ZERO_STEP_DONE|Error" scripts/pushzero.log`.
+  The full smoke (`k1_pushsmoke`) is only worth running once the zero-step says OK.
 
 **Agent B — next steps (in order):**
 1. `ssh aim_spark04 'grep -E "ZERO_STEP_DONE|step 0|\[push\]|frozen base|Error|Traceback" ~/Projects/booster_ws/scripts/pushzero.log | tail -8'`
