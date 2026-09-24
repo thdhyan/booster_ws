@@ -39,10 +39,11 @@ the student will consume P3 + the vision estimator).
   steps, obs `(4,12)`, rewards compute, no terminations — detector via the
   geometric fallback in that container since zero_step.sh does not install
   ultralytics; the smoke is the real-detector check).
-- **Not yet training.** Full runs: 512×2000 (P3), 512×3000 (P4T). The P3
-  smoke + a Run-11 relaunch (its first attempt died on the now-fixed duplicate
-  `--checkpoint` argparse clash) are in flight on spark02; check
-  `scripts/p3smoke.log` / `scripts/hp.full.log` before launching full runs.
+- **Run-11 (partial + arm-delta, 512×3000) is TRAINING on spark02** — its
+  smoke passed (`HP_SMOKE_RC=0`, tmux `k1_spark_hp`, log `hp.full.log`).
+- The P3 smoke is still running (16 envs, cameras + ultralytics, sharing the
+  GPU with Run-11). On `P3_SMOKE_RC` success: `bash scripts/spark_soccer_host.sh p3`
+  (smoke-gated → 512×2000), then `… p4t` for the P4 teacher (512×3000).
 
 **Agent A — next steps (in order):**
 1. `ssh aim_spark02 'grep -E "ZERO_STEP_DONE|P3_SMOKE_RC|reward .* returned" ~/Projects/booster_ws/scripts/{soccerzero,p3smoke}.log | tail -5'`
@@ -93,11 +94,25 @@ centroid + progress; teacher-group obs (fully observable by design).
   decoration · `WristTargetCommand` needs **both** `_resample_command` and
   `_update_command` · frozen-base ActionTerm needs `raw_actions` /
   `processed_actions` properties · **`find_joints` returns python lists in this
-  build** (tensorize before `torch.cat` — the last fix, deployed 14:49 UTC,
-  zero-step rerunning). Each round is one surgical fix + one rerun; the next
-  suspects after this are the joint-target writer name in
-  `FrozenBaseVelocityAction.process_actions` (`set_joint_position_target` vs an
-  `_index` variant) and the two IK terms at step 0.
+  build** (tensorize before `torch.cat`).
+- **Latest zero-step (14:49 UTC): `[push] frozen base loaded:
+  models/k1_partialctrl_base.pt` — the hierarchy is alive inside the env; the
+  TorchScript forward then fails with `size of tensor a (4) must match tensor b
+  (32) at dim 0` → the exported module is **batch-locked** (exported via
+  play_record `--num_envs 2`, something baked at 32). **Next step for agent B
+  (self-contained repro, no Isaac needed):**
+  ```python
+  m = torch.jit.load("models/k1_partialctrl_base.pt")
+  for n in (1, 2, 4, 8, 16, 64):
+      try: m(torch.zeros(n, 68)); print(n, "ok")
+      except Exception as e: print(n, "FAIL", e)
+  ```
+  If batch-locked, re-export batch-agnostically (torch.jit.trace on batch 1, or
+  a thin wrapper whose forward reshapes to the incoming batch), then
+  `scripts/export_base_policy.sh` on spark02 and copy the .pt to spark04.
+  After that the remaining suspects are the joint-target writer name in
+  `FrozenBaseVelocityAction.process_actions` and the two IK terms at step 0.
+- Each round is one surgical fix + one zero-step rerun (~4 min).
 - Loop recipe: patch → `rsync …/tasks/push/ aim_spark04:…/tasks/push/` (with
   `--no-owner --no-group --no-perms --exclude='__pycache__'`) → relaunch
   `k1_pushzero` → `grep -E "\[zero\]|ZERO_STEP_DONE|Error" scripts/pushzero.log`.
