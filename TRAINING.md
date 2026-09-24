@@ -375,6 +375,22 @@ will consume P3 detections + the vision estimator) is unaffected.
 - Compose runtime: `src/k1_sim_isaac/scripts/k1_soccer_compose.py` (12-dim head
   obs + CCW search state machine).
 
+### Interim Track A recordings (2026-09-24)
+
+Recorded from the current server checkpoints with `play_record.py` (4 envs,
+750 steps / 15 s, HUD + trace):
+
+| video | checkpoint | Drive file |
+|---|---|---|
+| `track_a_p3_head_track_interim.mp4` | P3 `model_200.pt` | [open](https://drive.google.com/file/d/1HQCztYaw4s8aR37Vf2VvCJ6xP_n8ycYa/view) |
+| `track_a_p4_teacher_smoke.mp4` | P4 teacher smoke `model_2.pt` | [open](https://drive.google.com/file/d/1BBivuueov76p1uOrmjpVNd2cvCHvVEmb/view) |
+
+Both files are in the reader-shared [Track A Interim folder](https://drive.google.com/drive/folders/1BWLirPTpn_lPEaMHwCUkAEiCAD9uA6ge).
+The [slide deck](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit)
+has labeled poster-preview slides and the shared-folder link. Direct Drive
+`createVideo` embedding was rejected by the Slides connector; final recordings
+should replace these interim previews when P3/P4 finish.
+
 ## Drive video sync from training servers (2026-09-24)
 
 Training videos (`logs/rsl_rl/<exp>/<run>/videos/*.mp4` from the `--video`

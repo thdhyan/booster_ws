@@ -52,6 +52,12 @@ the student will consume P3 + the vision estimator).
 - Server-side tmux `k1_soccer_chain` waits for P3's explicit
   `SOC_FULL_MARKER=OK`, then runs `spark_soccer_host.sh p4t` (fresh smoke-gated
   512×3000 full). It aborts P4 if P3 lacks the final marker.
+- Interim recordings are complete: P3 `model_200` (15 s, real YOLO) and P4
+  teacher smoke `model_2` (15 s) are in the shared
+  [Track A Interim Drive folder](https://drive.google.com/drive/folders/1BWLirPTpn_lPEaMHwCUkAEiCAD9uA6ge).
+  The deck has clean poster-preview slides plus the folder link; the Slides
+  connector rejected direct Drive `createVideo` embedding, so the MP4s remain
+  the playable source in Drive.
 - Run-11 remains independently training on spark02 in tmux `k1_spark_hp`.
 
 **Agent A — next steps (in order):**
