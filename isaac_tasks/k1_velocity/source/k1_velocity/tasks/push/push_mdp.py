@@ -453,15 +453,27 @@ class FrozenBaseVelocityAction(ActionTerm):
         self._default14 = self._asset.data.default_joint_pos[:, self._ids14].clone()
         self._last = torch.zeros((env.num_envs, 14), device=self._asset.device)
         self._vel = torch.zeros((env.num_envs, 3), device=self._asset.device)
+        self._raw_actions = torch.zeros((env.num_envs, 3), device=self._asset.device)
+        self._processed_actions = torch.zeros((env.num_envs, 3), device=self._asset.device)
         print(f"[push] frozen base loaded: {cfg.base_policy_path}")
 
     @property
     def action_dim(self) -> int:
         return 3
 
+    @property
+    def processed_actions(self) -> torch.Tensor:
+        return self._processed_actions
+
+    @property
+    def raw_actions(self) -> torch.Tensor:
+        return self._raw_actions
+
     def process_actions(self, actions: torch.Tensor) -> None:
         st = _state(self._env)
+        self._raw_actions[:] = actions
         vel = actions[:, :3].clamp(-0.8, 0.8)
+        self._processed_actions[:] = vel
         self._vel = vel
         st.last_vel_cmd = vel
         robot = self._asset
