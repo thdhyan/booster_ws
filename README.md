@@ -86,6 +86,22 @@ Mirrored to Google Drive (anyone-with-link playback):
 
 ## Quick start
 
+### Unified Policy Validation (NEW — all backends)
+```bash
+# Gazebo (CPU, default)
+ros2 launch k1_bringup sim_validate.launch.py backend:=gazebo policy:=models/k1_velocity_policy.pt
+
+# Isaac Sim (GPU, photorealistic)
+ros2 launch k1_bringup sim_validate.launch.py backend:=isaac policy:=models/k1_velocity_policy.pt usd_path:=/path/to/k1.usd
+
+# MuJoCo (CPU, fastest iteration)
+ros2 launch k1_bringup sim_validate.launch.py backend:=mujoco policy:=models/k1_velocity_policy.pt
+
+# Multi-robot fleet validation
+ros2 launch k1_bringup sim_validate.launch.py backend:=gazebo n_robots:=3 teleop:=true
+```
+See `src/k1_bringup/README.md#simulation-validation` for full checklist.
+
 ### Gazebo Harmonic fleet (CPU)
 ```bash
 source /opt/ros/jazzy/setup.bash && source install/setup.bash
@@ -111,6 +127,15 @@ python3 src/k1_sim_gazebo/scripts/mujoco_robocup_demo.py --capture   # saves doc
 Isaac fleet uses the **isaacsim-bundled jazzy rclpy** (env re-exec) — never
 source `/opt/ros` into that process; system nodes talk to it over DDS
 (`ROS_DOMAIN_ID=77`).
+
+### Real Robot Hardware
+```bash
+ros2 launch k1_bringup real.launch.py robot_ns:=k1_0 sdk_ip:=192.168.1.100
+```
+
+**WARNING**: Ensure robot is powered and in a safe area.
+
+**Full deployment guide**: [`guide_real.md`](guide_real.md) — network setup, policy selection, safety checklist, troubleshooting.
 
 ## Training
 
@@ -151,6 +176,7 @@ saves snapshots. See `docs/robocup_gmr_research.md` for the Booster
 
 ## Docs
 
+- `guide_real.md` — **real robot deployment guide** (network, policies, safety, troubleshooting)
 - `HANDOFF.md` — environment setup, current state, next steps
 - `docs/robocup_gmr_research.md` — RoboCup sim research + GMR (video→motion)
   pipeline integration plan
