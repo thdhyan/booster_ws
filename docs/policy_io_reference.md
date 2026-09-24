@@ -20,6 +20,56 @@ This document shows the exact input/output tensor shapes and data flow for each 
 
 ---
 
+## Why P1/P2 Only Control 12 Leg DoFs (Not Full 22 DoF)
+
+This is a deliberate design choice in the RL training pipeline:
+
+### 1. Sim-to-Real Gap on Arms
+- Arms have low torque, high gear ratios, no force sensing — not designed for dynamic balance
+- Real arms ≠ Sim arms: friction, backlash, cable routing, motor saturation differ significantly
+- If policy learns to use arms for balance in sim, it **fails on hardware**
+
+### 2. Credit Assignment & Sample Efficiency
+```
+22 DoF action space → massive exploration space, 10× more samples to converge
+12 DoF (legs) → focused learning on what actually matters for locomotion
+```
+- P1/P2 already take 5000+ iterations; 22 DoF could need 50k+
+
+### 3. Legs Are the Balance Actuators
+- Ankle/hip strategies provide balance; arms are for manipulation
+- Arm-assisted balance in sim often exploits sim artifacts (perfect torque, no latency)
+
+### 4. Separation of Concerns — WBC Architecture
+```
+┌─────────────────────────────────────────────────────────────┐
+│  LOCOMOTION POLICY (12 DoF)                                 │
+│  "Where do I put my feet to track vx, vy, wz?"             │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ q_des[12 legs]
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  WHOLE-BODY CONTROLLER (WBC) — 22 DoF                       │
+│  - Tracks leg q_des exactly                                │
+│  - Regulates arms/head to default (or task pose)           │
+│  - Handles contact forces, friction cones, torque limits   │
+│  - Runs at 1-2 kHz (vs policy at 50 Hz)                    │
+└─────────────────────────────────────────────────────────────┘
+```
+- WBC is the right layer for full-body coordination — it's a **QP with exact dynamics**, not a neural net
+
+### 5. Partial Control (14 DoF) Exists for a Reason
+- Adds head (2 DoF) for gaze stabilization in visual tasks
+- Arms still NOT controlled — randomized + PD-held so policy learns robustness
+- Stepping stone toward manipulation-while-walking, not final form
+
+### When Would You Want Arms in Policy?
+Only for manipulation-locomotion tasks (carry, push, open door) where arms **must** coordinate with legs. Even then: hierarchical (locomotion 12 DoF + manipulation arm DoF + WBC merger), not flat 22-DoF PPO.
+
+**Evidence**: H1/G1/Unitree/Atlas all use 12-leg DoF locomotion policies + separate upper-body control.
+
+---
+
 ## Policy Inventory
 
 | Policy File | Task Family | Gym ID (Deployable) | Obs Dim | Act Dim | Input Mode |
