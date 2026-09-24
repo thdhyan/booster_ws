@@ -261,8 +261,8 @@ class WristTargetCommand(CommandTerm):
     def set_values(self, env_ids: torch.Tensor, pos6: torch.Tensor) -> None:
         self._pos[env_ids] = pos6
 
-    def _resample_command(self, env_ids) -> None:
-        pass  # reset event fills it (box-dependent)
+    def _update_command(self, env_ids) -> None:
+        pass  # reset event fills the buffer (box-dependent); never auto-resample
 
     def _update_metrics(self) -> None:
         pass
