@@ -34,7 +34,16 @@ import k1_velocity.tasks  # noqa: F401 — registers velocity/basic/kick/head/pu
 
 
 def main() -> int:
-    env = gym.make(args.task, num_envs=args.num_envs)
+    # instantiate the env cfg from the gym spec (hydra does this in train.py)
+    import importlib
+
+    spec = gym.spec(args.task)
+    mod_name, cls_name = spec.kwargs["env_cfg_entry_point"].split(":")
+    cfg_cls = getattr(importlib.import_module(mod_name), cls_name)
+    env_cfg = cfg_cls()
+    env_cfg.scene.num_envs = args.num_envs
+    env_cfg.seed = args.seed
+    env = gym.make(args.task, cfg=env_cfg)
     obs, _ = env.reset(seed=args.seed)
     base = env.unwrapped
     action_dim = base.action_manager.total_action_dim
