@@ -444,11 +444,17 @@ class FrozenBaseVelocityAction(ActionTerm):
         self._asset = env.scene[cfg.asset_name]
         self._policy = torch.jit.load(cfg.base_policy_path, map_location=self._asset.device)
         self._policy.eval()
-        self._leg_ids, _ = self._asset.find_joints(K1_LEG_JOINTS, preserve_order=True)
-        self._head_ids, _ = self._asset.find_joints(K1_HEAD_JOINTS, preserve_order=True)
+        dev = self._asset.device
+        # find_joints returns python lists in this Isaac Lab build -> tensors here
+        leg_ids, _ = self._asset.find_joints(K1_LEG_JOINTS, preserve_order=True)
+        head_ids, _ = self._asset.find_joints(K1_HEAD_JOINTS, preserve_order=True)
+        arm_l_ids, _ = self._asset.find_joints(K1_LEFT_ARM_JOINTS, preserve_order=True)
+        arm_r_ids, _ = self._asset.find_joints(K1_RIGHT_ARM_JOINTS, preserve_order=True)
+        self._leg_ids = torch.as_tensor(leg_ids, dtype=torch.long, device=dev)
+        self._head_ids = torch.as_tensor(head_ids, dtype=torch.long, device=dev)
+        self._arm_l_ids = torch.as_tensor(arm_l_ids, dtype=torch.long, device=dev)
+        self._arm_r_ids = torch.as_tensor(arm_r_ids, dtype=torch.long, device=dev)
         self._ids14 = torch.cat([self._leg_ids, self._head_ids], dim=0)
-        self._arm_l_ids, _ = self._asset.find_joints(K1_LEFT_ARM_JOINTS, preserve_order=True)
-        self._arm_r_ids, _ = self._asset.find_joints(K1_RIGHT_ARM_JOINTS, preserve_order=True)
         self._arm_ids = torch.cat([self._arm_l_ids, self._arm_r_ids], dim=0)
         self._default14 = self._asset.data.default_joint_pos[:, self._ids14].clone()
         self._last = torch.zeros((env.num_envs, 14), device=self._asset.device)
