@@ -186,8 +186,9 @@ def ball_detection(env: ManagerBasedRLEnv) -> torch.Tensor:
 # rewards
 # ---------------------------------------------------------------------------
 def _shape_guard(name, v, env):
-    if v.shape != (env.num_envs, 1):
-        raise ValueError(f"[head] reward '{name}' returned {tuple(v.shape)}, expected {(env.num_envs, 1)}")
+    """Reward terms must return 1-D (N,) — the reward buffer is 1-D."""
+    if v.shape != (env.num_envs,):
+        raise ValueError(f"[head] reward '{name}' returned {tuple(v.shape)}, expected {(env.num_envs,)}")
     return v
 
 
@@ -195,13 +196,13 @@ def ball_centered(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Tensor:
     """Primary: exp kernel on the *detection* offset (du, dv). No GT."""
     st = _state(env)
     du, dv = st.yolo[:, 1], st.yolo[:, 2]
-    return _shape_guard("ball_centered", torch.exp(-(du * du + dv * dv) / (std * std)).unsqueeze(-1), env)
+    return _shape_guard("ball_centered", torch.exp(-(du * du + dv * dv) / (std * std)), env)
 
 
 def ball_in_frame(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Binary: the detector currently sees the ball."""
     st = _state(env)
-    return _shape_guard("ball_in_frame", st.yolo[:, 0:1], env)
+    return _shape_guard("ball_in_frame", st.yolo[:, 0], env)
 
 
 def track_ball_angle_exp(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Tensor:
@@ -216,11 +217,11 @@ def track_ball_angle_exp(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Ten
     pitch_err = torch.atan2(ball_rf[:, 2] - 0.55, torch.hypot(ball_rf[:, 0], ball_rf[:, 1])) - pitch_q
     yaw_err = torch.atan2(torch.sin(yaw_err), torch.cos(yaw_err))
     pitch_err = torch.atan2(torch.sin(pitch_err), torch.cos(pitch_err))
-    return _shape_guard("track_ball_angle", torch.exp(-(yaw_err * yaw_err + pitch_err * pitch_err) / (std * std)).unsqueeze(-1), env)
+    return _shape_guard("track_ball_angle", torch.exp(-(yaw_err * yaw_err + pitch_err * pitch_err) / (std * std)), env)
 
 
 def time_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
-    return torch.ones((env.num_envs, 1), device=env.device)
+    return torch.ones((env.num_envs,), device=env.device)
 
 
 def guarded_action_rate_l2(env):

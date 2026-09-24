@@ -91,7 +91,7 @@ def _state(env: ManagerBasedRLEnv) -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 # USD-time DR: per-env size + mass (read back after the built-ins write them)
 # ---------------------------------------------------------------------------
-def randomize_box_geometry(env: ManagerBasedRLEnv, scale_range=(0.7, 1.5),
+def randomize_box_geometry(env: ManagerBasedRLEnv, env_ids=None, scale_range=(0.7, 1.5),
                            mass_range=(3.0, 25.0)) -> None:
     """Event mode='usd': scale + mass per env, fixed for the run (PhysX parses
     USD once at startup). Values are read back per prim into push_state."""
@@ -337,14 +337,14 @@ def corner_goal_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
     """-mean_i ||corner_i - goal_corner_i||, normalized by box size."""
     st = _state(env)
     d = (box_corners_base(env) - goal_corners_base(env)).norm(dim=-1).mean(-1, keepdim=True)
-    return -d / st.half_extents.mean(-1, keepdim=True).clamp(min=0.2)
+    return (-d / st.half_extents.mean(-1, keepdim=True).clamp(min=0.2)).squeeze(-1)
 
 
 def centroid_goal_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
     """-||mean(current corners) - mean(goal corners)|| (cumulative corner sum)."""
     st = _state(env)
     d = (box_corners_base(env).mean(1) - goal_corners_base(env).mean(1)).norm(dim=-1, keepdim=True)
-    return -d / st.half_extents.mean(-1, keepdim=True).clamp(min=0.2)
+    return (-d / st.half_extents.mean(-1, keepdim=True).clamp(min=0.2)).squeeze(-1)
 
 
 def box_goal_progress(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -352,7 +352,7 @@ def box_goal_progress(env: ManagerBasedRLEnv) -> torch.Tensor:
     cur = (box_corners_base(env).mean(1) - goal_corners_base(env).mean(1)).norm(dim=-1)
     prog = (st.prev_goal_dist - cur) / st.half_extents.mean(-1).clamp(min=0.2)
     st.prev_goal_dist = cur
-    return prog.unsqueeze(-1)
+    return prog
 
 
 def box_vel_toward_goal(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -362,19 +362,19 @@ def box_vel_toward_goal(env: ManagerBasedRLEnv) -> torch.Tensor:
     robot = env.scene["robot"]
     box = env.scene["box"]
     v = quat_apply_inverse(robot.data.root_quat_w.torch, box.data.root_lin_vel_w.torch - robot.data.root_lin_vel_w.torch)
-    return (v * st.push_dir).sum(-1, keepdim=True)
+    return (v * st.push_dir).sum(-1)
 
 
 def box_spin_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
     w = env.scene["box"].data.root_ang_vel_w.torch
-    return -w[:, :2].norm(dim=-1, keepdim=True)
+    return -w[:, :2].norm(dim=-1)
 
 
 def wrist_target_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
     """-mean ||wrist_pos_base - commanded target|| (both wrists)."""
     pos_bf = wrist_positions_base(env)
     tgt = env.command_manager.get_term("wrist_target").command.reshape(-1, 2, 3)
-    return -(pos_bf - tgt).norm(dim=-1).mean(-1, keepdim=True)
+    return -(pos_bf - tgt).norm(dim=-1).mean(-1)
 
 
 def wrist_box_proximity(env: ManagerBasedRLEnv, scale: float = 0.08) -> torch.Tensor:
@@ -387,7 +387,7 @@ def wrist_box_proximity(env: ManagerBasedRLEnv, scale: float = 0.08) -> torch.Te
     wrist_local = wrist_bf[:, None, :] - center               # (n,1,3) vs (n,8,3) AABB
     clamped = torch.maximum(torch.minimum(wrist_local.expand_as(corners_bf - center), half), -half)
     gap = (wrist_local.expand_as(corners_bf - center) - clamped).norm(dim=-1).min(-1).values
-    return torch.exp(-gap.mean(-1, keepdim=True) / scale)
+    return torch.exp(-gap.mean(-1) / scale)
 
 
 def track_cmd_lin_vel_exp(env: ManagerBasedRLEnv, std: float = 0.5) -> torch.Tensor:
@@ -396,13 +396,13 @@ def track_cmd_lin_vel_exp(env: ManagerBasedRLEnv, std: float = 0.5) -> torch.Ten
     st = _state(env)
     robot = env.scene["robot"]
     v = quat_apply_inverse(robot.data.root_quat_w.torch, robot.data.root_lin_vel_w.torch)
-    return torch.exp(-((v[:, :2] - st.last_vel_cmd[:, :2]).norm(dim=-1) ** 2) / (std * std)).unsqueeze(-1)
+    return torch.exp(-((v[:, :2] - st.last_vel_cmd[:, :2]).norm(dim=-1) ** 2) / (std * std))
 
 
 def track_cmd_ang_vel_exp(env: ManagerBasedRLEnv, std: float = 0.5) -> torch.Tensor:
     st = _state(env)
     w = env.scene["robot"].data.root_ang_vel_w.torch
-    return torch.exp(-((w[:, 2] - st.last_vel_cmd[:, 2]) ** 2) / (std * std)).unsqueeze(-1)
+    return torch.exp(-((w[:, 2] - st.last_vel_cmd[:, 2]) ** 2) / (std * std))
 
 
 # ---------------------------------------------------------------------------

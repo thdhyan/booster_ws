@@ -297,11 +297,11 @@ def ball_fov_visible(env: ManagerBasedRLEnv, hfov_deg: float = 69.4) -> torch.Te
 def track_ball_head_exp(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Tensor:
     """exp(-(yaw_err^2 + pitch_err^2)/std^2) — head points at the ball (GT, reward-time)."""
     yaw, pitch = ball_head_angles(env)
-    return torch.exp(-(yaw * yaw + pitch * pitch) / (std * std)).unsqueeze(-1)
+    return torch.exp(-(yaw * yaw + pitch * pitch) / (std * std))
 
 
 def ball_in_frame(env: ManagerBasedRLEnv, min_dist: float = 0.75) -> torch.Tensor:
     """Ball inside the camera FOV while the robot is still far (>min_dist)."""
-    visible = ball_fov_visible(env).float().unsqueeze(-1)
-    dist = torch.norm(ball_pos_in_robot_frame(env), dim=-1, keepdim=True)
+    visible = ball_fov_visible(env).float()
+    dist = torch.norm(ball_pos_in_robot_frame(env), dim=-1)
     return visible * (dist > min_dist).float()
