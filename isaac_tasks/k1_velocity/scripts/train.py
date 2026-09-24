@@ -50,6 +50,8 @@ parser.add_argument("--seed", type=int, default=None)
 parser.add_argument("--max_iterations", type=int, default=None)
 parser.add_argument("--distributed", action="store_true", default=False)
 parser.add_argument("--export_io_descriptors", action="store_true", default=False)
+parser.add_argument("--checkpoint", type=str, default=None,
+                    help="resume from a .pt (e.g. logs/rsl_rl/<exp>/<run>/model_1999.pt)")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -123,6 +125,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
 
     log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    if args_cli.checkpoint:
+        ckpt = os.path.abspath(args_cli.checkpoint)
+        assert os.path.isfile(ckpt), f"checkpoint not found: {ckpt}"
+        assert os.path.basename(ckpt).startswith("model_"), f"unexpected ckpt name: {ckpt}"
+        agent_cfg.resume = True
+        agent_cfg.load_run = os.path.relpath(os.path.dirname(ckpt), log_root_path)
+        agent_cfg.load_checkpoint = os.path.splitext(os.path.basename(ckpt))[0]
+        print(f"[INFO]: RESUME from {ckpt} (run={agent_cfg.load_run}, ckpt={agent_cfg.load_checkpoint})")
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     print(f"Exact experiment name requested from command line: {log_dir}")
     if agent_cfg.run_name:

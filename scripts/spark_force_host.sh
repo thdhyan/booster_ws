@@ -10,6 +10,6 @@ REPO="$HOME/Projects/booster_ws"
 LOG="$HERE/$WHICH.f.log"
 : > "$LOG"
 mkdir -p "$HERE/k1_isaac_cache"
-tmux new-session -d -s "k1_spark_$WHICH" "docker run --rm --gpus all --user 0 --entrypoint bash -e ACCEPT_EULA=Y -e OMNI_KIT_ALLOW_ROOT=1 -e TERM=xterm -e NVIDIA_DRIVER_CAPABILITIES=all -e WHICH=$WHICH -v $HERE/spark_force_container.sh:/full.sh:ro -v $HERE/k1_isaac_cache:/root/.cache -v $REPO:/workspace/booster_ws nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1 /full.sh > $LOG 2>&1; echo DOCKER_RC=\$? >> $LOG"
+tmux new-session -d -s "k1_spark_$WHICH" "docker run --rm --gpus all --user 0 --entrypoint bash -e ACCEPT_EULA=Y -e OMNI_KIT_ALLOW_ROOT=1 -e TERM=xterm -e NVIDIA_DRIVER_CAPABILITIES=all -e WHICH=$WHICH -e RESUME_CKPT=${RESUME_CKPT:-} -v $HERE/spark_force_container.sh:/full.sh:ro -v $HERE/k1_isaac_cache:/root/.cache -v $REPO:/workspace/booster_ws nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1 /full.sh > $LOG 2>&1; echo DOCKER_RC=\$? >> $LOG"
 sleep 2
 tmux ls | grep "k1_spark_$WHICH" || echo "TMUX_SESSION_MISSING"

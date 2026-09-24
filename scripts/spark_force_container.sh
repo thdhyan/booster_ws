@@ -46,10 +46,12 @@ TS_RC=$?
 echo "F_TEACHER_SMOKE_RC=$TS_RC"
 [ "$TS_RC" -ne 0 ] && { echo "F_GATE=TEACHER_SMOKE_FAILED"; exit 10; }
 
-echo "=== F FULL teacher $T_TASK ${T_ENVS}x$T_ITERS (timeout ${T_TMO}s)"
+T_EXTRA=""
+[ -n "${RESUME_CKPT:-}" ] && T_EXTRA="--checkpoint $RESUME_CKPT" && echo "F_RESUME=$RESUME_CKPT"
+echo "=== F FULL teacher $T_TASK ${T_ENVS}x$T_ITERS (timeout ${T_TMO}s) $T_EXTRA"
 timeout "$T_TMO" "$PY" isaac_tasks/k1_velocity/scripts/train.py \
   --task "$T_TASK" --num_envs "$T_ENVS" --max_iterations "$T_ITERS" --seed 42 \
-  --headless --enable_cameras --video --video_length 1500 --video_interval 4800
+  --headless --enable_cameras --video --video_length 1500 --video_interval 4800 $T_EXTRA
 T_RC=$?
 echo "F_TEACHER_RC=$T_RC"
 

@@ -91,8 +91,7 @@ def _state(env: ManagerBasedRLEnv) -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 # USD-time DR: per-env size + mass (read back after the built-ins write them)
 # ---------------------------------------------------------------------------
-def randomize_box_geometry(env: ManagerBasedRLEnv, env_ids=None, scale_range=(0.7, 1.5),
-                           mass_range=(3.0, 25.0)) -> None:
+def randomize_box_geometry(env: ManagerBasedRLEnv, env_ids, scale_range, mass_range) -> None:
     """Event mode='usd': scale + mass per env, fixed for the run (PhysX parses
     USD once at startup). Values are read back per prim into push_state."""
     from isaaclab.envs.mdp import events as il_events

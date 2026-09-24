@@ -13,16 +13,34 @@
 
 | Box | tmux | What | Log |
 |---|---|---|---|
-| spark02 | `k1_spark_hp` | **Run-11** partial-control + arm-delta curriculum (smoke-gated, then 512×3000) — launched 03:35 UTC right after Run-10 finished | `scripts/hp.full.log` (Run-10 archived as `scripts/hp.run10.log`) |
+| spark02 | `k1_spark_hp` | **Run-11** partial-control + arm-delta curriculum (smoke-gated → 512×3000) — relaunched 13:17 UTC after the server restart | `scripts/hp.full.log` (Run-10 archived as `scripts/hp.run10.log`, `HP_FULL_RC=0` @ iter 2999) |
 | spark02 | `k1_gdrive_sync` | rclone loop → Drive `gdrive-thakk100:Booster/logs` (`*.mp4`, every 10 min) ✅ live | `scripts/gdrive_sync.log` |
-| spark02 | `k1_p3smoke` | P3 head-track smoke (16×3, cameras+YOLO) — running the 1-D-reward build (03:35 UTC) | `scripts/p3smoke.log` |
-| spark02 | `k1_export` | re-exporting the frozen base from Run-10 **model_2999** → `models/k1_partialctrl_base.pt` | `scripts/export_base.log` |
-| spark04 | `k1_spark_p1f` | P1f shove teacher→student chain (256×2000 → 256×1500) | `scripts/p1f.f.log` |
-| spark04 | `k1_spark_p2f` | P2f shove teacher→student chain (512×3000 → 512×3000) | `scripts/p2f.f.log` |
+| spark02 | `k1_p3smoke` | P3 head-track smoke (16×3, cameras+YOLO), 1-D-reward build — relaunched 13:17 UTC | `scripts/p3smoke.log` |
+| — | — | Frozen-base export from Run-10 `model_2999` **DONE** (parity 2.87e-03): `models/k1_partialctrl_base.pt` on local + spark02 + spark04 | `scripts/export_base.log` |
+| spark04 | `k1_spark_p1f` | P1f chain **resumed from teacher `model_1999.pt`** (1 iter left, then student 256×1500) | `scripts/p1f.f.log` |
+| spark04 | `k1_spark_p2f` | P2f chain **resumed from teacher `model_1800.pt`** (1200 iters left, then student 512×3000) | `scripts/p2f.f.log` |
 | spark04 | `k1_gdrive_sync` | Drive mirror (same as spark02) ✅ live | `scripts/gdrive_sync.log` |
-| spark04 | `k1_pushsmoke` | **Box-push smoke** (16×3, video) — running the 1-D-reward build (03:35 UTC) | `scripts/pushsmoke.log` |
+| spark04 | `k1_pushsmoke` | **Box-push smoke** (16×3, video), event-signature fix — relaunched 13:17 UTC | `scripts/pushsmoke.log` |
 
 spark01/03 are busy with other tenants (GPU 83/95 %). Do not touch.
+
+### ⚠️ Server restart incident (2026-09-24 ~12:55 UTC) — RECOVERED
+
+Both sparks rebooted mid-flight: **every training container and tmux session was
+killed** (the `k1_gdrive_sync` loops came back / survived and were re-checked).
+Salvage + recovery already done:
+
+- **p1f teacher reached 1999/2000** → `model_1999.pt` survived. **p2f teacher at
+  1854/3000** → `model_1800.pt`. Both chains relaunched **with resume** (new
+  `train.py --checkpoint <path>` flag + `RESUME_CKPT` env in
+  `scripts/spark_force_{host,container}.sh`) instead of restarting from zero.
+- **Run-10 completed before the reboot** (`HP_FULL_RC=0`), `model_2999.pt`
+  pulled to `logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/`,
+  log archived as `hp.run10.log`, **frozen base re-exported from it** (parity
+  2.87e-03) and copied to local + spark04.
+- **Lesson:** remote jobs are NOT reboot-safe in tmux alone — checkpoints every
+  100 iters are the only durability. After any restart, check
+  `ls -t logs/rsl_rl/*/*/model_*.pt` and relaunch with `--checkpoint`.
 
 ### First 5 commands when you return
 
