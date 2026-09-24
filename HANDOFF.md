@@ -10,7 +10,7 @@
 
 ---
 
-# 🟠 TRACK A — SOCCAR... sorry: **TRACK A — SOCCER** (P3 head-track, P4 kick teacher) — *agent A owns this*
+# 🟠 TRACK A — SOCCER (P3 head-track, P4 kick teacher) — *agent A owns this*
 
 **Goal:** make the K1 see and kick a ball without ground truth in its inputs
 (P3 keeps the ball in frame from camera detections; P4 teacher knows the ball;
