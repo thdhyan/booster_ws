@@ -190,6 +190,15 @@ Env: **rough terrain** (teacher curriculum; student blind on same terrain) + `ra
 
 Env: **rough terrain curriculum** (uneven ground — user requirement) + `random_body_push` (§3.2) + existing velocity cmds. Existing flat policy is **retrained** as this teacher (6.0.1 checkpoints are not reused).
 
+> **Updated 2026-09-24 (implemented, `Isaac-HeadTrack-K1-v0`).** Deployable obs is
+> the **detection vector** (12-dim), not GT angles: head-cam RGB (320x240, on
+> `Head_2`, 10 Hz) -> YOLOv8n `sports ball` bbox centre -> `(visible, du, dv)`,
+> held between detections (geometric FOV proxy = fallback when no detector).
+> **Ball speed is a curriculum** (0 -> 0.8 m/s, iters 200->1200): centre a
+> static ball first, then track a rolling one. **CCW search**: no detection for
+> 0.5 s -> locomotion gets an in-place counter-clockwise command
+> `(0, 0, +0.6 rad/s)` (`head_mdp.ccw_search_command`, compose `update_search`).
+
 ### P3 HEAD TRACK — ball in frame, head motors only (single-stage)
 
 | | |

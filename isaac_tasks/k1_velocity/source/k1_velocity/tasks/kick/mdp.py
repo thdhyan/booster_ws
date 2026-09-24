@@ -261,3 +261,46 @@ def reset_ball_omnireset(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
         ball_pos[mask_walk, 1] = y
 
     _set_ball_pos(env, env_ids, ball_pos)
+
+
+# ============================================================================
+# Shared head-aiming helpers (P4 teacher reward, P3 detector proxy)
+# ============================================================================
+HEAD_JOINTS = ["AAHead_yaw", "Head_pitch"]
+
+
+def ball_head_angles(env: ManagerBasedRLEnv) -> tuple[torch.Tensor, torch.Tensor]:
+    """(yaw_err, pitch_err): ball bearing in the current head frame (radians)."""
+    ball_rf = ball_pos_in_robot_frame(env)
+    robot = env.scene["robot"]
+    ids, _ = robot.find_joints(HEAD_JOINTS, preserve_order=True)
+    yaw_q, pitch_q = robot.data.joint_pos[:, ids, 0], robot.data.joint_pos[:, ids, 1]
+    yaw = torch.atan2(ball_rf[:, 1], ball_rf[:, 0]) - yaw_q
+    pitch = torch.atan2(ball_rf[:, 2] - 0.55, torch.hypot(ball_rf[:, 0], ball_rf[:, 1])) - pitch_q
+    yaw = torch.atan2(torch.sin(yaw), torch.cos(yaw))
+    pitch = torch.atan2(torch.sin(pitch), torch.cos(pitch))
+    return yaw, pitch
+
+
+def ball_fov_visible(env: ManagerBasedRLEnv, hfov_deg: float = 69.4) -> torch.Tensor:
+    """Geometric FOV test through the current head pose (detector proxy)."""
+    import math as _m
+
+    yaw, pitch = ball_head_angles(env)
+    hfov = _m.radians(hfov_deg)
+    vfov = 2.0 * _m.atan(_m.tan(hfov / 2.0) * 240.0 / 320.0)
+    ball_rf = ball_pos_in_robot_frame(env)
+    return (ball_rf[:, 0] > 0.05) & (yaw.abs() < hfov / 2.0) & (pitch.abs() < vfov / 2.0)
+
+
+def track_ball_head_exp(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Tensor:
+    """exp(-(yaw_err^2 + pitch_err^2)/std^2) — head points at the ball (GT, reward-time)."""
+    yaw, pitch = ball_head_angles(env)
+    return torch.exp(-(yaw * yaw + pitch * pitch) / (std * std)).unsqueeze(-1)
+
+
+def ball_in_frame(env: ManagerBasedRLEnv, min_dist: float = 0.75) -> torch.Tensor:
+    """Ball inside the camera FOV while the robot is still far (>min_dist)."""
+    visible = ball_fov_visible(env).float().unsqueeze(-1)
+    dist = torch.norm(ball_pos_in_robot_frame(env), dim=-1, keepdim=True)
+    return visible * (dist > min_dist).float()

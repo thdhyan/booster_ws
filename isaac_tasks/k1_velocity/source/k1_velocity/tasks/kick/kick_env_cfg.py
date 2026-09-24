@@ -367,3 +367,56 @@ class K1KickEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 4          # 50 Hz control
         self.episode_length_s = 20.0
         self.sim.render_interval = self.decimation
+
+
+# ============================================================================
+# Teacher variant (P4 teacher): legs + head, GT ball/goal, head-aim shaping
+# ============================================================================
+@configclass
+class K1KickTeacherActionsCfg:
+    """Teacher drives legs (12) AND the head (2) toward the GT ball."""
+
+    leg_joint_pos = mdp.JointPositionActionCfg(
+        asset_name="robot",
+        joint_names=K1_LEG_JOINTS,
+        scale=0.25,
+        use_default_offset=True,
+    )
+    head_joint_pos = mdp.JointPositionActionCfg(
+        asset_name="robot",
+        joint_names=["AAHead_yaw", "Head_pitch"],
+        scale=0.5,
+        use_default_offset=True,
+    )
+
+
+@configclass
+class K1KickTeacherRewardsCfg(RewardsCfg):
+    """Base rewards + ball-in-frame and head-aim shaping; arms-only deviation."""
+
+    ball_in_frame = RewTerm(
+        func=mdp.ball_in_frame,
+        weight=0.5,
+        params={"min_dist": 0.75},
+    )
+    head_ball_aim = RewTerm(
+        func=mdp.track_ball_head_exp,
+        weight=0.5,
+        params={"std": 0.35},
+    )
+    # head is now an action: deviation penalty covers the 8 arm joints only
+    joint_deviation_arms = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=-0.05,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_ARM_HEAD_JOINTS[2:])},
+    )
+
+
+@configclass
+class K1KickTeacherEnvCfg(K1KickEnvCfg):
+    """Kick env for the privileged teacher: same world, head under control."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.actions = K1KickTeacherActionsCfg()
+        self.rewards = K1KickTeacherRewardsCfg()

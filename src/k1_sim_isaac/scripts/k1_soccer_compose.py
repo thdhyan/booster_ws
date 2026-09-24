@@ -55,8 +55,14 @@ LEG_IDX = [ALL_JOINTS.index(j) for j in LEG_JOINTS]
 
 # Policy dimensions
 VEL_OBS_DIM = 48   # velocity policy
-HEAD_OBS_DIM = 11  # head tracking policy
+HEAD_OBS_DIM = 12  # head tracking: detection(3) + head(2+2) + ang_vel(3) + action(2)
 KICK_OBS_DIM = 48  # kicking policy
+
+# CCW search: when the camera has no ball for LOST_FRAMES steps, issue an
+# in-place counter-clockwise velocity command (0, 0, +omega) to the locomotion
+# policy so the robot rotates to re-acquire an out-of-FOV ball.
+CCW_OMEGA = 0.6
+LOST_FRAMES = 25   # 0.5 s at 50 Hz
 
 ACTION_SCALE = 0.25
 DEFAULT_LEG_POS = np.zeros(12, dtype=np.float32)
@@ -98,6 +104,18 @@ class PolicyComposer:
         self.last_leg_action = np.zeros(12, dtype=np.float32)
         self.last_head_action = np.zeros(2, dtype=np.float32)
         self.kick_timer = 0  # frames since kick started
+        # CCW search state
+        self.lost_frames = 0
+        self.active_cmd = np.zeros(3, dtype=np.float32)  # what locomotion tracks
+
+    def update_search(self, ball_visible: bool) -> bool:
+        """Track detection loss; return True while searching (CCW in place)."""
+        self.lost_frames = 0 if ball_visible else self.lost_frames + 1
+        if self.lost_frames >= LOST_FRAMES:
+            self.active_cmd = np.array([0.0, 0.0, CCW_OMEGA], dtype=np.float32)
+            return True
+        self.active_cmd = np.zeros(3, dtype=np.float32)
+        return False
 
     def get_state(self, ball_distance, ball_angle):
         """Determine state based on ball position."""
@@ -109,9 +127,15 @@ class PolicyComposer:
             return SoccerState.WALK
 
     def compute_action(self, obs_vel, obs_head, obs_kick, ball_distance, ball_angle):
-        """Compute combined action based on state."""
+        """Compute combined action based on state.
+
+        obs_head[0] is the detector's visible flag; while it is lost for
+        LOST_FRAMES steps the locomotion policy receives the in-place CCW
+        command via self.active_cmd (build obs_vel with it).
+        """
         state = self.get_state(ball_distance, ball_angle)
         self.state = state
+        self.update_search(bool(obs_head[0] > 0.5))
 
         # Build full 22-DoF action
         full_action = np.zeros(22, dtype=np.float32)
@@ -178,11 +202,15 @@ class PolicyComposer:
             self.last_leg_action,  # 12
         ]).astype(np.float32)
 
-    def build_obs_head(self, ball_angle, head_pos, head_vel,
+    def build_obs_head(self, detection, head_pos, head_vel,
                        base_ang_vel):
-        """Build head tracking observation (11-dim)."""
+        """Build head tracking observation (12-dim).
+
+        detection = (visible, du, dv) from the P3 detector — the ONLY ball
+        signal (no ground truth). visible==0 is what arms the CCW search.
+        """
         return np.concatenate([
-            ball_angle,      # 2 (yaw, pitch)
+            np.asarray(detection, dtype=np.float32).reshape(3),  # visible, du, dv
             head_pos,        # 2
             head_vel,        # 2
             base_ang_vel,    # 3

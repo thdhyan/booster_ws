@@ -327,3 +327,62 @@ and TorchScript exports to `models/` (Git LFS):
   URLs, anyone-with-link reader) · [Slide deck with every video embedded](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit)
   (8 slides: overview, recordings table, one video slide per policy, new
   features, status — embeds via Slides `createVideo`, `source: DRIVE`).
+
+## P3 head tracking + P4 teacher update (2026-09-24, branch `dev/soccer-p3p4`)
+
+**P3 `Isaac-HeadTrack-K1-v0`** (new family `tasks/head/`) — head-only ball
+tracking, **independent of locomotion/balance** (legs held at the standing
+default; the robot never walks in this task) and **no ground truth in obs**:
+
+- **Detector = the only ball signal.** Head cam (320×240 RGB on `Head_2`, 10 Hz,
+  moves with the head joints) → YOLOv8n COCO `sports ball` bbox centre →
+  `(visible, du, dv)`, held between detections. A geometric FOV proxy through
+  the current head angles is the automatic fallback when the detector or its
+  weights are unavailable (keeps smoke/deployability green offline).
+- **Obs (12):** detection 3 · head pos 2 · head vel 2 · base ang vel 3 · last
+  action 2.
+- **Action (2):** `AAHead_yaw`, `Head_pitch` @ scale 0.5.
+- **Rewards:** `ball_centered` **+2.0** = `exp(−(du²+dv²)/0.35²)` on the
+  detection (the "keep the bounding box centred" reward) · `track_ball_angle`
+  +1.0 (geometric, reward-time only) · `ball_in_frame` +0.5 · `action_rate_l2`
+  −0.1 · head `joint_pos_limits` −1.0 · `time_penalty` −0.01.
+- **Curriculum `ball_speed`:** **0 → 0.8 m/s** linear over iters **200 → 1200**
+  — static ball first (centre the box), then a slowly rolling ball the head
+  must keep tracking. Direction resampled per reset; a 0.5 s interval event
+  re-asserts speed against ground friction.
+- **CCW search (conditional):** no detection for **0.5 s** (25 steps) → the
+  locomotion policy is issued an **in-place counter-clockwise** command
+  `(0, 0, +0.6 rad/s)` (zero x/y so the robot rotates in place to re-acquire
+  an out-of-FOV ball). Implemented as `head_mdp.ccw_search_command` (env-side,
+  tensor) and `PolicyComposer.update_search` (runtime, `active_cmd`).
+  Compose head-obs rebuilt to the new 12-dim detection format.
+
+**P4 teacher update** (`K1KickTeacherEnvCfg`, same `…-Teacher-v0` id): teacher
+now also **drives the head** (legs 12 + head 2 = 14-dim action) and gains
+`ball_in_frame` (+0.5, while robot-ball > 0.75 m) + `head_ball_aim` (+0.5
+exp kernel) shaping; arm deviation penalty excludes the now-active head. The
+GT ball/goal `teacher` obs group is unchanged → the distilled student (which
+will consume P3 detections + the vision estimator) is unaffected.
+
+- Launchers: `scripts/spark_soccer_host.sh p3|p4t` → container
+  (`spark_soccer_container.sh`): installs pkgs (+ultralytics + yolov8n for p3),
+  **smoke-gated 16×3** (cameras + video), then full 512×2000 (p3) /
+  512×3000 (p4t).
+- Gate: `tests/test_deployability.py` **HOLDS — 14 tasks** incl.
+  `Isaac-HeadTrack-K1-v0` (policy 5 terms) and the 3 kick ids (teacher 8 terms).
+- Compose runtime: `src/k1_sim_isaac/scripts/k1_soccer_compose.py` (12-dim head
+  obs + CCW search state machine).
+
+## Drive video sync from training servers (2026-09-24)
+
+Training videos (`logs/rsl_rl/<exp>/<run>/videos/*.mp4` from the `--video`
+recorder) now mirror to Google Drive from the **training spark itself**:
+`rclone` (linux-arm64) + the existing `gdrive-dhyan` remote, tmux loop
+`k1_gdrive_sync` copying every 10 min:
+
+```bash
+rclone copy ~/Projects/booster_ws/logs gdrive-dhyan:Booster/logs \
+  --include '*.mp4' --min-age 30s
+```
+
+Policy-recording mirrors remain the Drive folder + slide deck linked above.

@@ -20,7 +20,7 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": "k1_velocity.tasks.kick.kick_env_cfg:K1KickEnvCfg",
+        "env_cfg_entry_point": "k1_velocity.tasks.kick.kick_env_cfg:K1KickTeacherEnvCfg",
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.kick.agents.rsl_rl_ppo_cfg:K1KickPPOTeacherRunnerCfg",
     },
 )
