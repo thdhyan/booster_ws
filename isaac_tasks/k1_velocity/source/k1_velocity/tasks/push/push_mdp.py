@@ -26,6 +26,7 @@ primary signals.
 from __future__ import annotations
 
 import math
+import os
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -495,6 +496,13 @@ class FrozenBaseVelocityAction(ActionTerm):
         self._asset = env.scene[cfg.asset_name]
         self._policy = torch.jit.load(cfg.base_policy_path, map_location=self._asset.device)
         self._policy.eval()
+        # diag switches (env vars; default = normal operation)
+        #   PUSH_FROZEN_MODE=hold  -> write default leg targets, skip policy
+        #                             (isolates env/physics from the frozen path)
+        #   PUSH_FROZEN_DEBUG=1    -> print obs blocks + policy output (env 0)
+        self._diag_mode = os.environ.get("PUSH_FROZEN_MODE", "")
+        self._diag_debug = os.environ.get("PUSH_FROZEN_DEBUG", "") == "1"
+        self._dbg_n = 0
         dev = self._asset.device
         # find_joints returns python lists in this Isaac Lab build -> tensors here
         leg_ids, _ = self._asset.find_joints(K1_LEG_JOINTS, preserve_order=True)
@@ -534,27 +542,52 @@ class FrozenBaseVelocityAction(ActionTerm):
         self._vel = vel
         st.last_vel_cmd = vel
         robot = self._asset
+        lin = vmdp.base_lin_vel(self._env)
+        ang = vmdp.base_ang_vel(self._env)
+        grav = vmdp.projected_gravity(self._env)
+        leg_pos = robot.data.joint_pos[:, self._leg_ids] - robot.data.default_joint_pos[:, self._leg_ids]
+        leg_vel = robot.data.joint_vel[:, self._leg_ids]
+        head_pos = robot.data.joint_pos[:, self._head_ids] - robot.data.default_joint_pos[:, self._head_ids]
+        arm_pos = robot.data.joint_pos[:, self._arm_ids] - robot.data.default_joint_pos[:, self._arm_ids]
+        arm_vel = robot.data.joint_vel[:, self._arm_ids]
         obs = torch.cat(
             [
-                vmdp.base_lin_vel(self._env),
-                vmdp.base_ang_vel(self._env),
-                vmdp.projected_gravity(self._env),
+                lin,
+                ang,
+                grav,
                 vel,
-                robot.data.joint_pos[:, self._leg_ids] - robot.data.default_joint_pos[:, self._leg_ids],
-                robot.data.joint_vel[:, self._leg_ids],
-                robot.data.joint_pos[:, self._head_ids] - robot.data.default_joint_pos[:, self._head_ids],
-                robot.data.joint_pos[:, self._arm_ids] - robot.data.default_joint_pos[:, self._arm_ids],
-                robot.data.joint_vel[:, self._arm_ids],
+                leg_pos,
+                leg_vel,
+                head_pos,
+                arm_pos,
+                arm_vel,
                 self._last,
             ],
             dim=-1,
         )
-        with torch.inference_mode():
-            out = self._policy(obs.to(self._asset.device))
-        self._last = out
+        out = None
+        if self._diag_mode != "hold":
+            with torch.inference_mode():
+                out = self._policy(obs.to(self._asset.device))
+            self._last = out
+        if self._diag_debug and self._dbg_n < 5:
+            for name, blk in (
+                ("lin_vel", lin), ("ang_vel", ang), ("gravity", grav), ("cmd", vel),
+                ("leg_pos", leg_pos), ("leg_vel", leg_vel), ("head_pos", head_pos),
+                ("arm_pos", arm_pos), ("arm_vel", arm_vel), ("last_act", self._last),
+            ):
+                print(f"[frozenobs] step={self._dbg_n} {name}: "
+                      f"mean={blk.mean().item():+.3f} absmax={blk.abs().max().item():.3f} "
+                      f"v0={blk[0, :4].tolist()}")
+            if out is not None:
+                print(f"[frozenout] step={self._dbg_n} out0={out[0].tolist()}")
+            else:
+                print(f"[frozenout] step={self._dbg_n} HOLD (no policy)")
+            self._dbg_n += 1
         targets = self._default14.clone()
-        targets[:, :12] += 0.25 * out[:, :12]
-        targets[:, 12:] += 0.5 * out[:, 12:14]
+        if out is not None:
+            targets[:, :12] += 0.25 * out[:, :12]
+            targets[:, 12:] += 0.5 * out[:, 12:14]
         for name in ("set_joint_position_target", "write_joint_position_target_to_sim"):
             fn = getattr(robot, name, None)
             if fn is not None:
