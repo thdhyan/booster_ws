@@ -13,13 +13,14 @@
 
 | Box | tmux | What | Log |
 |---|---|---|---|
-| spark02 | `k1_spark_hp` | **Run-10** partial-control (3000 iters; was 2534/3000 at 03:04 UTC) → then Run-11 handoff (below) | `~/Projects/booster_ws/scripts/hp.full.log` |
+| spark02 | `k1_spark_hp` | **Run-11** partial-control + arm-delta curriculum (smoke-gated, then 512×3000) — launched 03:35 UTC right after Run-10 finished | `scripts/hp.full.log` (Run-10 archived as `scripts/hp.run10.log`) |
 | spark02 | `k1_gdrive_sync` | rclone loop → Drive `gdrive-thakk100:Booster/logs` (`*.mp4`, every 10 min) ✅ live | `scripts/gdrive_sync.log` |
-| spark02 | `k1_p3smoke` | P3 head-track smoke (16×3, cameras+YOLO) — **last round in flight** | `scripts/p3smoke.log` |
+| spark02 | `k1_p3smoke` | P3 head-track smoke (16×3, cameras+YOLO) — running the 1-D-reward build (03:35 UTC) | `scripts/p3smoke.log` |
+| spark02 | `k1_export` | re-exporting the frozen base from Run-10 **model_2999** → `models/k1_partialctrl_base.pt` | `scripts/export_base.log` |
 | spark04 | `k1_spark_p1f` | P1f shove teacher→student chain (256×2000 → 256×1500) | `scripts/p1f.f.log` |
 | spark04 | `k1_spark_p2f` | P2f shove teacher→student chain (512×3000 → 512×3000) | `scripts/p2f.f.log` |
 | spark04 | `k1_gdrive_sync` | Drive mirror (same as spark02) ✅ live | `scripts/gdrive_sync.log` |
-| spark04 | `k1_pushsmoke` | **Box-push smoke** (16×3, video) — last round in flight | `scripts/pushsmoke.log` |
+| spark04 | `k1_pushsmoke` | **Box-push smoke** (16×3, video) — running the 1-D-reward build (03:35 UTC) | `scripts/pushsmoke.log` |
 
 spark01/03 are busy with other tenants (GPU 83/95 %). Do not touch.
 
@@ -57,8 +58,16 @@ ssh aim_spark04 'grep "Learning iteration" ~/Projects/booster_ws/scripts/p1f.f.l
    `scripts/p3.soccer.log`; smoke-gated internally, then 512×2000) and
    `bash scripts/spark_soccer_host.sh p4t` (P4 teacher, 512×3000). Only one
    Isaac stack at a time on spark02 beyond Run-11 (RAM ~121 GB total).
-3. **Run-10 → Run-11 handoff** (do once `HP_FULL_RC=0` + `model_2999.pt`
-   exist in `logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/`):
+3. ~~**Run-10 → Run-11 handoff**~~ — **DONE 2026-09-24 03:35 UTC**: Run-10
+   finished `HP_FULL_RC=0` (iter 2999/3000); `hp.full.log` archived as
+   `hp.run10.log`; `model_2999.pt` pulled to
+   `logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/`;
+   Run-11 launched (tmux `k1_spark_hp`). Remaining from that step:
+   (a) `scripts/export_base_policy.sh` is re-exporting the frozen base from
+   the final ckpt — pull `models/k1_partialctrl_base.pt` (local→spark04) when
+   `BASE_EXPORT_DONE` appears; (b) partial-control play video on spark04:
+   `ssh aim_spark04 'cd ~/Projects/booster_ws && SKIP_CORE=1 bash scripts/record_policies_host.sh'`.
+   Original commands kept for reference:
    ```bash
    ssh aim_spark02 'cd ~/Projects/booster_ws && cp scripts/hp.full.log scripts/hp.run10.log && tmux kill-session -t k1_spark_hp 2>/dev/null'
    rsync -az aim_spark02:Projects/booster_ws/logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/model_2999.pt logs/rsl_rl/k1_partialctrl_base/2026-09-23_22-20-44_k1_partialctrl_base/
@@ -108,6 +117,15 @@ ssh aim_spark04 'grep "Learning iteration" ~/Projects/booster_ws/scripts/p1f.f.l
 
 ### Gotchas that cost hours (do not rediscover)
 
+- **Reward terms must return 1-D `(N,)`** — the reward buffer is 1-D, so a
+  `(N,1)` term broadcasts to `(N,N)` and throws
+  `output with shape [N] doesn't match the broadcast shape [N, N]` inside
+  `reward_manager.compute` (the traceback does NOT name the term — guard your
+  custom terms or bisect).
+- Event/curriculum/obs term signatures are validated against
+  `(env, env_ids, …)` (min_argc=2 for events/curricula): a missing `env_ids`
+  parameter or non-defaulted names fails env construction with
+  "expects mandatory/optional parameters".
 - `python.sh` returns **rc=0 on crashes** — always read the log, gate on
   artifacts (mp4 size, trace, export), never on rc alone.
 - **Curriculum terms** must be `def f(env, env_ids, <all-defaults>)` — the
