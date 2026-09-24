@@ -277,9 +277,11 @@ class WristTargetCommand(CommandTerm):
 
 @configclass
 class WristTargetCommandCfg(CommandTermCfg):
-    """2x3 wrist target command buffer (filled by the reset event)."""
+    """2x3 wrist target command buffer (filled by the reset event; never
+    auto-resamples - the reset event owns sampling)."""
 
     class_type = WristTargetCommand
+    resampling_time_range = (1.0e9, 1.0e9)
 
 
 def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
@@ -422,15 +424,6 @@ def _action_term_base():
 ActionTerm = _action_term_base()
 
 
-@configclass
-class FrozenBaseVelocityActionCfg(ActionTermCfg):
-    """Velocity override for the frozen partial-control base policy."""
-
-    class_type = None  # set to FrozenBaseVelocityAction below
-    asset_name: str = "robot"
-    base_policy_path: str = "models/k1_partialctrl_base.pt"
-
-
 class FrozenBaseVelocityAction(ActionTerm):
     """3-dim action = velocity command override for the FROZEN base policy.
 
@@ -507,7 +500,13 @@ class FrozenBaseVelocityAction(ActionTerm):
             self._last[env_ids] = 0.0
 
 
-FrozenBaseVelocityActionCfg.class_type = FrozenBaseVelocityAction
+@configclass
+class FrozenBaseVelocityActionCfg(ActionTermCfg):
+    """Velocity override for the frozen partial-control base policy."""
+
+    class_type = FrozenBaseVelocityAction
+    asset_name: str = "robot"
+    base_policy_path: str = "models/k1_partialctrl_base.pt"
 
 
 # ---------------------------------------------------------------------------

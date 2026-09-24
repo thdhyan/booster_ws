@@ -135,13 +135,13 @@ class RewardsCfg:
     ball_centered = RewTerm(func=mdp.ball_centered, weight=2.0, params={"std": 0.35})
     track_ball_angle = RewTerm(func=mdp.track_ball_angle_exp, weight=1.0, params={"std": 0.35})
     ball_in_frame = RewTerm(func=mdp.ball_in_frame, weight=0.5)
-    action_rate_l2 = RewTerm(func=vmdp.action_rate_l2, weight=-0.1)
+    action_rate_l2 = RewTerm(func=mdp.guarded_action_rate_l2, weight=-0.1)
     joint_pos_limits = RewTerm(
-        func=vmdp.joint_pos_limits,
+        func=mdp.guarded_joint_pos_limits,
         weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_HEAD_JOINTS)},
     )
-    time_penalty = RewTerm(func=mdp.time_penalty, weight=-0.01)
+    time_penalty = RewTerm(func=mdp.guarded_time_penalty, weight=-0.01)
 
 
 @configclass

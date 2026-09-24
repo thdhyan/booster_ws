@@ -23,6 +23,10 @@ from typing import TYPE_CHECKING
 import torch
 
 from ..kick.mdp import BALL_RADIUS, ball_pos_in_robot_frame
+try:  # Isaac Lab 3.0-EA layout; image renamed this package
+    import isaaclab_tasks.core.velocity.mdp as vmdp
+except (ImportError, ModuleNotFoundError):
+    import isaaclab_tasks.manager_based.locomotion.velocity.mdp as vmdp
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -181,17 +185,23 @@ def ball_detection(env: ManagerBasedRLEnv) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 # rewards
 # ---------------------------------------------------------------------------
+def _shape_guard(name, v, env):
+    if v.shape != (env.num_envs, 1):
+        raise ValueError(f"[head] reward '{name}' returned {tuple(v.shape)}, expected {(env.num_envs, 1)}")
+    return v
+
+
 def ball_centered(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Tensor:
     """Primary: exp kernel on the *detection* offset (du, dv). No GT."""
     st = _state(env)
     du, dv = st.yolo[:, 1], st.yolo[:, 2]
-    return torch.exp(-(du * du + dv * dv) / (std * std)).unsqueeze(-1)
+    return _shape_guard("ball_centered", torch.exp(-(du * du + dv * dv) / (std * std)).unsqueeze(-1), env)
 
 
 def ball_in_frame(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Binary: the detector currently sees the ball."""
     st = _state(env)
-    return st.yolo[:, 0:1]
+    return _shape_guard("ball_in_frame", st.yolo[:, 0:1], env)
 
 
 def track_ball_angle_exp(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Tensor:
@@ -206,11 +216,23 @@ def track_ball_angle_exp(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Ten
     pitch_err = torch.atan2(ball_rf[:, 2] - 0.55, torch.hypot(ball_rf[:, 0], ball_rf[:, 1])) - pitch_q
     yaw_err = torch.atan2(torch.sin(yaw_err), torch.cos(yaw_err))
     pitch_err = torch.atan2(torch.sin(pitch_err), torch.cos(pitch_err))
-    return torch.exp(-(yaw_err * yaw_err + pitch_err * pitch_err) / (std * std)).unsqueeze(-1)
+    return _shape_guard("track_ball_angle", torch.exp(-(yaw_err * yaw_err + pitch_err * pitch_err) / (std * std)).unsqueeze(-1), env)
 
 
 def time_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
     return torch.ones((env.num_envs, 1), device=env.device)
+
+
+def guarded_action_rate_l2(env):
+    return _shape_guard("action_rate_l2", vmdp.action_rate_l2(env), env)
+
+
+def guarded_joint_pos_limits(env, asset_cfg):
+    return _shape_guard("joint_pos_limits", vmdp.joint_pos_limits(env, asset_cfg), env)
+
+
+def guarded_time_penalty(env):
+    return _shape_guard("time_penalty", time_penalty(env), env)
 
 
 # ---------------------------------------------------------------------------
