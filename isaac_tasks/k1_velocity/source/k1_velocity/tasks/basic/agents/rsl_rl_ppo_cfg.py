@@ -53,3 +53,14 @@ class K1BasicPPOTeacherRunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class K1BasicPPOTeacherForceRunnerCfg(K1BasicPPOTeacherRunnerCfg):
+    """PPO runner for the **P1f** teacher: P1 hyperparams + shove-aware teacher obs (239-dim).
+
+    Experiment renamed so runs land under ``logs/rsl_rl/p1f_basic_teacher``.
+    """
+
+    experiment_name = "p1f_basic_teacher"
+    run_name = "p1f_basic_teacher"

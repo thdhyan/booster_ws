@@ -62,3 +62,11 @@ class K1VelocityPPOTeacherRunnerCfg(K1VelocityPPORunnerCfg):
 
     experiment_name = "p2_move_teacher"
     obs_groups = {"actor": ["teacher"], "critic": ["teacher"]}
+
+
+@configclass
+class K1VelocityPPOTeacherForceRunnerCfg(K1VelocityPPOTeacherRunnerCfg):
+    """PPO runner for the **P2f** teacher: P2 hyperparams + shove-aware teacher obs (241-dim)."""
+
+    experiment_name = "p2f_move_teacher"
+    run_name = "p2f_move_teacher"

@@ -19,6 +19,10 @@ logs/
 runs/
 wandb/
 
+# play_record.py full-fidelity sidecar traces (videos/*.mp4 ARE committed)
+videos/*_trace.npz
+**/videos/*_trace.npz
+
 # Rosbag recordings
 *.bag
 *.db3

@@ -51,3 +51,17 @@ class K1BasicDistillRunnerCfg(RslRlDistillationRunnerCfg):
         gradient_length=15,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class K1BasicDistillForceRunnerCfg(K1BasicDistillRunnerCfg):
+    """Distillation runner for the **P1f** student.
+
+    Teacher input = P1f teacher env obs: 42 clean + 187 scan + 4 foot + 6 shove
+    wrench = 239 (net input sizes are inferred from the env, so the MLP fields
+    stay inherited). Student stays blind 42x10 = 420 — no shove knowledge.
+    Launch: ``--task Isaac-Basic-Student-K1-F-v0 --checkpoint <p1f teacher model.pt>``.
+    """
+
+    experiment_name = "p1f_basic_student"
+    run_name = "p1f_basic_student"

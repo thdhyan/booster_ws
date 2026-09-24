@@ -53,3 +53,17 @@ class K1VelocityDistillRunnerCfg(RslRlDistillationRunnerCfg):
         gradient_length=15,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class K1VelocityDistillForceRunnerCfg(K1VelocityDistillRunnerCfg):
+    """Distillation runner for the **P2f** student.
+
+    Teacher input = P2f teacher env obs: 48 clean + 187 scan + 6 shove wrench
+    = 241 (net input sizes are inferred from the env, so the MLP fields stay
+    inherited). Student stays blind 48x10 = 480 — no shove knowledge.
+    Launch: ``--task Isaac-Velocity-Distill-K1-F-v0 --checkpoint <p2f teacher model.pt>``.
+    """
+
+    experiment_name = "p2f_move_student"
+    run_name = "p2f_move_student"

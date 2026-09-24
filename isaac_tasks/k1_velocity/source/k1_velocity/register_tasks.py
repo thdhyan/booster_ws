@@ -22,4 +22,5 @@ def register_tasks() -> list[str]:
     """
     import k1_velocity.tasks.velocity  # noqa: F401 — registers velocity task family
     import k1_velocity.tasks.basic  # noqa: F401 — registers P1 BASIC task family
+    import k1_velocity.tasks.partial  # noqa: F401 — registers partial-control (legs+head) task family
     return []

@@ -90,6 +90,7 @@ import booster_train.tasks  # noqa: F401 — registers booster_train tasks
 
 # *** Register K1 velocity tasks ***
 import k1_velocity.tasks.velocity  # noqa: F401
+import k1_velocity.tasks.partial  # noqa: F401 — hierarchical partial-control (legs+head) family
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True

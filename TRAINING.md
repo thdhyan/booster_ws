@@ -120,6 +120,37 @@ tail -f logs/guard_<name>.log
   3 consecutive 5 s samples before kill.
 - 4096 envs forbidden locally; ≤ 512 envs. Heavy RL box = remote (currently unreachable).
 
+## Run 10 — hierarchical partial-control base policy (user request 2026-09-23)
+
+**Task `Isaac-Velocity-PartialCtrl-K1-v0`** (new family `k1_velocity/tasks/partial/`):
+base policy for hierarchical partial control — **14-dim action = 12 leg DoF + 2 head
+DoF**; the **8 arm DoF are outside the action space**: each reset places them at a
+curriculum-scaled random pose (default + scale·U(±1 rad), clamped to soft limits) and
+holds it via their delayed-PD actuators (episode target written into the articulation
+joint-position-target buffer, untouched by any action term). Policy observes arm
+pose/vel + head state (68-dim), so it balances & tracks velocity commands under
+**variable arm configurations** — precondition for carrying/pushing under an
+upper-body controller later.
+
+- **Curriculum `arm_pose`**: `start_scale=0.15` (small perturbations) held for iters
+  0–300 → linear ramp to `1.0` (full random poses) by it 2000; writes
+  `events.arm_pose_random.params["curriculum_scale"]` each reset (CurriculumManager
+  runs before reset events in `_reset_idx`). Play cfg pins scale 1.0.
+- **Rewards** = velocity task's locked set with `joint_deviation_arms` (vs fixed
+  default) **disabled** (None) and replaced by `arm_pose_deviation` (vs episode hold
+  target, −0.05). Scene/commands/terminations/PPO runner inherited unchanged.
+- Static gate: `tests/test_deployability.py` passes (10 policy obs terms, proprio only).
+
+| # | Run | PLAN task id | actual gym id (registered) | envs | iters | backend | est. wall time | ckpt in | status |
+|---|-----|--------------|----------------------------|------|-------|---------|----------------|---------|--------|
+| 10 | partial-ctrl base | — (user request, outside PLAN §5) | `Isaac-Velocity-PartialCtrl-K1-v0` | 512 | 3000 | physx (`isaac-lab:3.0.0-beta2-post1` container) | measured 3.89 s/iter → ETA ≈ 3 h 13 m | `logs/rsl_rl/k1_partialctrl_base/<ts>_k1_partialctrl_base/model_2999.pt` (spark02) | **RUNNING 2026-09-23 22:22 on idle `spark02`** (dl: all 4 GPUs busy ~38/49 GB by other users; sparks01/03/04 busy; spark02 load 0.35, 1.9 T free ≥500 G ✓) — smoke 16×3 in-container **PASSED** (gated: full run only on `HP_SMOKE_RC=0`), tmux `k1_spark_hp`, log `scripts/hp.full.log`, wandb run [`1zr6w8a2`](https://wandb.ai/thakk100-dhyan-home/booster_k1_soccer_hrl/runs/1zr6w8a2) (`k1_partialctrl_base`); startup verified: action shape **14** (2 terms), policy obs **68**, 11 reward terms (`arm_pose_deviation` active, −0.0003/ep early), `Curriculum/arm_pose=0.15`, `Curriculum/terrain_levels≈2.9`, 0 Tracebacks; **progress 2026-09-24 00:45 UTC: iter 1419/3000 (47 %), `Curriculum/arm_pose=0.7098`, `Episode_Reward/arm_pose_deviation≈−0.007/ep`, `model_1400.pt`, 0 Tracebacks, ETA ≈ 1 h 45 m** |
+
+  Launch recipe (reproducible): `scripts/spark_partial_host.sh` → tmux `k1_spark_hp` →
+  `scripts/spark_partial_container.sh` (pip -e ×3 → smoke 16×3 `train.py` → gate →
+  full `--num_envs 512 --max_iterations 3000 --seed 42 --video`). Outputs stay on
+  spark02 (`~/Projects/booster_ws/logs/...`); `k1_spark_sync`/gdrive currently mirrors
+  **spark04 only** — pull spark02 `logs/` manually if a checkpoint is needed elsewhere.
+
 ## Campaign table (9 runs)
 
 Wall-time estimates: **PhysX measured baseline** — 256 envs = 1.59–1.63 s/iter fresh
@@ -202,6 +233,88 @@ videos every 200 iters.
 - Env counts: 512-env rows planned per PLAN; actual envs capped by GPU guard (256 = ~6.3 GB
   device peak under PhysX+video). Bump only if measured peak leaves headroom — record here:
   - P1 (256): device peak 6315 MiB (PhysX+RTX, video every 200 it) → at cap, stay 256.
-- Registry: 11 K1 gym ids registered (basic T/S, velocity rough/distill/play + teacher,
-  kick ball base/teacher/distill). PLAN ids renamed → actual id column above (aliases
+- Registry: **17** K1 gym ids registered (basic T/S **+ P1f teacher/student F**, velocity rough/distill/play + teacher,
+  **+ P2f teacher/student F**, kick ball base/teacher/distill, **partial-ctrl train/play**). PLAN ids renamed → actual id column above (aliases
   `Move`/`HeadTrack`/`HRL` may be added later for PLAN parity).
+
+## Run 11 — partial control + mid-episode arm-delta curriculum (queued 2026-09-24)
+
+User request 2026-09-23: *random delta changes to arm-joint positions during the
+episode, on a curriculum that starts with **0 changes** and slowly increases as the
+model improves.* Implementation lives in the env cfg only — **Run-10 is unaffected**
+(it launched before this code existed and never saw deltas):
+
+- **Event** `arm_delta_change` (`mode="interval"`, 2–5 s/env) —
+  `partial/mdp.py:randomize_arm_pose_delta` adds `curriculum_scale · U(−1,1)` rad to
+  **each arm joint's current PD hold target** (clamped to soft limits; hard no-op
+  while scale == 0). The delayed-PD actuators glide to the new pose mid-walk;
+  `arm_pose_deviation` (reward) tracks the moved target automatically — no
+  joint-state teleport, so it's a smooth standing disturbance.
+- **Curriculum** `arm_delta` (reuses the `arm_pose_curriculum` ramp helper):
+  scale **0.0 → 1.0** linearly over iterations **600 → 2500** of 3000 — starts
+  with zero changes, grows only after the policy has mastered static random poses
+  (the reset-pose `arm_pose` ramp 0.15 → 1.0 over 300 → 2000 still runs first).
+- **Play cfg** (`partial_play_cfg.py`) pins `arm_delta_change` scale to **0.0** —
+  Run-10 checkpoints never saw deltas; raise to 1.0 to play Run-11 ckpts.
+- **Launch:** after Run-10 finishes on spark02 — pull `model_2999.pt`, preserve
+  `hp.full.log` → `hp.run10.log` (host script truncates the log), rsync spark02,
+  then `scripts/spark_partial_host.sh` (512×3000, seed 42, tmux `k1_spark_hp`).
+
+## Runs F1–F4 — force-variant P1f / P2f (2026-09-24, spark04)
+
+Isaac Lab's **native** `envs.mdp.apply_external_force_torque` event drives a
+sustained random wrench on the Trunk — *teacher observes the shove, deployable
+student does not* (user request 2026-09-23: use Isaac Lab's built-in force/torque
+events; researched + implemented as `shove_mdp.py` + per-family F cfgs).
+
+| F-run | Variant | gym id | envs × iters | experiment | chain |
+|---|---|---|---|---|---|
+| F1 | P1f teacher | `Isaac-Basic-Teacher-K1-F-v0` | 256 × 2000 | `p1f_basic_teacher` | 16×3 smoke gate → full |
+| F2 | P1f student | `Isaac-Basic-Student-K1-F-v0` | 256 × 1500 | `p1f_basic_student` | F1 final ckpt |
+| F3 | P2f teacher | `Isaac-Velocity-Rough-K1-Teacher-F-v0` | 512 × 3000 | `p2f_move_teacher` | 16×3 smoke gate → full |
+| F4 | P2f student | `Isaac-Velocity-Distill-K1-F-v0` | 512 × 3000 | `p2f_move_student` | F3 final ckpt |
+
+Design notes:
+
+- Event `shove_force_torque`: interval 4–8 s/env, force ±30 N, torque ±10 N·m on
+  `Trunk`, written into the `permanent_wrench_composer` (persists across resets
+  until the next resample).
+- Teacher obs group gains `shove_wrench` 6-dim
+  (`shove_mdp.applied_shove_wrench` reads the composer's
+  `out_force_b`/`out_torque_b`): P1f teacher 233+6=**239**, P2f teacher
+  235+6=**241**; student `policy` groups untouched (**42 / 48** blind).
+- P1f **disables** P1's custom `random_body_push` — both drive the same wrench
+  buffer and would clobber each other (one wrench authority per task).
+- Launch: `scripts/spark_force_host.sh p1f|p2f` → tmux `k1_spark_p1f` /
+  `k1_spark_p2f`, logs `scripts/p1f.f.log` / `scripts/p2f.f.log`,
+  teacher→student chained in one container session (smoke-gated, exits 10/11/13
+  on gate failure).
+- `tests/test_deployability.py` green with these cfgs: **13 tasks, TEST_RC=0**;
+  F-teacher groups 8/9 terms (privileged). Group classes must end in `Cfg`
+  (`ForceTeacherCfg` — `_iter_groups` skips others).
+
+## Play recordings (2026-09-24)
+
+`scripts/record_policies_host.sh` → container → `play_record.py`: headless
+750-step (15 s @ 50 fps, 1024×576, 4 envs) rollouts with a live HUD (velocity
+command, every obs group as value bars, action bars, step + episode reward,
+task/ckpt/step badge), a full-fidelity `videos/*_trace.npz` sidecar (git-ignored),
+and TorchScript exports to `models/` (Git LFS):
+
+| video | task | checkpoint | export |
+|---|---|---|---|
+| `videos/p1_teacher_stand.mp4` | `Isaac-Basic-Teacher-K1-v0` | `p1_basic_teacher/…13-41-33…/model_6498.pt` | `models/p1_basic_teacher.pt` |
+| `videos/p1_student_stand.mp4` | `Isaac-Basic-Student-K1-v0` | `p1_basic_student/…16-20-36…/model_1499.pt` | `models/p1_basic_student.pt` |
+| `videos/p2_teacher_rough.mp4` | `Isaac-Velocity-Rough-K1-Teacher-v0` | `k1_velocity_teacher/…13-14-06/model_2999.pt` | `models/p2_move_teacher.pt` |
+| `videos/p2_student_walk.mp4` | `Isaac-Velocity-Distill-K1-Play-v0` | `p2_move_student/…13-46-54/model_2999.pt` | `models/p2_move_student.pt` |
+| `videos/partial_walk.mp4` | `Isaac-Velocity-PartialCtrl-K1-Play-v0` | Run-10 final (after finish) | `models/k1_partialctrl.pt` |
+
+- Walking tasks use `--cmd 0.6 0.0 0.5` (circle path keeps the robot in the
+  fixed camera frame); PPO vs distill ckpts auto-detected from the agent cfg.
+- **Gotcha fixed 2026-09-24:** `RslRlVecEnvWrapper.reset()` returns a
+  **TensorDict** — `for k in obs` falls back to the sequence protocol
+  (`obs[0]`, `obs[1]`… = batch slices) and never yields the group keys, so the
+  first batch crashed with `KeyError: 'obs_policy'` (4× ~10 KB header-only mp4s).
+  Fix: iterate `obs.keys()`; the runner now also **verifies artifacts**
+  (mp4 ≥ 200 KB + trace + export) because `python.sh` reported rc=0 on a crashed
+  run.

@@ -20,3 +20,5 @@ where = ["source"]
 "Isaac-Velocity-Rough-K1-Play-v0" = "k1_velocity.tasks.velocity:K1VelocityRoughPlayEnvCfg"
 "Isaac-Velocity-Rough-K1-Teacher-v0" = "k1_velocity.tasks.velocity:K1VelocityRoughEnvCfg"
 "Isaac-Velocity-Distill-K1-v0" = "k1_velocity.tasks.velocity:K1VelocityDistillEnvCfg"
+"Isaac-Velocity-PartialCtrl-K1-v0" = "k1_velocity.tasks.partial:K1PartialCtrlEnvCfg"
+"Isaac-Velocity-PartialCtrl-K1-Play-v0" = "k1_velocity.tasks.partial:K1PartialCtrlPlayEnvCfg"

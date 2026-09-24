@@ -47,6 +47,7 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 import isaaclab_tasks  # noqa: F401,E402
 import booster_train.tasks  # noqa: F401,E402
 import k1_velocity.tasks.velocity  # noqa: F401,E402
+import k1_velocity.tasks.partial  # noqa: F401,E402 — partial-control (legs+head) family
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")

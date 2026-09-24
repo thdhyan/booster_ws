@@ -61,6 +61,9 @@ def _iter_groups(env_cfg):
             terms = {k: t for k, t in vars(val).items() if not k.startswith("_") and hasattr(t, "func")}
             if terms:
                 yield name, terms
+    # NOTE: groups whose class name does not end in "Cfg" are skipped above —
+    # every observation group class must follow the *Cfg naming convention
+    # (PolicyCfg/TeacherCfg/ForceTeacherCfg) or it escapes this audit entirely.
 
 
 def _violations(group_name: str, terms: dict) -> list[str]:

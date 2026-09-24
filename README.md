@@ -27,12 +27,58 @@ src/
   k1_sim_isaac      Isaac fleet + ZED stereo capture scripts
   k1_locomotion     policy deployment node (Phase 4)
 isaac_tasks/
-  k1_velocity       RSL-RL velocity task (Isaac-Velocity-Rough-K1-v0) + train/play
+  k1_velocity       RSL-RL task suite: velocity/basic/partial/kick families (table below)
+  k1_kicking        kicking task cfg (scaffolding, unregistered)
+  k1_head_tracking  head-tracking task cfg (scaffolding, unregistered)
   booster_train_ref Booster upstream training reference (submodule)
 sdk/                booster_robotics_sdk (read-only submodule)
 models/             trained policies (Git LFS)
 docs/               research notes + captured imagery
 ```
+
+## RL task families
+
+Every RL task, its folder, and its trained-policy status. Per-task READMEs have
+the full observation / action / reward tables, checkpoints, and play videos.
+
+| Family | Folder | Gym ids (teacher → deployable) | Obs (deployable) | Action | Status |
+|---|---|---|---|---|---|
+| **P1** basic stand/balance | [`isaac_tasks/k1_velocity/`](isaac_tasks/k1_velocity/README.md#p1-basic-standbalance) | `Isaac-Basic-Teacher-K1-v0` → `Isaac-Basic-Student-K1-v0` | 42 blind | 12 legs | ✅ trained (teacher `model_6498`, student `model_1499`) |
+| **P1f** P1 + force/torque shoves | same | `Isaac-Basic-Teacher-K1-F-v0` → `Isaac-Basic-Student-K1-F-v0` | 42 blind (teacher also sees the 6-dim shove wrench) | 12 legs | 🚀 launched 2026-09-24 (spark04) |
+| **P2** velocity on rough terrain | [`isaac_tasks/k1_velocity/`](isaac_tasks/k1_velocity/README.md#p2-velocity-rough-terrain) | `Isaac-Velocity-Rough-K1-Teacher-v0` → `Isaac-Velocity-Distill-K1-Play-v0` | 48 blind | 12 legs | ✅ trained (`model_2999` both) |
+| **P2f** P2 + force/torque shoves | same | `Isaac-Velocity-Rough-K1-Teacher-F-v0` → `Isaac-Velocity-Distill-K1-F-v0` | 48 blind (teacher 241-dim) | 12 legs | 🚀 launched 2026-09-24 (spark04) |
+| **Partial control** legs+head, randomized arms | [`isaac_tasks/k1_velocity/`](isaac_tasks/k1_velocity/README.md#partial-control-leghead-randomized-arms) | `Isaac-Velocity-PartialCtrl-K1-v0` → `Isaac-Velocity-PartialCtrl-K1-Play-v0` | 68 blind | 14 (12 legs + 2 head) | ⏳ Run-10 training on spark02 |
+| **Kick ball** locomotion + ball obs | [`isaac_tasks/k1_velocity/`](isaac_tasks/k1_velocity/README.md#kick-ball) | `Isaac-Kick-Ball-K1-Teacher-v0` → `Isaac-Kick-Ball-K1-Distill-v0` | 45 blind (teacher 51 w/ ball pose) | 12 legs | ⛔ gated on obs-53 goal-env upgrade |
+| Kicking (ball-relative legacy) | [`isaac_tasks/k1_kicking/`](isaac_tasks/k1_kicking/README.md) | *not registered* | 47–48 | 12 legs | 📝 cfg only, no checkpoints |
+| Head tracking | [`isaac_tasks/k1_head_tracking/`](isaac_tasks/k1_head_tracking/README.md) | *not registered* | 11 | 2 head | 📝 cfg only, no checkpoints |
+| Upstream reference library | [`isaac_tasks/booster_train_ref/`](isaac_tasks/booster_train_ref/README.md) | beyond_mimic demo tasks | — | — | 📚 library, not one of our tasks |
+
+**Teacher vs deployable:** every family trains a privileged *teacher* (PPO, sees
+the 187-point height scan — plus ball state / foot slip / shove wrench where
+applicable) and distills a blind *student* that only sees proprioception, so the
+exported policy deploys on the real K1 with no terrain sensing.
+`tests/test_deployability.py` statically enforces that the deployable group is
+GT-free (teacher groups exempt).
+
+## Policy recordings
+
+Headless play videos with a live input/output HUD — velocity commands, every
+observation group as value bars, the action vector, step + episode reward —
+recorded by `scripts/record_policies_host.sh`
+(`isaac_tasks/k1_velocity/scripts/play_record.py`, 750 steps @ 50 fps, 1024×576).
+Full per-step traces sit beside each video as `*_trace.npz` (git-ignored);
+TorchScript exports go to [`models/`](models/) (Git LFS).
+
+| P1 teacher — stand (rough ground, active shoves) | P1 student — stand (blind 420-dim distill) |
+|---|---|
+| ![P1 teacher](isaac_tasks/k1_velocity/videos/p1_teacher_stand.mp4) | ![P1 student](isaac_tasks/k1_velocity/videos/p1_student_stand.mp4) |
+
+| P2 teacher — walk (rough, circle command) | P2 student — walk (distill, circle command) |
+|---|---|
+| ![P2 teacher](isaac_tasks/k1_velocity/videos/p2_teacher_rough.mp4) | ![P2 student](isaac_tasks/k1_velocity/videos/p2_student_walk.mp4) |
+
+Partial-control walk video: [`videos/partial_walk.mp4`](isaac_tasks/k1_velocity/videos/partial_walk.mp4)
+(recorded once Run-10 finishes).
 
 ## Quick start
 
