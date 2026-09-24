@@ -318,3 +318,12 @@ and TorchScript exports to `models/` (Git LFS):
   Fix: iterate `obs.keys()`; the runner now also **verifies artifacts**
   (mp4 ≥ 200 KB + trace + export) because `python.sh` reported rc=0 on a crashed
   run.
+- **Results:** `REC_FAILS=0`, mp4s 0.96 / 1.82 / 1.67 / 2.16 MB, JIT parity
+  max|Δa| = 2.7 / 2.7 / 3.7 / 2.2e-03 (TF32-level); parity ref now follows the
+  live policy's device (the original check fed CPU obs into the CUDA policy and
+  crashed *after* the export was saved).
+- **Mirrors:** [Drive folder](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy)
+  (uploaded via `GOOGLEDRIVE_UPLOAD_FROM_URL` from the public raw.githubusercontent
+  URLs, anyone-with-link reader) · [Slide deck with every video embedded](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit)
+  (8 slides: overview, recordings table, one video slide per policy, new
+  features, status — embeds via Slides `createVideo`, `source: DRIVE`).

@@ -328,6 +328,10 @@ value bars, the action vector as signed bars, step + episode reward, and a
 task/ckpt/step badge — plus a full-fidelity `*_trace.npz` sidecar
 (git-ignored) and an optional TorchScript export.
 
+Videos are also mirrored to Google Drive (anyone-with-link playback):
+[Drive folder](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy) ·
+[Slide deck with every video embedded](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit)
+
 ```bash
 # whole batch (host wrapper → container, tmux k1_spark_rec, log scripts/record.log)
 scripts/record_policies_host.sh

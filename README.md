@@ -80,6 +80,10 @@ TorchScript exports go to [`models/`](models/) (Git LFS).
 Partial-control walk video: [`videos/partial_walk.mp4`](isaac_tasks/k1_velocity/videos/partial_walk.mp4)
 (recorded once Run-10 finishes).
 
+Mirrored to Google Drive (anyone-with-link playback):
+[Drive folder](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy) ·
+[Slide deck with every video embedded](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit)
+
 ## Quick start
 
 ### Gazebo Harmonic fleet (CPU)
