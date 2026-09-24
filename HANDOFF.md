@@ -104,7 +104,7 @@ frozen base assembled with the exact 68-dim partial obs; IK `body_name=*_hand_li
 offset integrator (curriculum 0.3→1.5 m), rewards on 8 corners + corner
 centroid + progress; teacher-group obs (fully observable by design).
 
-**Status (2026-09-24 15:40 UTC) — TRACK B GREEN:**
+**Status (2026-09-24 19:05 UTC) — TRACK B: TRAINING BLOCKED ON FROZEN-BASE BUG; GAIT-V2 BASE RETRAIN RUNNING:**
 - **Zero-step OK:** `ZERO_STEP_RESULT=OK` (3 steps, obs `teacher (n,108)`, rewards
   compute, no terminations; box rests at `z = half_extents`, DR prints
   `edge 0.71-1.47 m, mass 3.6-19.2 kg`). Gate log `scripts/pushzero.log`.
@@ -131,16 +131,59 @@ centroid + progress; teacher-group obs (fully observable by design).
   (anyone/reader, file id `14lbLlTdANq6qNy1vGc5DcGoSJWjY4I-j`); deck slide
   added with `createVideo` source `DRIVE` (slide `slide_fe11a147`, Composio
   session `trip`).
-- **Run-10 (P6 Reach 256×1500) RUNNING on spark04** — tmux `k1_spark_push_reach`,
-  internal smoke gate green → full run at `Learning iteration N/1500`, log
-  `scripts/reach.push.log`, wandb `p6_push_reach`.
+- **Run-10 reach (256×1500) CRASHED/WEDGED on spark04** — CUDA
+  `cuda-EvtHandlr` spin at iter ~690, log stalled 11:47 CDT; container killed,
+  logs preserved as `scripts/reach.push.crashed.log` +
+  `scripts/reach.push.full.crashed.log`. Training itself was NOT learning
+  anyway: mean reward flat −3.85 → −3.60, ep_len 16–23 (0.3–0.46 s),
+  99.7 % late terminations `root_height`, `wrist_box_proximity` ≈ 0.0001.
+- **Root cause (narrowed, OPEN):** the frozen TorchScript base
+  (`models/k1_partialctrl_base.pt`, Run-10 export) **falls every ~17 steps in
+  P6 even with zero commands**, while the same Run-10 policy walks upright in
+  its home partial env (`scripts/play_partial_diag.sh` →
+  `videos/partial_base_diag.mp4`; spark02 `hp.run10.log`: ep_len 42 → 605).
+  Two-pass diag (`scripts/diag_frozen.sh`, log `scripts/diagfrozen.log` on
+  spark04): A `PUSH_FROZEN_MODE=hold` → stand_frac 1.000, done_rate 0.0009
+  (env/physics/IK fine); B frozen policy cmd=0 → stand_frac 1.000 at reset but
+  done_rate 0.0603 (falls ≈ every 17 steps = exactly training's ep_len);
+  step-0 obs canonical (`gravity [0,0,−1]`, rest 0) but policy output
+  ±5–15 → leg targets ±1.25 rad. Static wiring (joint lists, obs order, vmdp
+  imports, sim dt/decimation, cmd ranges) verified identical partial↔push.
+  Leading suspect: **export-path semantics** (`play_record.py`
+  `policy.as_jit()` vs runner `policy()` — normalizer?). Next offline check:
+  run the exported `.pt` on a canonical 68-dim standing obs and diff vs
+  `as_jit()` from the runner checkpoint (`~/Projects/IsaacLab-ea/.venv/bin/python`).
+- **Velocity gait-v2 review (2026-09-24) — APPROVED + committed:** the
+  velocity cfg was reworked (H1/G1-style gait shaping + direct Cartesian
+  commands; see README P2 tables). Verified on the training image via the new
+  `scripts/reward_probe.sh` (16 envs × 120 random steps, per-term raw reward
+  means + foot-contact diagnostics): velocity rough + partialctrl both
+  `REWARD_PROBE_RESULT=OK`, 15/15 terms resolve, `feet_air_time` > 0,
+  `feet_slide` active, `stand_still`/`undesired_contacts` fire, foot contact
+  sensor peaks 1222 N. Logs `scripts/reward_probe{,_partial}.log` (spark04).
+  Runtime note: on the image the mdp import falls back to
+  `manager_based.locomotion.velocity.mdp` (no `isaaclab_tasks.core` there) —
+  same function set, signatures inspected.
+- **Base retrain (GAIT-V2) RUNNING on spark04** — tmux `k1_spark_push_base`,
+  `scripts/spark_push_base_{host,container}.sh`: smoke 16×3 (marker-gated) →
+  FULL 512×3000 `Isaac-Velocity-PartialCtrl-K1-v0`, log
+  `scripts/push_base.full.log`, wandb `k1_partialctrl_base`. Rationale: the
+  shipped base predates gait-v2 AND its export is the open blocker; a fresh
+  base + fresh validated export is the clean unblock path. (Parallel, other
+  session: P2 gait campaign teacher→student on spark02, tmux
+  `k1_spark_p2_gait`.)
 
 **Remaining:**
-1. When `PUSH_FULL_MARKER=OK` in `scripts/reach.push.log`, launch stage 2:
-   `ssh aim_spark04 '~/Projects/booster_ws/scripts/spark_push_host.sh push'`
-   (auto-picks latest `p6_push_reach` model via `--checkpoint`, gates on its own
-   16×3 smoke, then 256×3000 with `PUSH_FULL_MARKER` check).
-2. Monitor: `tmux ls` / `tail scripts/{reach,push}.push.log` on spark04.
+1. When `PUSH_BASE_FULL_MARKER=OK` in `scripts/push_base.host.log` (spark04):
+   re-export with `scripts/export_base_policy.sh` → run `scripts/diag_frozen.sh`
+   (expect diag B done_rate → ~0.001) → relaunch reach:
+   `ssh aim_spark04 '~/Projects/booster_ws/scripts/spark_push_host.sh reach'`.
+2. Offline (anytime, CPU): export-parity test of the CURRENT
+   `models/k1_partialctrl_base.pt` vs `as_jit()` from `run10_final.pt` — if
+   parity holds, the bug is env-side; if not, fix the export path itself.
+3. Never run eval/record GPU containers concurrently with training on spark04
+   (wedged Run-10's CUDA context). Monitor: `tmux ls` /
+   `tail scripts/push_base.full.log` on spark04.
 
 **Loop recipe (used):** patch → `rsync …/tasks/push/ aim_spark04:…/tasks/push/`
 (with `--no-owner --no-group --no-perms --exclude='__pycache__'`) → relaunch
