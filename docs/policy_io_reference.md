@@ -4,6 +4,22 @@ This document shows the exact input/output tensor shapes and data flow for each 
 
 ---
 
+## Policy Output DoF Summary
+
+| Policy File | Output DoF | Controls | Scale | Arms/Head/Waist |
+|-------------|-----------|----------|-------|-----------------|
+| `k1_velocity_policy.pt` | **12** | Legs only | 0.25 | ❌ Not in action space |
+| `k1_velocity_student.pt` | **12** | Legs only | 0.25 | ❌ Not in action space |
+| `p2_move_student.pt` | **12** | Legs only | 0.25 | ❌ Not in action space |
+| `p1_basic_student.pt` | **12** | Legs only | 0.25 | ❌ Not in action space |
+| `k1_partialctrl_base.pt` | **14** | Legs (12) + Head (2) | 0.25 / 0.5 | ❌ Arms not controlled |
+
+**⚠️ NO policy outputs the full 22 DoF body.** The arms (8 DoF) and waist (K1 has no waist) are always handled separately:
+- **In sim**: PD controllers hold arms at default (or randomized pose for partial control)
+- **On real robot**: `k1_wbc` (whole-body controller) regulates upper body independently
+
+---
+
 ## Policy Inventory
 
 | Policy File | Task Family | Gym ID (Deployable) | Obs Dim | Act Dim | Input Mode |
@@ -186,17 +202,18 @@ OUTPUT (14-dim)
 │  Index │ Name              │ Meaning                              │ Scale │
 ├────────┼───────────────────┼──────────────────────────────────────┼───────┤
 │  0:11  │ leg_action[0:11]  │ Leg position offsets               │ 0.25  │
-│ 12:13  │ head_action[0:1]  │ Head position offsets              │ 0.5   │
+│ 12:13  │ head_action[0:1]  │ Head position offsets (yaw, pitch) │ 0.5   │
 └────────┴───────────────────┴──────────────────────────────────────┴───────┘
 
 COMMAND TO ROBOT:
   Legs:  q_des[leg] = DEFAULT_LEG_POS + 0.25 * leg_action
   Head:  q_des[head] = DEFAULT_HEAD_POS + 0.5 * head_action
+  Arms:  NOT controlled by this policy — held by WBC or sim PD controllers
 
 REQUIRES: Head tracking policy running in parallel (separate node)
           for ball/object tracking → provides head reference
 
-LAUNCH: command_type:=k1_interfaces/JointCommand (22 joints)
+LAUNCH: command_type:=k1_interfaces/JointCommand (22 joints, but policy only fills 14)
 ```
 
 ---

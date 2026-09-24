@@ -296,13 +296,15 @@ See **[docs/policy_io_reference.md](docs/policy_io_reference.md)** for complete 
 
 ### Quick Summary
 
-| Policy | Input | Output | Mode | Use Case |
-|--------|-------|--------|------|----------|
-| `k1_velocity_policy.pt` | 48 (latest) | 12 leg Δq | `latest` | **Default walking** |
-| `k1_velocity_student.pt` | 480 (48×10 history) | 12 leg Δq | `stacked` | Smoother gait |
-| `p2_move_student.pt` | 480 (48×10 history) | 12 leg Δq | `stacked` | Alt. distilled |
-| `p1_basic_student.pt` | 42 | 12 leg Δq | `latest` | Stand only |
-| `k1_partialctrl_base.pt` | 68 | 14 (12 leg + 2 head) | `latest` | Walk + head |
+| Policy | Input | Output | Controls | Mode | Use Case |
+|--------|-------|--------|----------|------|----------|
+| `k1_velocity_policy.pt` | 48 (latest) | 12 | Legs | `latest` | **Default walking** |
+| `k1_velocity_student.pt` | 480 (48×10 history) | 12 | Legs | `stacked` | Smoother gait |
+| `p2_move_student.pt` | 480 (48×10 history) | 12 | Legs | `stacked` | Alt. distilled |
+| `p1_basic_student.pt` | 42 | 12 | Legs | `latest` | Stand only |
+| `k1_partialctrl_base.pt` | 68 | 14 | Legs + Head | `latest` | Walk + head |
+
+**⚠️ No policy outputs full 22 DoF** — Arms (8 DoF) are always handled separately by WBC or sim PD controllers. See `docs/policy_io_reference.md#policy-output-dof-summary` for details.
 
 ---
 
