@@ -96,53 +96,48 @@ frozen base assembled with the exact 68-dim partial obs; IK `body_name=*_hand_li
 offset integrator (curriculum 0.3→1.5 m), rewards on 8 corners + corner
 centroid + progress; teacher-group obs (fully observable by design).
 
-**Status (2026-09-24 13:20 UTC):**
-- Env cfg fully instantiates (validated by configclass; complete cfg dump in
-  `scripts/pushsmoke.log` history). Gate green. **No completed sim step yet** —
-  the zero-agent checker (`scripts/zero_step.sh Isaac-Push-K1-v0`, log
-  `scripts/pushzero.log`, ~4 min/run) has been walking the constructor and has
-  now cleared, in order: `body_name` field · 1-D reward shapes · event
-  signature `(env, env_ids, scale_range, mass_range)` · `class_type` at
-  decoration · `WristTargetCommand` needs **both** `_resample_command` and
-  `_update_command` · frozen-base ActionTerm needs `raw_actions` /
-  `processed_actions` properties · **`find_joints` returns python lists in this
-  build** (tensorize before `torch.cat`).
-- **Latest zero-step (14:49 UTC): `[push] frozen base loaded:
-  models/k1_partialctrl_base.pt` — the hierarchy is alive inside the env; the
-  TorchScript forward then fails with `size of tensor a (4) must match tensor b
-  (32) at dim 0` → the exported module is **batch-locked** (exported via
-  play_record `--num_envs 2`, something baked at 32). **Next step for agent B
-  (self-contained repro, no Isaac needed):**
-  ```python
-  m = torch.jit.load("models/k1_partialctrl_base.pt")
-  for n in (1, 2, 4, 8, 16, 64):
-      try: m(torch.zeros(n, 68)); print(n, "ok")
-      except Exception as e: print(n, "FAIL", e)
-  ```
-  If batch-locked, re-export batch-agnostically (torch.jit.trace on batch 1, or
-  a thin wrapper whose forward reshapes to the incoming batch), then
-  `scripts/export_base_policy.sh` on spark02 and copy the .pt to spark04.
-  After that the remaining suspects are the joint-target writer name in
-  `FrozenBaseVelocityAction.process_actions` and the two IK terms at step 0.
-- Each round is one surgical fix + one zero-step rerun (~4 min).
-- Loop recipe: patch → `rsync …/tasks/push/ aim_spark04:…/tasks/push/` (with
-  `--no-owner --no-group --no-perms --exclude='__pycache__'`) → relaunch
-  `k1_pushzero` → `grep -E "\[zero\]|ZERO_STEP_DONE|Error" scripts/pushzero.log`.
-  The full smoke (`k1_pushsmoke`) is only worth running once the zero-step says OK.
+**Status (2026-09-24 15:40 UTC) — TRACK B GREEN:**
+- **Zero-step OK:** `ZERO_STEP_RESULT=OK` (3 steps, obs `teacher (n,108)`, rewards
+  compute, no terminations; box rests at `z = half_extents`, DR prints
+  `edge 0.71-1.47 m, mass 3.6-19.2 kg`). Gate log `scripts/pushzero.log`.
+- **Smoke OK:** `scripts/smoke_push.sh push` 16×3 reached
+  `Learning iteration 2/3`, video written, no Traceback. The last blocker was a
+  **partial-reset broadcast bug**: `reset_wrist_targets` builds an
+  `env_ids`-subset `(n,2,3)` target but `_to_base` subtracted the **full-batch**
+  `root_pos_w` (4 envs never subset → zero-step hid it; 16-env smoke crashed at
+  the first 2-env reset: `size of tensor a (2) must match (16)`). Fix:
+  `_to_base(env, pts, env_ids=None)` indexes `root_pos_w`/`root_quat_w` by
+  `env_ids`. Earlier rounds also fixed: `quat_apply` batching (`_rot_batch`),
+  `goal_quat_bf` (`quat_mul(quat_inv(base),box)`), event modes (`prestartup`
+  for USD geometry, `startup` for friction — material impls need `root_view`),
+  USD `MassAPI` + `Gf.Vec3f` inertia DR, `stage.GetPrimAtPath`,
+  `UsdShade.Material.Define` 2-arg, warp `joint_ids` int32,
+  `_update_command()` no-args, `reset_box` z=half-extents, box-frame
+  `wrist_box_proximity`, `find_joints` lists→tensor.
+- **Deliverables shipped** (commit `6f7db13`, pushed `dev/soccer-p3p4`):
+  README **P6 section** (obs/action/reward/DR tables) + `videos/push_smoke.mp4`
+  + 2 PNG frames; TRAINING.md campaign rows 10–11; launchers
+  `scripts/spark_push_{host,container}.sh`.
+- **Drive:** `push_smoke.mp4` → folder
+  [Booster videos](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy)
+  (anyone/reader, file id `14lbLlTdANq6qNy1vGc5DcGoSJWjY4I-j`); deck slide
+  added with `createVideo` source `DRIVE` (slide `slide_fe11a147`, Composio
+  session `trip`).
+- **Run-10 (P6 Reach 256×1500) RUNNING on spark04** — tmux `k1_spark_push_reach`,
+  internal smoke gate green → full run at `Learning iteration N/1500`, log
+  `scripts/reach.push.log`, wandb `p6_push_reach`.
 
-**Agent B — next steps (in order):**
-1. `ssh aim_spark04 'grep -E "ZERO_STEP_DONE|step 0|\[push\]|frozen base|Error|Traceback" ~/Projects/booster_ws/scripts/pushzero.log | tail -8'`
-2. Green smoke → the user-visible deliverable: pull
-   `aim_spark04:.../logs/rsl_rl/p6_push/*/videos/*.mp4` to
-   `isaac_tasks/k1_velocity/videos/push_smoke.mp4`, extract 2–3 PNG frames
-   (in-container ffmpeg), add a **P6 section to `isaac_tasks/k1_velocity/README.md`**
-   (obs/action/reward tables + video embed + frames), commit + push, upload the
-   video to the Drive folder (permission anyone/reader) and add a slide to the
-   deck (Composio session `trip`; `createVideo` with **source `DRIVE`**).
-3. Full training (after the smoke gate): Reach 256×1500 → warm-start Push 256×3000.
-   Launcher: copy `scripts/smoke_push.sh` pattern into `spark_push_{host,container}.sh`
-   (same tmux/log recipe as `spark_soccer_*`).
-4. Keep Track B commits limited to `tasks/push/`, `scripts/*push*`, README section.
+**Remaining:**
+1. When `PUSH_FULL_MARKER=OK` in `scripts/reach.push.log`, launch stage 2:
+   `ssh aim_spark04 '~/Projects/booster_ws/scripts/spark_push_host.sh push'`
+   (auto-picks latest `p6_push_reach` model via `--checkpoint`, gates on its own
+   16×3 smoke, then 256×3000 with `PUSH_FULL_MARKER` check).
+2. Monitor: `tmux ls` / `tail scripts/{reach,push}.push.log` on spark04.
+
+**Loop recipe (used):** patch → `rsync …/tasks/push/ aim_spark04:…/tasks/push/`
+(with `--no-owner --no-group --no-perms --exclude='__pycache__'`) → relaunch
+`k1_pushzero` → grep markers (never rc: `PUSH_SMOKE_RC=0` prints even on
+Traceback). Full smoke `k1_pushsmoke` only after zero-step OK.
 
 ---
 
