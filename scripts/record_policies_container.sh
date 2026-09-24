@@ -25,6 +25,14 @@ OUT="$REPO/isaac_tasks/k1_velocity/videos"
 mkdir -p "$OUT"
 FAILS=0
 
+latest_ckpt() {
+  find "$1" -type f -name "$2" -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-
+}
+P1_TEACHER_CKPT="${P1_TEACHER_CKPT:-$(latest_ckpt "$REPO/logs/rsl_rl/p1_basic_teacher" model_6498.pt)}"
+P1_STUDENT_CKPT="${P1_STUDENT_CKPT:-$(latest_ckpt "$REPO/logs/rsl_rl/p1_basic_student" model_1499.pt)}"
+P2_TEACHER_CKPT="${P2_TEACHER_CKPT:-$(latest_ckpt "$REPO/logs/rsl_rl/p2_move_teacher" model_2999.pt)}"
+P2_STUDENT_CKPT="${P2_STUDENT_CKPT:-$(latest_ckpt "$REPO/logs/rsl_rl/p2_move_student" model_2999.pt)}"
+
 rec() {
   # rec NAME TASK CKPT EYE LOOKAT EXPORT LABEL CMD("vx vy wz" or -)
   local name="$1" task="$2" ckpt="$3" eye="$4" lookat="$5" export="$6" label="$7" cmd="$8"
@@ -69,19 +77,19 @@ IFS='|' read -r WEYE WLOOK <<< "$CAM_WALK"
 if [ "${SKIP_CORE:-0}" != "1" ]; then
   # 1) P1 teacher (stand, rough terrain, active shoves)
   rec p1_teacher_stand Isaac-Basic-Teacher-K1-v0 \
-      "$REPO/logs/rsl_rl/p1_basic_teacher/2026-09-22_13-41-33_p1_basic_teacher/model_6498.pt" \
+      "$P1_TEACHER_CKPT" \
       "$SEYE" "$SLOOK" "$REPO/models/p1_basic_teacher.pt" "P1 teacher · model_6498" "-"
   # 2) P1 student (blind 420-dim distill, deployed export)
   rec p1_student_stand Isaac-Basic-Student-K1-v0 \
-      "$REPO/logs/rsl_rl/p1_basic_student/2026-09-23_16-20-36_p1_basic_student/model_1499.pt" \
+      "$P1_STUDENT_CKPT" \
       "$SEYE" "$SLOOK" "$REPO/models/p1_basic_student.pt" "P1 student · model_1499" "-"
   # 3) P2 teacher (rough terrain velocity, circle cmd keeps robot in frame)
   rec p2_teacher_rough Isaac-Velocity-Rough-K1-Teacher-v0 \
-      "$REPO/logs/rsl_rl/k1_velocity_teacher/2026-09-22_13-14-06/model_2999.pt" \
+      "$P2_TEACHER_CKPT" \
       "$WEYE" "$WLOOK" "$REPO/models/p2_move_teacher.pt" "P2 teacher · model_2999" "0.6 0.0 0.5"
   # 4) P2 student (distill play, flat, circle cmd)
   rec p2_student_walk Isaac-Velocity-Distill-K1-Play-v0 \
-      "$REPO/logs/rsl_rl/p2_move_student/2026-09-23_13-46-54/model_2999.pt" \
+      "$P2_STUDENT_CKPT" \
       "$WEYE" "$WLOOK" "$REPO/models/p2_move_student.pt" "P2 student · model_2999" "0.6 0.0 0.5"
 fi
 

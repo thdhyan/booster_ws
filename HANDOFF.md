@@ -60,6 +60,15 @@ the student will consume P3 + the vision estimator).
   The deck has clean poster-preview slides plus the folder link; the Slides
   connector rejected direct Drive `createVideo` embedding, so the MP4s remain
   the playable source in Drive.
+- **P1 camera correction is shipped:** the missing-robot clips were a recorder
+  camera-origin bug, not a policy failure. `play_record.py` now aims the RGB
+  recorder at env 0's robot root on every frame; corrected 15 s P1 teacher and
+  student MP4s are in the same Drive folder, and the P1 poster slides were
+  replaced with verified previews.
+- **P2 gait-v2 is smoke-gated and queued:** teacher and student 16×3 smokes
+  passed on spark04. The full teacher→student campaign is waiting in
+  `k1_spark_p2_gait` on spark02 until both P3 and P4 emit
+  `SOC_FULL_MARKER=OK`; final P2 videos must use the new `model_2999.pt` files.
 - Run-11 remains independently training on spark02 in tmux `k1_spark_hp`.
 
 **Agent A — next steps (in order):**

@@ -392,6 +392,25 @@ has labeled poster-preview slides and the shared-folder link. Direct Drive
 `createVideo` embedding was rejected by the Slides connector; final recordings
 should replace these interim previews when P3/P4 finish.
 
+### P1/P2 recording-camera correction (2026-09-24 18:40 UTC)
+
+The P1 clips were not missing the robot: the RGB recorder initialized its camera
+at world origin while rough-terrain env 0 was offset (for example, `(-15,-55)`).
+`play_record.py` now updates the recorder camera from the env-0 robot root on
+reset and every frame; P1 teacher/student were re-recorded for 750 steps with
+finite float32 traces and verified root traces. The corrected files are in the
+same reader-shared Drive folder:
+
+- [P1 teacher — corrected](https://drive.google.com/file/d/1E4ej6sOnXfPQOZQsVoTDNirDhL1goE14/view) · file ID `1E4ej6sOnXfPQOZQsVoTDNirDhL1goE14`
+- [P1 student — corrected](https://drive.google.com/file/d/1r4IswjbF32fvjL5f2oNaYSlaIZjHQDS1/view) · file ID `1r4IswjbF32fvjL5f2oNaYSlaIZjHQDS1`
+
+The P2 old checkpoint was also re-framed to show all four environments, but it
+still does not walk; it is not presented as a gait success. The gait-v2 teacher
+and student smoke gates passed on spark04. The full P2 campaign is queued on
+spark02 in tmux `k1_spark_p2_gait` behind the P3/P4 Track A markers:
+`scripts/spark_p2_gait_{host,container}.sh`. Final P2 clips must come from the
+new `model_2999.pt` checkpoints and be recorded only after both final markers.
+
 ## Drive video sync from training servers (2026-09-24)
 
 Training videos (`logs/rsl_rl/<exp>/<run>/videos/*.mp4` from the `--video`
