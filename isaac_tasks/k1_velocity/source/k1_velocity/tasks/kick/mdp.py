@@ -274,7 +274,8 @@ def ball_head_angles(env: ManagerBasedRLEnv) -> tuple[torch.Tensor, torch.Tensor
     ball_rf = ball_pos_in_robot_frame(env)
     robot = env.scene["robot"]
     ids, _ = robot.find_joints(HEAD_JOINTS, preserve_order=True)
-    yaw_q, pitch_q = robot.data.joint_pos[:, ids, 0], robot.data.joint_pos[:, ids, 1]
+    head_pos = robot.data.joint_pos[:, ids]
+    yaw_q, pitch_q = head_pos[:, 0], head_pos[:, 1]
     yaw = torch.atan2(ball_rf[:, 1], ball_rf[:, 0]) - yaw_q
     pitch = torch.atan2(ball_rf[:, 2] - 0.55, torch.hypot(ball_rf[:, 0], ball_rf[:, 1])) - pitch_q
     yaw = torch.atan2(torch.sin(yaw), torch.cos(yaw))

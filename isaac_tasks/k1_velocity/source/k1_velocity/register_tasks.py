@@ -25,4 +25,5 @@ def register_tasks() -> list[str]:
     import k1_velocity.tasks.partial  # noqa: F401 — registers partial-control (legs+head) task family
     import k1_velocity.tasks.kick  # noqa: F401 — registers P4 kick task family
     import k1_velocity.tasks.head  # noqa: F401 — registers P3 head-tracking task family
+    import k1_velocity.tasks.push  # noqa: F401 — registers P6 box-push task family
     return []

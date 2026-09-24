@@ -93,6 +93,7 @@ import k1_velocity.tasks.velocity  # noqa: F401
 import k1_velocity.tasks.partial  # noqa: F401 — hierarchical partial-control (legs+head) family
 import k1_velocity.tasks.kick  # noqa: F401 — P4 kick family (teacher/student)
 import k1_velocity.tasks.head  # noqa: F401 — P3 head-tracking family (detection-based)
+import k1_velocity.tasks.push  # noqa: F401 — P6 box-push family
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True

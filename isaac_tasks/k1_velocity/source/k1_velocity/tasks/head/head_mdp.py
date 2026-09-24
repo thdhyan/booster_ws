@@ -133,11 +133,15 @@ def _detect_yolo(env: ManagerBasedRLEnv) -> torch.Tensor:
     n = rgb.shape[0]
     out = torch.zeros((n, 3), device=rgb.device)
     model = _load_yolo()
+    # ultralytics' native list-of-HWC-uint8 path: it letterboxes internally and
+    # returns boxes in ORIGINAL pixel coords (tensor input requires stride-32 dims)
     with torch.inference_mode():
         for s in range(0, n, 256):
             e = min(s + 256, n)
-            batch = rgb[s:e].permute(0, 3, 1, 2).contiguous()
-            res = model.predict(batch, verbose=False, device=0, classes=[YOLO_CLASS])
+            frames = [f.cpu().numpy() for f in rgb[s:e]]
+            res = model.predict(frames, verbose=False, device=0, classes=[YOLO_CLASS])
+            if not isinstance(res, (list, tuple)):
+                res = [res]
             for j, r in enumerate(res):
                 boxes = getattr(r, "boxes", None)
                 if boxes is None or len(boxes) == 0:
@@ -145,10 +149,9 @@ def _detect_yolo(env: ManagerBasedRLEnv) -> torch.Tensor:
                 best = int(torch.argmax(boxes.conf).item())
                 cx = float((boxes.xyxy[best, 0] + boxes.xyxy[best, 2]) / 2.0)
                 cy = float((boxes.xyxy[best, 1] + boxes.xyxy[best, 3]) / 2.0)
-                w, h = rgb.shape[2], rgb.shape[1]
                 out[s + j, 0] = 1.0
-                out[s + j, 1] = 2.0 * cx / w - 1.0
-                out[s + j, 2] = 1.0 - 2.0 * cy / h
+                out[s + j, 1] = 2.0 * cx / rgb.shape[2] - 1.0
+                out[s + j, 2] = 1.0 - 2.0 * cy / rgb.shape[1]
     st.visible = out[:, 0] > 0.5
     return out
 
@@ -197,7 +200,8 @@ def track_ball_angle_exp(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Ten
     ball_rf = ball_pos_in_robot_frame(env)
     robot = env.scene["robot"]
     ids, _ = robot.find_joints(HEAD_JOINTS, preserve_order=True)
-    yaw_q, pitch_q = robot.data.joint_pos[:, ids, 0], robot.data.joint_pos[:, ids, 1]
+    head_pos = robot.data.joint_pos[:, ids]
+    yaw_q, pitch_q = head_pos[:, 0], head_pos[:, 1]
     yaw_err = torch.atan2(ball_rf[:, 1], ball_rf[:, 0]) - yaw_q
     pitch_err = torch.atan2(ball_rf[:, 2] - 0.55, torch.hypot(ball_rf[:, 0], ball_rf[:, 1])) - pitch_q
     yaw_err = torch.atan2(torch.sin(yaw_err), torch.cos(yaw_err))
@@ -212,11 +216,14 @@ def time_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 # curriculum: ball speed 0 -> v_max (static centring first, then rolling)
 # ---------------------------------------------------------------------------
-def ball_speed_curriculum(env: ManagerBasedRLEnv, start_iter: int, end_iter: int, v_max: float) -> float:
+def ball_speed_curriculum(env: ManagerBasedRLEnv, env_ids, start_iter: int = 200,
+                         end_iter: int = 1200, v_max: float = 0.8,
+                         steps_per_iter: int = 32) -> float:
+    """0 -> v_max ball roll speed (iterations via physics steps / steps_per_iter)."""
     st = _state(env)
-    frac = min(max(env.common_step_counter / max(end_iter - start_iter, 1), 0.0), 1.0)
-    if env.common_step_counter < start_iter:
-        frac = 0.0
+    iteration = (env.sim.get_physics_step_count() // env.cfg.decimation) / steps_per_iter
+    span = max(end_iter - start_iter, 1)
+    frac = min(max((iteration - start_iter) / span, 0.0), 1.0)
     st.ball_speed = v_max * frac
     return st.ball_speed
 
