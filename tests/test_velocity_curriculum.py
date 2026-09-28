@@ -70,12 +70,41 @@ class FakeTerm:
         return self.cfg.ranges.ang_vel_z[1]
 
 
-class FakeValue:
+class FakeTensor:
+    """Stand-in for a torch scalar: supports .mean() and .item()."""
+
     def __init__(self, v):
-        self._v = v
+        self._v = float(v)
 
     def mean(self):
+        return self
+
+    def item(self):
         return self._v
+
+
+class FakeStepReward:
+    """Stand-in for the (num_envs, num_terms) tensor, so `[:, idx]` works.
+
+    Values are produced from a live callable, not a snapshot: the real
+    RewardManager recomputes _step_reward every step, so a fake that captured
+    the value at construction would silently ignore later changes and make the
+    contraction path untestable.
+    """
+
+    def __init__(self, value_fn, reads=None):
+        self._value_fn = value_fn
+        self._reads = reads if reads is not None else []
+
+    def __getitem__(self, key):
+        self._reads.append(key)
+        col = key[1] if isinstance(key, tuple) else key
+        return FakeTensor(self._value_fn(col))
+
+
+class FakeRewardTermCfg:
+    def __init__(self, weight):
+        self.weight = weight
 
 
 class FakeLogger:
@@ -94,6 +123,7 @@ class FakeEnv:
         self.tracking_calls = 0
 
         outer = self
+        self.reward_reads = []
 
         class FakeCommandTensor:
             """get_command returns a TENSOR, not the term. Using it is the bug."""
@@ -107,14 +137,36 @@ class FakeEnv:
                 return outer.term
 
         class RM:
+            # Shaped like Isaac Lab's RewardManager: NO get_term, per-step values
+            # in a (num_envs, num_terms) matrix indexed by _term_names, and the
+            # stored values are func * weight.
             active_terms = ["track_lin_vel_xy_exp", "other"]
+            _term_names = ["track_lin_vel_xy_exp", "other"]
+            WEIGHT = 10.0
 
-            def get_term(self, name):
+            def __init__(self):
+                # func * weight, recomputed on every read like the real manager.
+                self._step_reward = FakeStepReward(
+                    lambda col: (
+                        outer._tracking * self.WEIGHT if col == 0 else 0.0
+                    ),
+                    reads=outer.reward_reads,
+                )
+
+            def get_term_cfg(self, name):
+                return FakeRewardTermCfg(self.WEIGHT)
+
+            def get_active_iterable_terms(self, env_idx):
                 outer.tracking_calls += 1
-                return FakeValue(outer._tracking)
+                return [
+                    ("track_lin_vel_xy_exp", [outer._tracking * self.WEIGHT]),
+                    ("other", [0.0]),
+                ]
 
         self.command_manager = CM()
+        self.reward_reads = []
         self.reward_manager = RM()
+        self.tracking_calls = 0
 
 
 def make(env=None, **kw):
@@ -182,8 +234,8 @@ def test_first_call_installs_range_without_measuring():
     env = FakeEnv()
     cur = make(env)
     cur(env, None)
-    # The first call discovers the attribute; it must not also gate on a reward.
-    assert env.tracking_calls == 0
+    # The first call installs the range; it must not also gate on a reward.
+    assert len(env.reward_reads) == 0
     assert env.term.lin == pytest.approx(0.5)
 
 
@@ -350,7 +402,7 @@ def test_interval_gates_measurement_rate():
     cur = make(env, patience=1, interval_steps=10)
     prime(cur, env)
     run(cur, env, intervals=1)
-    assert env.tracking_calls == 1, "did not measure once the interval elapsed"
+    assert len(env.reward_reads) == 1, "did not measure once the interval elapsed"
 
 
 def test_default_ceiling_matches_real_robot_evidence():
@@ -531,3 +583,43 @@ def test_call_params_all_have_defaults():
                 )
                 return
     raise AssertionError("VelocityRangeCurriculumTerm.__call__ not found")
+
+
+def test_unknown_reward_weight_raises_rather_than_mis_gating():
+    """A wrong weight would compare a weighted value to a raw threshold.
+
+    The gate threshold (0.85) is expressed against the RAW exponential, but
+    RewardManager stores func * weight. Guessing the weight would silently
+    mis-gate the curriculum, so an unreadable weight is an error.
+    """
+    env = FakeEnv(tracking=0.99)
+    # get_term_cfg is a bound method on the class, so shadow it on the instance
+    # rather than deleting it.
+    env.reward_manager.get_term_cfg = None
+    cur = make(env, patience=1)
+    prime(cur, env)
+    with pytest.raises(AttributeError, match="get_term_cfg"):
+        run(cur, env, intervals=1)
+
+
+def test_zero_weight_raises():
+    class ZeroCfg:
+        weight = 0.0
+
+    env = FakeEnv(tracking=0.99)
+    env.reward_manager.get_term_cfg = lambda name: ZeroCfg()
+    cur = make(env, patience=1)
+    prime(cur, env)
+    with pytest.raises(ValueError, match="weight"):
+        run(cur, env, intervals=1)
+
+
+def test_raw_value_is_weight_normalised():
+    """With weight 10 the stored value is 10x the raw one; the gate must see the raw."""
+    env = FakeEnv(tracking=0.95)
+    assert env.reward_manager.WEIGHT == 10.0
+    cur = make(env, patience=1)
+    assert cur._reward_mean() == pytest.approx(0.95), (
+        "must divide by the weight, otherwise 0.95*10=9.5 would sail past any "
+        "threshold on the raw scale"
+    )

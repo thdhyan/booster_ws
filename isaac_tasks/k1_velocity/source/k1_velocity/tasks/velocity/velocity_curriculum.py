@@ -111,13 +111,63 @@ class VelocityRangeCurriculum:
         return mgr._terms["base_velocity"]
 
     def _reward_mean(self):
-        """Mean of the velocity-tracking reward term, or None if not found."""
+        """Mean RAW value of the velocity-tracking reward term, or None.
+
+        Two Isaac Lab details matter here and both cost a launch:
+
+        * ``RewardManager`` has **no** ``get_term``. The per-step values live in
+          a ``_step_reward`` matrix of shape (num_envs, num_terms), indexed by
+          position in ``_term_names``. Calling ``get_term`` raises
+          ``AttributeError: 'RewardManager' object has no attribute 'get_term'``.
+        * ``_step_reward`` holds ``func(...) * weight``, i.e. the **weighted**
+          value. ``track_lin_vel_xy_exp`` has weight 10.0, so the raw exponential
+          has to be recovered by dividing by the weight or the 0.85 threshold
+          below is meaningless (it would compare against ~8.5).
+
+        The public ``get_active_iterable_terms`` is used as a fallback, but it
+        loops per env and still returns weighted values.
+        """
         mgr = self._env.reward_manager
-        names = [n for n in mgr.active_terms if self.reward_name_contains in n]
-        if not names:
+        names = list(getattr(mgr, "active_terms", []) or [])
+        target = next((n for n in names if self.reward_name_contains in n), None)
+        if target is None:
             return None
-        value = mgr.get_term(names[0]).mean()
-        return float(value)
+
+        weight = 1.0
+        cfg_getter = getattr(mgr, "get_term_cfg", None)
+        if cfg_getter is None:
+            raise AttributeError(
+                "RewardManager has no get_term_cfg, so the reward weight is unknown. "
+                "The gate threshold is expressed against the RAW term value, so "
+                "guessing the weight would compare a weighted value to a raw "
+                "threshold and silently mis-gate the curriculum."
+            )
+        cfg = cfg_getter(target)
+        raw_weight = getattr(cfg, "weight", None)
+        if not raw_weight:
+            raise ValueError(
+                f"reward term '{target}' has weight {raw_weight!r}; cannot recover the "
+                "raw term value the success_threshold is expressed against"
+            )
+        weight = float(raw_weight)
+
+        values = None
+        step_reward = getattr(mgr, "_step_reward", None)
+        term_names = getattr(mgr, "_term_names", None)
+        if step_reward is not None and term_names is not None and target in term_names:
+            idx = list(term_names).index(target)
+            col = step_reward[:, idx]
+            values = float(col.mean().item())
+        else:
+            getter = getattr(mgr, "get_active_iterable_terms", None)
+            if getter is not None:
+                for name, vals in getter(0):
+                    if name == target:
+                        values = float(vals[0])
+                        break
+        if values is None:
+            return None
+        return values / weight
 
     def current_lin(self) -> float:
         return self._lin
