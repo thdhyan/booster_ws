@@ -78,3 +78,10 @@ retargeting SMPL-X/BVH/FBX/PICO → humanoid joint space.
 
 Pipeline: video → GVHMR → GMR(K1) → {live replay via fleet sim} or
 {dataset → motion-tracking RL}.
+
+> **Superseded for implementation purposes** by
+> [`video_to_motion_plan.md`](video_to_motion_plan.md) (2026-09-27) — that
+> document re-audits GMR/GVHMR against the current NVIDIA stack (SOMA
+> Retargeter, MotionBricks), the Booster official repos, and what is already
+> installed on this machine, and lays out the staged replay-vs-RL-tracking
+> plan. Keep this file as the original research notes.

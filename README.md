@@ -177,7 +177,10 @@ saves snapshots. See `docs/robocup_gmr_research.md` for the Booster
 ## Docs
 
 - `guide_real.md` — **real robot deployment guide** (network, policies, safety, troubleshooting)
+- `docs/video_to_motion_plan.md` — **video → K1 motion plan** (GVHMR/GMR/SOMA/MotionBricks
+  retargeting, replay vs. RL tracking, staged phases)
+- `docs/policy_io_reference.md` — per-policy input/output diagrams + 12-DoF rationale
 - `HANDOFF.md` — environment setup, current state, next steps
 - `docs/robocup_gmr_research.md` — RoboCup sim research + GMR (video→motion)
-  pipeline integration plan
+  pipeline integration plan (original research notes)
 - `TASKS.md` — phase checklist
