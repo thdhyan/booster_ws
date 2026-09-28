@@ -11,7 +11,10 @@ cd "$REPO" || { echo "PUSH_BASE_CD_FAIL"; exit 1; }
 export WANDB_API_KEY="$(cat "$REPO/logs/.wandb_key" 2>/dev/null)"
 if [ -n "$WANDB_API_KEY" ]; then echo "WANDB_KEY_LOADED"; else echo "WANDB_KEY_MISSING"; fi
 
-CKPT="$REPO/logs/spark04/rsl_rl/k1_partialctrl_base/2026-09-24_18-44-39_k1_partialctrl_base/model_800.pt"
+# Checkpoint materialized under the STANDARD log root (train.py resolves
+# --checkpoint relative to logs/rsl_rl/<experiment> and get_checkpoint_path
+# regex-matches run dir NAMES, so a ../../spark04/... relpath never matches).
+CKPT="$REPO/logs/rsl_rl/k1_partialctrl_base/2026-09-24_18-44-39_k1_partialctrl_base/model_800.pt"
 [ -s "$CKPT" ] || { echo "PUSH_BASE_RESUME_GATE=NO_CKPT"; exit 9; }
 TASK=Isaac-Velocity-PartialCtrl-K1-v0
 
