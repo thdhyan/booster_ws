@@ -28,8 +28,8 @@ run_one() {
   local name="$1" task="$2" ckpt="$3" export_path="$4" label="$5"
   echo "=== P2_REC $name checkpoint=$ckpt"
   "$PY" -u isaac_tasks/k1_velocity/scripts/play_record.py \
-    --task "$task" --checkpoint "$ckpt" --num_envs 4 --steps 750 --headless \
-    --eye 5.5,-5.5,3.0 --lookat 0,0,0.5 --cmd 0.6 0 0 --panel_video \
+    --task "$task" --checkpoint "$ckpt" --num_envs 4 --steps 900 --headless \
+    --eye 5.5,-5.5,3.0 --lookat 0,0,0.5 --cmd 0.4 0 0 --panel_video \
     --video_out "$OUT/${name}.mp4" --trace_out "$OUT/${name}_trace.npz" \
     --export "$export_path" --label "$label"
   local rc=$?
