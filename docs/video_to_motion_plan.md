@@ -1,8 +1,51 @@
 # Video → Motion on the Booster K1 — Implementation Plan
 
-Date: 2026-09-27 · Status: plan (research complete, not yet implemented)
-Scope: retarget recorded human motion (Makarena dance, arbitrary video) onto the
-Booster K1, first in simulation, then on hardware.
+Date: 2026-09-27 · Status: research complete; feasibility gate implemented
+Branch: `feat/video-to-motion`
+Scope: retarget recorded human motion (Makarena dance, arbitrary video) **and**
+text-generated motion onto the Booster K1, first in sim, then on hardware.
+
+---
+
+## 0. TL;DR — the two questions you asked
+
+**"How do we know SOMA retargeting won't crash the robot?"**
+
+We don't — and SOMA says so itself:
+
+> "Generated motion is **kinematic**; validate its safety, feasibility, and
+> controller compatibility in simulation before hardware use." — SOMA README
+>
+> "Optimizer loss measures kinematic tracking and smoothness. **It does not prove
+> physical feasibility or controller performance.**" — `compare-and-tune.md`
+
+So the answer is a **gate**, not a guarantee. Built:
+[`scripts/motion_feasibility_gate.py`](../scripts/motion_feasibility_gate.py) —
+10 checks (joint limits / velocity / accel / torque bound, foot penetration,
+float, slip, root height, double support, CoM-over-support) against the real K1
+URDF limits and real MuJoCo forward kinematics.
+
+It already earned its keep — run against **Booster's own shipped K1 motions**:
+
+```
+k1_mj2_seg1_50fps.csv    7 blocking failures
+k1_fight_001_30fps.csv   8 blocking failures
+```
+
+Those are *RL training references*, not hardware-safe playback scripts. A dance
+retargeted by GMR or SOMA needs the same treatment.
+
+**"I want both text-to-motion and video-to-motion."** They converge:
+
+```
+VIDEO  ──GVHMR──►  SMPL-X  ─┐
+                             ├──►  retarget  ──► K1 CSV ──► GATE ──► RL tracker
+TEXT   ──Kimodo──►  SOMA/G1 ─┘   (GMR and/or SOMA)
+```
+
+`Kimodo-SMPLX` emits AMASS npz → GMR consumes directly.
+`Kimodo-SOMA` emits SOMA skeleton → SOMA Retargeter consumes directly.
+Use **both** retargeters and compare (§6).
 
 ---
 
@@ -218,12 +261,18 @@ isaac_tasks/k1_motion/                       # new package
   motions/K1/makarena.npz                    # via csv_to_npz.py
 
 scripts/
-  gmr_pkl_to_csv.py                          # GMR pkl → booster CSV contract
-  extract_gvhmr_smplx.py                     # video → SMPL-X npz (thin wrapper)
+  motion_feasibility_gate.py                   # ← IMPLEMENTED. the safety gate.
+  gmr_pkl_to_csv.py                            # GMR pkl → booster CSV contract
+  extract_gvhmr_smplx.py                       # video → SMPL-X npz (thin wrapper)
 
 src/k1_control/
-  k1_control/motion_replay_node.py           # CSV → /{ns}/joint_commands (kinematic, debug)
-  k1_control/sdk_bridge_node.cpp             # EXTEND to 22 DoF (head + arms)
+  k1_control/motion_replay_node.py             # CSV → /{ns}/joint_commands (kinematic, debug)
+  k1_control/sdk_bridge_node.cpp               # EXTEND to 22 DoF (head + arms)
+  k1_control/imu_source_node.py                # rpy ImuState → quat sensor_msgs/Imu
+
+external (cloned outside the repo, per their instructions)
+  ~/Projects/soma-retargeter/                  # + assets/robotics/booster/booster_k1/
+  ~/Projects/kimodo/                           # text-to-motion
 
 docs/
   video_to_motion_plan.md                    # this file
@@ -249,27 +298,151 @@ Reused, not duplicated: `/{ns}/joint_commands`, `sim_validate.launch.py`,
 | **BONES-SEED motion licence** | medium | SOMA bundled data is NVIDIA Sample Data Eval Licence — not Apache-2.0 |
 | **22-DoF hardware export mismatch** | high | extend SDK bridge before Phase 5, test in Sim2Sim first |
 | **No safe fall→dance transition** | high | author a blend; test it repeatedly in sim before hardware |
+| **`ImuState` has rpy, not quat** | high | our `_imu_cb` reads a quaternion → projected gravity silently dies. See `docs/sdk_ros2_audit.md` |
+| **SOMA `sole_normal_local` for K1** | medium | K1 foot box is at local `[0.026, 0, -0.02]`, so sole-up is **-Z**; default assumes +Z and silently skips flattening |
+| **Kimodo VRAM** | medium | ~17 GB, or `TEXT_ENCODER_DEVICE=cpu` (<3 GB). Laptop 4060 is 8 GB — run on `dl`/spark |
+| **Registering a new SOMA *source* is a code change** | low | we only need a new *robot* target, which is config-only |
+| **Gate is kinematic, not physics** | by design | MuJoCo → Gazebo → Isaac rollout is still mandatory (Phase 4) |
 
 ---
 
-## 6. Where the "smart" NVIDIA stack fits (later, not now)
+## 5b. SOMA Retargeter — adding K1 as a target
+
+SOMA bundles `unitree_g1`, `unitree_h2`, `booster_t1`, `agibot_x2ultra`,
+`agibot-a3t3`. **K1 is not there**, but adding it is a documented guided
+process, not a research project. `booster_t1` is the closest sibling (same
+vendor, 23 DoF, same leg topology) and is a good template.
+
+```bash
+git clone https://github.com/NVIDIA/soma-retargeter
+cd soma-retargeter && git lfs install
+uv run python app/tools/robot_config_generator.py --viewer gl   # configurator
+```
+
+We already have the inputs it wants — `K1_22dof.urdf` + `meshes/` in
+`src/k1_description/assets/robots/K1/`. Note the configurator **cannot read
+xacro**, so use the plain `.urdf` (we have it), and it needs
+`+Z up, +X forward, +Y left`.
+
+What it produces per robot:
+```
+assets/robotics/booster/booster_k1/
+  manifest.json
+  desc/K1_22dof.urdf + meshes/
+  configs/
+    soma_to_booster_k1_scaler_config.json
+    soma_to_booster_k1_retargeter_config.json
+    booster_k1_post_processing_config.json
+```
+
+Mapping for K1 (22 DoF, 12 legs + 8 arms + 2 head — vs H1's 19):
+
+| SOMA joint | K1 link | note |
+|---|---|---|
+| `Hips` | `Trunk` | **must** be the root link |
+| `Chest` | `Trunk` | K1 has no separate torso link — competes with Hips; expect to leave one unmapped |
+| `LeftArm` / `RightArm` | `Left_Arm_3` / `Right_Arm_3` | from GMR's K1 config, these are the shoulder links |
+| `LeftForeArm` / `RightForeArm` | `left_hand_link` / `right_hand_link` | |
+| `LeftLeg` / `RightLeg` | `Left_Hip_Yaw` / `Right_Hip_Yaw` | GMR's K1 config uses these as the hip landmark |
+| `LeftShin` / `RightShin` | `Left_Shank` / `Right_Shank` | |
+| `LeftFoot` / `RightFoot` | `left_foot_link` / `right_foot_link` | |
+| `Head` | `Head_2` | K1 **has** a head, unlike H1 |
+
+Then run the **IK weight optimizer** on the bundled 15 BVH motions, and finally
+enable the foot-plant post-processing (see §5c).
+
+### 5c. Why foot planting is the whole ballgame
+
+SOMA's `documentation/foot-contact.md` is the most important page in the repo
+for our purposes. Retargeting without it produces visible skating and the gate
+will (correctly) reject the clip. Key knobs:
+
+| Stage | Param | Default | What it does |
+|---|---|---|---|
+| detect | `velocity_contact` | 0.1 m/s | foot speed below this opens a contact window |
+| detect | `jerk_contact` | -0.05 m/s³ | jerk trigger |
+| accept | `max_flatness_deg` | 25° | max sole tilt from world up to accept a plant |
+| accept | `plant_speed_threshold` | 0.15 m/s | max foot speed for a valid plant |
+| accept | `min_plant_frames` | 3 | drop shorter runs |
+| correct | `propagation_ratio` | 0.4 | fraction of adjacent swing that takes position correction |
+| correct | `enable_flatten_foot_plant` | true | flatten sole to horizontal |
+
+Requires two enable flags in `*_retargeter_config.json`:
+`enable_post_processing` and `enable_contact_processing`.
+
+For K1 specifically, `sole_normal_local` must be set if the foot effector
+link's local `+Z` is not sole-up at the zero pose — the K1 foot box sits at
+local `[0.026, 0, -0.02]`, so the sole normal is **-Z**, not +Z. Getting this
+wrong silently disables flattening.
+
+## 5d. Text-to-motion — Kimodo
+
+[Kimodo](https://github.com/nv-tlabs/kimodo) (NVIDIA, arXiv 2603.15546) is a
+kinematic motion **diffusion** model: text prompt → 3D motion. Apache-2.0 code,
+3.5k stars, checkpoints on HuggingFace under the NVIDIA Open Model licence.
+
+```bash
+git clone https://github.com/nv-tlabs/kimodo && cd kimodo
+conda create -n kimodo python=3.10 -y && conda activate kimodo
+pip install -e .
+kimodo_gen --prompt "a person dances the macarena with arms raised" \
+           --model Kimodo-SOMA-SEED-v1.1 --duration 6
+```
+
+Needs ~17 GB VRAM, or set `TEXT_ENCODER_DEVICE=cpu` (<3 GB). Our laptop has an
+8 GB 4060 — so **run this on `dl` or a spark, not the laptop**.
+
+Model choice for our pipeline:
+
+| Model | Output | Feeds |
+|---|---|---|
+| `Kimodo-SMPLX-RP-v1` | AMASS npz | → **GMR** → K1 (NVIDIA documents this exact path) |
+| `Kimodo-SOMA-SEED-v1.1` | SOMA skeleton | → **SOMA Retargeter** → K1 (needs our K1 target) |
+| `Kimodo-G1-*` | MuJoCo qpos CSV | G1 only — wrong robot, skip |
+
+Take `Kimodo-SMPLX` first: it needs no new robot target because GMR already
+knows `booster_k1`. Use `Kimodo-SOMA` later once the SOMA K1 config exists —
+that route is the one that can emit **robot-native** motion, avoiding the
+SMPL-X detour entirely.
+
+Also relevant: **BONES-SEED** (142,220 clips, HF `bones-studio/seed`) is the
+public corpus both SOMA and Kimodo-SEED are built from, in SOMA BVH and G1
+formats. It is a *dataset* option if we ever want to train our own policy
+without writing a single prompt. Text annotations are in
+`nvidia/SEED-Timeline-Annotations`.
+
+**ARDY** (2026-07-10, `nv-tlabs/ardy`) is Kimodo's real-time successor — worth
+knowing about, not needed now.
+
+---
+
+## 6. Where the "smart" NVIDIA stack fits
 
 The MotionBricks / SOMA / GEAR-SONIC / GR00T-WBC family is the *right* long-term
-answer, but the wrong tool today:
+answer. Updated for the SOMA + text-to-motion decision:
 
 - **MotionBricks** generates motion from prompts at 15 k FPS. We don't need
   generation — we have one specific dance we want reproduced faithfully.
   Its checkpoints are G1-specific (23+ DoF, different proportions) and the full
   robotics-integration release is ~1 month out.
-- **SOMA Retargeter** is the more immediately useful piece: its **robot
-  configurator** and **IK-weight optimiser** are better tooling than anything we
-  would write. It bundles `booster_t1`; adding K1 is a documented guided
-  process. Recommend: after Phase 1 works, port the K1 config and compare
-  foot-plant quality against GMR. Keep whichever wins.
+- **SOMA Retargeter** is the tooling win. Its **robot configurator**,
+  **IK-weight optimiser** and **foot-plant correction** are better than anything
+  we would write, and K1 is a guided add (§5b). It bundles `booster_t1`.
+- **MotionBricks** stays out of scope *for this clip*. It generates motion from
+  prompts at 15 k FPS — we want one specific dance reproduced faithfully, not
+  generated. Checkpoints are G1-specific and the full robotics release is ~1
+  month out. It becomes interesting later, as a **style library**
+  (zombie walk, injured walk) rather than specific clips.
 
-**Recommended order:** GMR (day 1) → SOMA K1 config (if GMR foot-plating is
-poor) → BeyondMimic RL (the actual product) → MotionBricks (only if we ever want
-a style library rather than specific clips).
+**Recommended order:**
+```
+1. GMR + Kimodo-SMPLX          day 1     — no new robot config needed
+2. feasibility gate             done      — scripts/motion_feasibility_gate.py
+3. SOMA K1 target (§5b)         1-2 days  — configurator + IK optimiser
+4. compare GMR vs SOMA          0.5 day   — keep whichever foot-plants better
+5. BeyondMimic RL tracker       3-7 GPU-days  ← the actual product
+6. MotionBricks                 later     — only for a style library
+```
 
 ---
 
