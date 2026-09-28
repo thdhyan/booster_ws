@@ -40,6 +40,8 @@ import isaaclab.terrains as terrain_gen
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
+from . import gait_rewards as gait
+
 try:  # Isaac Lab 3.0-EA layout (dl); isaac-lab image renamed this package
     import isaaclab_tasks.core.velocity.mdp as mdp
 except (ImportError, ModuleNotFoundError):
@@ -68,6 +70,10 @@ K1_ARM_HEAD_JOINTS = [
     "ALeft_Shoulder_Pitch", "Left_Shoulder_Roll", "Left_Elbow_Pitch", "Left_Elbow_Yaw",
     "ARight_Shoulder_Pitch", "Right_Shoulder_Roll", "Right_Elbow_Pitch", "Right_Elbow_Yaw",
 ]
+
+# Nominal standing trunk height (matches BOOSTER_K1_CFG init_state z). Used as the
+# upright target for the base_height reward and as the fall-termination reference.
+K1_TRUNK_HEIGHT = 0.57
 
 # K1 articulation — imported from booster_train (real actuators, K1_22dof.urdf, init_pos z=0.57)
 K1_ARTICULATION_CFG = BOOSTER_K1_CFG
@@ -150,7 +156,7 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
         mesh_prim_paths=["/World/ground"],
     )
 
-    # Contact sensor for foot forces (feet_air_time, feet_slide rewards).
+    # Contact sensor for foot forces (feet_slide, undesired_contacts, terminations).
     # Fixed via scripts/flatten_k1_usd.py which applies PhysxContactReportAPI to all rigid bodies.
     contact_forces = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*",
@@ -235,11 +241,15 @@ class ObservationsCfg:
 @configclass
 class ActionsCfg:
     """Joint position targets for 12 leg joints (offsets from default)."""
+    # AGILE uses scale=1.0 with an explicit +/-1.0 rad clip. Our old scale=0.25
+    # capped every leg joint to a quarter-radian of authority, which is not
+    # enough to recover a tilt -- the policy could not physically save itself.
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=K1_LEG_JOINTS,
-        scale=0.25,
+        scale=1.0,
         use_default_offset=True,
+        clip={".*": (-1.0, 1.0)},
     )
 
 
@@ -259,15 +269,18 @@ class CommandsCfg:
     base_velocity = mdp.UniformVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(8.0, 12.0),
-        rel_standing_envs=0.05,
+        # AGILE: 25% of envs get a true stand command, and the ranges are
+        # deliberately small (0.5 m/s). Asking a biped that cannot yet stand for
+        # 1.5 m/s guarantees collapse. Widen via curriculum, not day one.
+        rel_standing_envs=0.25,
         rel_heading_envs=0.0,
         heading_command=False,
         heading_control_stiffness=0.5,
         debug_vis=True,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.5, 1.5),
-            lin_vel_y=(-0.75, 0.75),
-            ang_vel_z=(-1.5, 1.5),
+            lin_vel_x=(-0.5, 0.5),
+            lin_vel_y=(-0.5, 0.5),
+            ang_vel_z=(-1.0, 1.0),
             # Kept in the schema but inactive while heading_command=False.
             heading=(0.0, 0.0),
         ),
@@ -279,36 +292,57 @@ class CommandsCfg:
 # ---------------------------------------------------------------------------
 @configclass
 class RewardsCfg:
-    """Velocity tracking plus H1/G1-style bipedal gait shaping.
+    """Velocity tracking plus AGILE/T1-style bipedal gait shaping.
 
-    The air-time term explicitly rewards single-support phases (one foot in the
-    air while the other is loaded), while the slide and vertical/angular terms
-    stop the policy from solving walking by skating or hopping.  These are the
-    same core ingredients used by Isaac Lab's H1/G1 velocity tasks.
+    Weights and structure follow NVIDIA's AGILE velocity task for the Booster T1
+    (``agile/rl_env/tasks/locomotion/t1/velocity_env_cfg.py``).  Three
+    substantive differences from our previous gait-v2 set:
+
+    1. **No air-time reward.**  ``feet_air_time`` pays for lifting a foot, and is
+       maximised by hopping, skipping (never loading one foot) or bouncing.  It
+       also fought our own ``lin_vel_z_l2``.  AGILE omits air time entirely and
+       shapes the feet directly instead -- slip, roll, yaw-vs-base, stance width.
+    2. **A trunk-height term.**  Previously the only upright signals were the fall
+       *termination* (a cliff, not a gradient) and a weak ``flat_orientation_l2``,
+       so nothing rewarded staying up before falling.  P3 fell face-first for
+       exactly this reason.  ``base_height`` supplies the dense gradient.
+    3. **Stronger tracking and orientation.**  Tracking is the task and gets the
+       dominant weight; tilt is penalised hard because a biped leaning past ~30
+       deg cannot recover.
     """
 
-    # Velocity tracking
+    # --- Task: velocity tracking (AGILE weight 5.0, std 0.2) ---
     track_lin_vel_xy_exp = RewTerm(
         func=mdp.track_lin_vel_xy_yaw_frame_exp,
-        weight=1.5,
-        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
+        weight=5.0,
+        params={"command_name": "base_velocity", "std": 0.25},
     )
     track_ang_vel_z_exp = RewTerm(
         func=mdp.track_ang_vel_z_world_exp,
-        weight=1.5,
-        params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
+        weight=5.0,
+        params={"command_name": "base_velocity", "std": 0.25},
     )
-    # Gait: one-foot-at-a-time stepping, with a shorter threshold so short K1
-    # steps receive signal instead of a sparse late reward.
-    feet_air_time = RewTerm(
-        func=mdp.feet_air_time_positive_biped,
-        weight=0.5,
+
+    # --- Upright / posture (AGILE) ---
+    # sensor_cfg shifts the target by the terrain height under the trunk, so this
+    # stays correct on rough ground instead of pinning an absolute world height.
+    base_height = RewTerm(
+        func=mdp.base_height_l2,
+        weight=-8.0,
         params={
-            "command_name": "base_velocity",
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
-            "threshold": 0.3,
+            "target_height": K1_TRUNK_HEIGHT,
+            "asset_cfg": SceneEntityCfg("robot"),
+            "sensor_cfg": SceneEntityCfg("height_scanner"),
         },
     )
+    flat_orientation_l2 = RewTerm(
+        func=mdp.flat_orientation_l2,
+        weight=-5.0,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=["Trunk"])},
+    )
+    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
+
+    # --- Gait: foot shaping in place of air time (AGILE) ---
     feet_slide = RewTerm(
         func=mdp.feet_slide,
         weight=-0.25,
@@ -317,25 +351,68 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
         },
     )
-    # Termination
-    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
-    # Regularization / posture
-    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
-    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    feet_roll = RewTerm(
+        func=gait.feet_roll_l2,
+        weight=-0.1,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"])},
+    )
+    feet_yaw_diff = RewTerm(
+        func=gait.feet_yaw_diff_l2,
+        weight=-0.2,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"])},
+    )
+    feet_yaw_mean = RewTerm(
+        func=gait.feet_yaw_mean_vs_base,
+        weight=-4.0,
+        params={
+            "feet_asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
+            "base_body_cfg": SceneEntityCfg("robot", body_names=["Trunk"]),
+        },
+    )
+    feet_distance = RewTerm(
+        func=gait.feet_distance_from_ref,
+        weight=-0.2,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
+            "ref_distance": 0.2,
+        },
+    )
+
+    # --- Regularization (AGILE) ---
+    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)
+    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.5)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.5)
     dof_acc_l2 = RewTerm(
         func=mdp.joint_acc_l2, weight=-2.5e-7,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Hip_.*", ".*_Knee_.*"])},
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
     )
     dof_torques_l2 = RewTerm(
-        func=mdp.joint_torques_l2, weight=-2.0e-6,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Hip_.*", ".*_Knee_.*", ".*_Ankle_.*"])},
+        func=mdp.joint_torques_l2, weight=-1.0e-4,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
     )
+    ankle_roll_torques = RewTerm(
+        func=mdp.joint_torques_l2, weight=-2.0e-3,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Ankle_Roll"])},
+    )
+    # ALL leg joints, not just the ankles.  Previously hips and knees could be
+    # driven to their limits essentially for free -- a hyperextension collapse.
     dof_pos_limits = RewTerm(
         func=mdp.joint_pos_limits, weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_Ankle_.*"])},
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
     )
+    dof_vel_limits = RewTerm(
+        func=mdp.joint_vel_limits, weight=-1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS), "soft_ratio": 0.9},
+    )
+    torque_limits = RewTerm(
+        func=mdp.applied_torque_limits, weight=-0.01,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
+    )
+    body_acc_l2 = RewTerm(
+        func=mdp.body_lin_acc_l2, weight=-2.0e-5,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+
     # Keep the non-locomotion arms/head near the K1 default pose.
     joint_deviation_arms = RewTerm(
         func=mdp.joint_deviation_l1, weight=-0.1,
@@ -364,10 +441,6 @@ class RewardsCfg:
     )
 
 
-# ---------------------------------------------------------------------------
-# MDP — Terminations
-# ---------------------------------------------------------------------------
-@configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     # Contact-free fall detection (height-based, not contact-based).
@@ -377,9 +450,20 @@ class TerminationsCfg:
         func=mdp.root_height_below_minimum,
         params={"minimum_height": 0.35},
     )
+    # AGILE uses 30 deg. Our previous 0.8 rad (~46 deg) let the robot get well
+    # past the point of no return before the episode ended.
     base_orientation = DoneTerm(
         func=mdp.bad_orientation,
-        params={"limit_angle": 0.8},
+        params={"limit_angle": math.radians(30.0)},
+    )
+    # Trunk touching the ground is unrecoverable, and it is the failure mode we
+    # actually observed (P3 fell face first with no termination to catch it).
+    illegal_contact = DoneTerm(
+        func=mdp.illegal_contact,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Trunk"]),
+            "threshold": 20.0,
+        },
     )
 
 

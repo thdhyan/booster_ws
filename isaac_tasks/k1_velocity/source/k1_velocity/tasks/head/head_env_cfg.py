@@ -147,6 +147,17 @@ class RewardsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=vmdp.time_out, time_out=True)
+    # A P3 run reached iteration 1999 with the robot face-down from step ~121:
+    # only a timeout existed, so the collapse never ended the episode and never
+    # showed up in training.  P2 already had these; P3 did not.
+    root_height = DoneTerm(
+        func=mdp.root_height_below_minimum,
+        params={"minimum_height": 0.35},
+    )
+    base_orientation = DoneTerm(
+        func=mdp.bad_orientation,
+        params={"limit_angle": math.radians(30.0)},
+    )
 
 
 @configclass
