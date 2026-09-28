@@ -18,7 +18,9 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
 fi
 # A SIGKILLed container can leave its CUDA context wedged, which makes the next
 # Isaac boot hang silently at 0% CPU. Refuse to stack runs instead.
-if docker ps --format '{{.Config.Image}}' | grep -q 'isaac-lab'; then
+# Note: `docker ps --format` exposes .Image, NOT .Config.Image (that is an
+# `docker inspect` field). Using the wrong one made this guard fail to parse.
+if docker ps --format '{{.Image}}' | grep -q 'isaac-lab'; then
   echo "An isaac-lab container is already running. Refusing to double-book the GPU."
   docker ps --format '{{.Names}} {{.Image}}'
   exit 2

@@ -18,9 +18,11 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
 fi
 # A previous run's container outlives its tmux session, so check the host too.
 # Two training containers on one GPU would corrupt both runs.
-if docker ps --format '{{.Names}}' | grep -qiE 'isaac.*(vel|gait)|p2.*vel'; then
-  echo "A training container is already running. Refusing to double-book the GPU."
-  docker ps --format '{{.Names}} {{.Status}}'
+# Match on the image, not the name: container names are auto-generated
+# (e.g. "vibrant_rubin"), so grepping .Names never matches anything.
+if docker ps --format '{{.Image}}' | grep -q 'isaac-lab'; then
+  echo "An isaac-lab container is already running. Refusing to double-book the GPU."
+  docker ps --format '{{.Names}} {{.Image}} {{.Status}}'
   exit 2
 fi
 
