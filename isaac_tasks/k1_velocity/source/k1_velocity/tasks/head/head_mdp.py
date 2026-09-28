@@ -201,10 +201,19 @@ def _shape_guard(name, v, env):
 
 
 def ball_centered(env: ManagerBasedRLEnv, std: float = 0.35) -> torch.Tensor:
-    """Primary: exp kernel on the *detection* offset (du, dv). No GT."""
+    """Primary: exp kernel on the *detection* offset (du, dv). No GT.
+
+    Masked by the detector's visible flag.  When nothing is detected
+    ``_detect_yolo`` leaves ``du = dv = 0``, and the raw kernel evaluates to
+    ``exp(0) = 1`` -- its *maximum*.  Unmasked, an agent that simply points the
+    head away (or lies on the floor, so the camera sees no ball) banks the full
+    centring reward forever.  A 2000-iteration run converged on exactly that
+    degenerate policy: ``ball_in_frame`` 0.13, ``track_ball_angle`` 0.005.
+    """
     st = _state(env)
     du, dv = st.yolo[:, 1], st.yolo[:, 2]
-    return _shape_guard("ball_centered", torch.exp(-(du * du + dv * dv) / (std * std)), env)
+    centred = torch.exp(-(du * du + dv * dv) / (std * std)) * st.yolo[:, 0]
+    return _shape_guard("ball_centered", centred, env)
 
 
 def ball_in_frame(env: ManagerBasedRLEnv) -> torch.Tensor:
