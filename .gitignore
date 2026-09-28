@@ -60,3 +60,4 @@ assets/motions/*.npz
 
 # GVHMR demo clip pulled for testing the video path (not ours)
 assets/motions/video/*.mp4
+real_robot/bags/

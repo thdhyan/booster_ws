@@ -42,6 +42,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from . import gait_rewards as gait
+from . import velocity_curriculum
 
 try:  # Isaac Lab 3.0-EA layout (dl); isaac-lab image renamed this package
     import isaaclab_tasks.core.velocity.mdp as mdp
@@ -500,6 +501,28 @@ class TerminationsCfg:
 class CurriculumCfg:
     terrain_levels = CurrTerm(func=mdp.terrain_levels_vel,
                                params={"asset_cfg": SceneEntityCfg("robot")})
+    # Widens the commanded velocity range as tracking improves, because a fixed
+    # +/-0.5 m/s range makes 0 -> 3 m/s unreachable by construction: the policy is
+    # never asked to go faster, so it never learns to.
+    #
+    # The ceiling is 1.5 m/s, not 3.0. Measured on K1 A2 over a 12-minute,
+    # 254 m walk, the factory walker at full remote stick peaked near 1.3 m/s
+    # (fitted gain ~-0.49 m/s per unit of left-Y stick). 3 m/s is a sim-only
+    # stretch goal and a sim number there is not a deployable claim.
+    velocity_range = CurrTerm(
+        func=velocity_curriculum.VelocityRangeCurriculum,
+        params={
+            "init_lin_vel": 0.5,
+            "init_ang_vel": 1.0,
+            "target_max_lin_vel": 1.5,
+            "target_max_ang_vel": 2.0,
+            "step_lin_vel": 0.25,
+            "step_ang_vel": 0.25,
+            "success_threshold": 0.85,
+            "patience": 5,
+            "interval_steps": 50,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
