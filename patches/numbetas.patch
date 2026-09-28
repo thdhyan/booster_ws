@@ -1,0 +1,43 @@
+--- general_motion_retargeting/utils/smpl.py.orig	2026-09-27 23:11:56.307762228 -0500
++++ general_motion_retargeting/utils/smpl.py	2026-09-28 00:14:48.349597553 -0500
+@@ -13,10 +13,16 @@
+ 
+ def load_smplx_file(smplx_file, smplx_body_model_path):
+     smplx_data = np.load(smplx_file, allow_pickle=True)
++    # Size the shape space from the data. smplx.create() defaults to
++    # num_betas=10, but full SMPL-X AMASS files (e.g. Kimodo's output) carry
++    # all 16 shape components, which then fails in
++    #   blend_shape = torch.einsum('bl,mkl->bmk', [betas, shape_disps])
++    _nb = int(np.asarray(smplx_data["betas"]).reshape(-1).shape[0])
+     body_model = smplx.create(
+         smplx_body_model_path,
+         "smplx",
+         gender=str(smplx_data["gender"]),
++        num_betas=_nb,
+         use_pca=False,
+     )
+     # print(smplx_data["pose_body"].shape)
+@@ -35,7 +41,10 @@
+         jaw_pose=torch.zeros(num_frames, 3).float(),
+         leye_pose=torch.zeros(num_frames, 3).float(),
+         reye_pose=torch.zeros(num_frames, 3).float(),
+-        # expression=torch.zeros(num_frames, 10).float(),
++        # Batched expression. SMPL-X's default is unbatched, which fails to
++        # broadcast against the (num_frames, ...) pose tensors:
++        #   RuntimeError: Expected size N but got size 1 ... torch.cat([betas, expression])
++        expression=torch.zeros(num_frames, 10).float(),
+         return_full_pose=True,
+     )
+     
+@@ -90,7 +99,10 @@
+         jaw_pose=torch.zeros(num_frames, 3).float(),
+         leye_pose=torch.zeros(num_frames, 3).float(),
+         reye_pose=torch.zeros(num_frames, 3).float(),
+-        # expression=torch.zeros(num_frames, 10).float(),
++        # Batched expression. SMPL-X's default is unbatched, which fails to
++        # broadcast against the (num_frames, ...) pose tensors:
++        #   RuntimeError: Expected size N but got size 1 ... torch.cat([betas, expression])
++        expression=torch.zeros(num_frames, 10).float(),
+         return_full_pose=True,
+     )
+     

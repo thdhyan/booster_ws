@@ -57,3 +57,4 @@ docker/.env
 .claude/
 assets/motions/*.bvh
 assets/motions/*.npz
+assets/motions/*.csv
