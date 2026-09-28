@@ -441,6 +441,7 @@ class RewardsCfg:
     )
 
 
+@configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     # Contact-free fall detection (height-based, not contact-based).
