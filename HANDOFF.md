@@ -296,8 +296,14 @@ centroid + progress; teacher-group obs (fully observable by design).
    `END=ITER0+ITERS`), v1 logs `*.v1inverted.push.log`, v1 run dirs + wandb.
    **Open (user decision):** iterate training (longer reach / proximity
    dead-zone tune / anchor goal to box spawn — design note above) vs ship v2
-   as-is. **Remaining infra step:** Track B batch commit → GitHub →
-   Drive/Slides upload.
+   as-is. **Delivery chain DONE 2026-09-28:** batch committed via detached
+   worktree `~/Projects/wt-trackb` on `dev/soccer-p3p4` (`fb7115b` fix(push)
+   root causes, `833cf03` docs+videos) → pushed to GitHub; videos uploaded
+   byte-exact to Drive folder `1TDRzuMYN_...` (reach `11nDdUDn...`, push
+   `1p5yUBOth...`) → embedded as slides `slide_p6v2_reach` /
+   `slide_p6v2_push` in deck "K1 RL Policy Play Videos — booster_ws"
+   (`1KamnVS6...`). Main tree (`feat/video-to-motion`) keeps these same edits
+   uncommitted on purpose — do not re-commit them there.
 2. ~~In-env A/B hunt for the P6 fall~~ **DONE 2026-09-28** — root cause was
    the frozen term's joint-wiring (`preserve_order` mismatch vs the training
    env); full A/B ladder + fix in the Root cause bullet above. Gate passed
