@@ -1,11 +1,31 @@
-# Recording topic list: walking session with a head/forward RGB-D camera.
-# Comments and blank lines are stripped by rosbag_record.sh.
+# Full K1 capture: state, action labels, and safety metadata.
+#
+# Two separate things are being captured and it matters which is which:
+#
+#   OBSERVATION  joint pos/vel/effort, IMU, odometry  -> what the robot is doing
+#   ACTION LABEL commanded velocity                     -> what it was told to do
+#
+# The action label is what makes behaviour cloning possible: pairs of
+# (observation, commanded velocity) train a policy to map what it sees to the
+# velocity command it should issue. That is the same interface a VLM emits.
+#
+# NOTE: the factory walker's own joint-space targets are NOT here and cannot be.
+# `rt/joint_ctrl` (LowCmd) is an INPUT to the robot's low-level controller; the
+# firmware never echoes its internal commands, and no subscriber for LowCmd
+# exists anywhere in the SDK. So joint-level imitation of the factory gait is
+# not possible by cloning its actions -- use the recorded joint trajectory as a
+# reference motion instead (motion tracking, not BC).
 
+# --- observations ---
 /tf
 /tf_static
 /imu/data
 /odom
 /joint_states
+
+# --- camera: image AND calibration. cuVSLAM rejects uncalibrated frames and
+# --- nvblox silently warps without them, so camera_info is not optional.
 /camera/color/image_raw
 /camera/color/camera_info
 /camera/depth/image_raw
+/camera/depth/camera_info

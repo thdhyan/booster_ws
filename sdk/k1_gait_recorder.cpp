@@ -28,8 +28,11 @@
 //
 // The two args are the local and robot network interface IPs (DDS needs both).
 
+#include <booster/idl/b1/FallDownState.h>
 #include <booster/idl/b1/LowState.h>
 #include <booster/idl/b1/Odometer.h>
+#include <booster/idl/b1/RobotStates.h>
+#include <booster/idl/b1/RobocupBehaviorStatus.h>
 #include <booster/robot/b1/b1_api_const.hpp>
 #include <booster/robot/b1/b1_loco_client.hpp>
 #include <booster/robot/channel/channel_subscriber.hpp>
@@ -69,6 +72,14 @@ struct Sample {
     double  rpy[3] = {0, 0, 0}, gyro[3] = {0, 0, 0}, acc[3] = {0, 0, 0};
     double  od_x = 0.0, od_y = 0.0, od_theta = 0.0;
     bool    has_odom = false;
+    // Action labels and safety metadata.
+    int32_t current_mode = 0;              // kDamping / kPrepare / kWalking
+    int32_t current_body_control = 0;
+    int32_t n_actions = 0;                 // size of RobotStates.current_actions
+    uint64_t action_mask = 0;              // packed current_actions bits
+    int32_t fall_down = -1;                // -1 unknown, else state
+    int32_t recovery_available = -1;
+    int32_t robocup_status = -1;           // soccer behaviour the robot is in
 };
 
 Sample g_latest;                 // guarded by g_mtx
@@ -110,6 +121,34 @@ void OdometerHandler(const void *msg) {
     g_latest.od_y     = od->y();
     g_latest.od_theta = od->theta();
     g_latest.has_odom = true;
+}
+
+// RobotStates: which mode the robot is in and the active behaviour mask.
+void RobotStatesHandler(const void *msg) {
+    const auto *rs = static_cast<const booster_interface::msg::RobotStatesMsg *>(msg);
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_latest.current_mode = static_cast<int32_t>(rs->current_mode());
+    g_latest.current_body_control = static_cast<int32_t>(rs->current_body_control());
+    const auto &acts = rs->current_actions();
+    g_latest.n_actions = static_cast<int32_t>(acts.size());
+    uint64_t mask = 0;
+    for (size_t i = 0; i < acts.size() && i < 64; ++i) {
+        if (acts[i]) mask |= (uint64_t(1) << i);
+    }
+    g_latest.action_mask = mask;
+}
+
+void FallDownHandler(const void *msg) {
+    const auto *fd = static_cast<const FallDownState *>(msg);
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_latest.fall_down = static_cast<int32_t>(fd->fall_down_state());
+    g_latest.recovery_available = static_cast<int32_t>(fd->is_recovery_available());
+}
+
+void RobocupStatusHandler(const void *msg) {
+    const auto *rb = static_cast<const booster_interface::msg::RobocupBehaviorStatus *>(msg);
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_latest.robocup_status = static_cast<int32_t>(rb->status());
 }
 
 double Now() {
@@ -155,10 +194,17 @@ int main(int argc, char **argv) {
 
     g_t0 = std::chrono::steady_clock::now();
     ChannelFactory::Instance()->Init(0, argv[1]);
-    ChannelSubscriber<LowState>  low(booster::robot::b1::kTopicLowState, LowStateHandler);
-    ChannelSubscriber<Odometer>  odom(booster::robot::b1::kTopicOdometerState, OdometerHandler);
+    ChannelSubscriber<LowState>          low(booster::robot::b1::kTopicLowState, LowStateHandler);
+    ChannelSubscriber<Odometer>          odom(booster::robot::b1::kTopicOdometerState, OdometerHandler);
+    ChannelSubscriber<booster_interface::msg::RobotStatesMsg> rstate(booster::robot::b1::kTopicRobotStates, RobotStatesHandler);
+    ChannelSubscriber<FallDownState>     fall(booster::robot::b1::kTopicFallDown, FallDownHandler);
+    ChannelSubscriber<booster_interface::msg::RobocupBehaviorStatus> robocup(
+        booster::robot::b1::kTopicRobocupBehaviorStatus, RobocupStatusHandler);
     low.InitChannel();
     odom.InitChannel();
+    rstate.InitChannel();
+    fall.InitChannel();
+    robocup.InitChannel();
 
     booster::robot::b1::B1LocoClient loco;
     std::cout << "[rec] changing to kWalking...\n";
@@ -173,7 +219,11 @@ int main(int argc, char **argv) {
     if (!f) { std::cerr << "[rec] cannot write " << out << "\n"; return 4; }
     f << std::setprecision(9);
     f << "t,cmd_vx,cmd_vy,cmd_vyaw,phase_vx,"
-         "od_x,od_y,od_theta,rpy0,rpy1,rpy2,gyro0,gyro1,gyro2,acc0,acc1,acc2";
+         "od_x,od_y,od_theta,rpy0,rpy1,rpy2,gyro0,gyro1,gyro2,acc0,acc1,acc2"
+         // action labels + safety metadata: the (obs -> action) pairs that
+         // behaviour cloning needs, plus fall/ behaviour labels.
+         ",current_mode,current_body_control,action_mask,n_actions"
+         ",fall_down,recovery_available,robocup_status";
     for (int i = 0; i < kLegJoints; ++i) f << ",dq" << i;
     for (int i = 0; i < kLegJoints; ++i) f << ",ddq" << i;
     for (int i = 0; i < kLegJoints; ++i) f << ",tau" << i;
@@ -203,6 +253,10 @@ int main(int argc, char **argv) {
             for (int i = 0; i < 3; ++i) f << "," << s.rpy[i];
             for (int i = 0; i < 3; ++i) f << "," << s.gyro[i];
             for (int i = 0; i < 3; ++i) f << "," << s.acc[i];
+            f << "," << s.current_mode << "," << s.current_body_control
+              << "," << s.action_mask << "," << s.n_actions
+              << "," << s.fall_down << "," << s.recovery_available
+              << "," << s.robocup_status;
             for (int i = 0; i < kLegJoints; ++i) f << "," << s.dq[i];
             for (int i = 0; i < kLegJoints; ++i) f << "," << s.ddq[i];
             for (int i = 0; i < kLegJoints; ++i) f << "," << s.tau[i];

@@ -73,6 +73,75 @@ source config/env.sh                      # or: source /opt/ros/humble/setup.bas
 | `config/` | Topic lists, env template |
 | `bags/` | Local bag storage (gitignored) |
 
+## Action labels for behaviour cloning
+
+The recorder captures observation and **action** separately, because BC needs
+both: `dq/ddq/tau_est` + IMU + odometry is the observation, and the commanded
+`(vx, vy, vyaw)` is the action label. That is the same interface a VLM emits,
+so the same dataset serves both a BC policy and a navigation policy.
+
+What is available, verified against the SDK:
+
+| Label | Source | Status |
+|---|---|---|
+| Commanded velocity | `B1LocoClient.Move(vx, vy, vyaw)` | **Logged.** Our own commands |
+| Robot mode / behaviour mask | `rt/robot_states` | **Logged** (`current_mode`, `current_body_control`, `current_actions` bitmask) |
+| Fall / recovery | `rt/fall_down` | **Logged** — lets you drop or label falls |
+| Soccer behaviour | `rt/robocup_behavior_status` | **Logged** |
+| Joystick axes | `RemoteControllerState` exists in the SDK but has **no `rt/` topic constant** | **Not loggable yet** — see below |
+| Factory walker's joint targets | firmware-internal | **Not available, ever** |
+
+### The one that does not exist
+
+The factory walker's **joint-space actions cannot be captured.** `rt/joint_ctrl`
+(`LowCmd`) is an *input* to the robot's low-level controller; the firmware never
+echoes its internal commands, and there is no `ChannelSubscriber<LowCmd>`
+anywhere in the SDK. So joint-level imitation by cloning the factory policy's
+actions is off the table.
+
+Use the recorded joint trajectory as a **reference motion** instead — that is
+motion tracking (BeyondMimic / ProtoMotions style), not BC, and it is the right
+tool for the human-like-gait goal anyway.
+
+### Worth doing if you can
+
+If a person drives the K1 with the handheld remote while recording, that is a
+**human demonstration** — the highest-value dataset available, and directly on
+target for "human-like gait". The message type exists
+(`RemoteControllerState`: `lx, ly, rx, ry`, hat switches, buttons) but no topic
+constant is published, so find the topic at runtime first:
+
+```bash
+# on the robot's network, list what actually has a publisher
+python3 scripts/rosbag_record.sh --out bags/probe --duration 15 \
+  --topics-file /dev/null 2>/dev/null     # then: ros2 topic list -t | grep -i remote
+```
+
+Then add it to `config/topics_walk.yaml`. If the remote does not publish over
+DDS, log your own `Move()` calls instead — which the recorder already does.
+
+## Full K1 topic inventory (from the SDK)
+
+Useful beyond the recorder — several are already ROS-compatible:
+
+| Topic | Note |
+|---|---|
+| `rt/low_state` | joints + IMU + fall state |
+| `rt/odometer_state` | `x, y, theta` |
+| `rt/joint_ctrl` | LowCmd — **we publish here**; firmware does not echo |
+| `rt/fall_down` | fall / recovery-available |
+| `rt/robot_states` | mode, body control, action mask |
+| `rt/robocup_behavior_status` | soccer behaviour (Track A relevant) |
+| `rt/kick_ball` | kick reference (Track A P4 relevant) |
+| `rt/imu/data` | **ROS-compatible** — may be a real `sensor_msgs/Imu` |
+| `rt/odom` | **ROS-compatible** |
+| `rt/joint_states` | **ROS-compatible** |
+| `rt/tf` | **ROS-compatible** |
+
+If `rt/imu/data` really is `sensor_msgs/Imu`, the FastDDS-to-ROS 2 bridge is far
+smaller than assumed: a topic remap may be enough. Verify at runtime before
+building the bridge.
+
 ## Storage reality
 
 Bags are large — a 120 s RGB-D + IMU + TF session is easily 2–10 GB. That is why:
