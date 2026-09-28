@@ -131,18 +131,25 @@ class K1DebugMarkers:
 
     def __init__(self):
         import omni.usd
-        from pxr import Gf, UsdGeom
+        from pxr import Gf, UsdGeom, Vt
 
         self._Gf = Gf
+        self._Vt = Vt
         self._stage = omni.usd.get_context().get_stage()
         root = UsdGeom.Xform.Define(self._stage, "/Visuals/K1DebugMarkers")
         self.robot = self._sphere("robot", Gf.Vec3f(0.1, 0.8, 1.0))
         self.target = self._sphere("target", Gf.Vec3f(1.0, 0.8, 0.1))
         self.estimate = self._sphere("estimate", Gf.Vec3f(1.0, 0.1, 0.8))
-        boundary = UsdGeom.Cube.Define(self._stage, "/Visuals/K1DebugMarkers/boundary")
-        boundary.CreateExtentAttr(Gf.Vec3f(5.0, 5.0, 0.02))
-        boundary.CreateDisplayColorAttr(Gf.Vec3f(0.2, 0.5, 1.0))
-        boundary.CreateDisplayOpacityAttr(0.18)
+        # A solid translucent cube would sit between the cameras and the robot,
+        # so the arena boundary is drawn as a flat square outline instead.
+        boundary = UsdGeom.BasisCurves.Define(self._stage, "/Visuals/K1DebugMarkers/boundary")
+        half = 5.0
+        points = [Gf.Vec3f(x, y, 0.0) for x, y in
+                  ((-half, -half), (half, -half), (half, half), (-half, half))]
+        boundary.CreatePointsAttr(Vt.Vec3fArray(points))
+        boundary.CreateWidthsAttr([0.03])
+        boundary.CreateDisplayColorAttr([Gf.Vec3f(0.2, 0.5, 1.0)])
+        boundary.CreateDisplayOpacityAttr([0.7])
         self.boundary = boundary
         self._xforms = {
             "robot": UsdGeom.Xformable(self.robot),
@@ -157,8 +164,8 @@ class K1DebugMarkers:
 
         sphere = UsdGeom.Sphere.Define(self._stage, f"/Visuals/K1DebugMarkers/{name}")
         sphere.CreateRadiusAttr(0.11)
-        sphere.CreateDisplayColorAttr(color)
-        sphere.CreateDisplayOpacityAttr(0.45)
+        sphere.CreateDisplayColorAttr([color])
+        sphere.CreateDisplayOpacityAttr([0.45])
         return sphere
 
     def _translate(self, name, position) -> None:
@@ -183,7 +190,7 @@ class K1DebugMarkers:
             pass
         if ball is not None:
             target = ball.data.root_pos_w[0].detach().cpu().numpy()
-            knowledge = "ball GT (reward/teacher only)"
+            knowledge = "ball GT (reward only)"
         else:
             try:
                 cmd = base_env.command_manager.get_command("base_velocity")[0].detach().cpu().numpy()

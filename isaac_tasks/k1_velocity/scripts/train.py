@@ -78,6 +78,7 @@ import torch
 from datetime import datetime
 
 import omni
+import ppo_guard
 from rsl_rl.runners import OnPolicyRunner
 
 from isaaclab.envs import (
@@ -106,6 +107,11 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
+
+# Long PPO runs died at the tail when one inf value loss wrote NaN into every
+# weight; the guard turns that update into a no-op instead of a dead run.
+ppo_guard.install()
+print("[INFO]: PPO_GRAD_GUARD=ON (non-finite gradients are zeroed, never applied)")
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -196,6 +202,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         runner.load(resume_path)
+        if args_cli.safe_resume:
+            # runner.load() restores the checkpoint's param_groups, so the
+            # conservative LR is re-applied after loading or it is a no-op.
+            for group in runner.alg.optimizer.param_groups:
+                group["lr"] = agent_cfg.algorithm.learning_rate
+            print(f"[INFO]: SAFE_RESUME_LR_APPLIED lr={agent_cfg.algorithm.learning_rate} "
+                  f"schedule={agent_cfg.algorithm.schedule}")
 
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)

@@ -358,10 +358,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     def _panel_views():
         root = robot.data.root_pos_w[0].detach().cpu().numpy()
         return [
-            ("overview", root + np.array([5.0, -7.0, 4.5]), root + np.array([0.0, 0.0, 0.3])),
-            ("top_down", root + np.array([0.001, -0.001, 9.0]), root),
-            ("follow", root + np.array([2.8, -2.8, 1.8]), root + np.array([0.0, 0.0, 0.5])),
-            ("side", root + np.array([-4.0, 0.0, 2.2]), root + np.array([0.0, 0.0, 0.45])),
+            ("overview", root + np.array([3.2, -4.2, 2.6]), root + np.array([0.0, 0.0, 0.35])),
+            ("top_down", root + np.array([0.001, -0.001, 6.0]), root),
+            ("follow", root + np.array([1.9, -1.9, 1.15]), root + np.array([0.0, 0.0, 0.45])),
+            ("side", root + np.array([-2.6, 0.0, 1.4]), root + np.array([0.0, 0.0, 0.45])),
         ]
 
     def _panel_status(step, step_reward, episode_reward):
