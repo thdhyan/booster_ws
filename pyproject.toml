@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "k1m"
+version = "0.1.0"
+description = "Retarget human motion (video or text) to Booster K1 joint angles, with a physics feasibility gate and MuJoCo replay"
+readme = "docs/k1m.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+
+# Only what runs *locally*: the gate and the replay renderer. The motion models
+# (GVHMR, Kimodo, GMR) live on a DGX Spark and are driven over ssh, so torch
+# is not a hard local dependency -- see docs/k1m.md for the remote setup.
+dependencies = [
+  "numpy>=1.23",
+  "mujoco>=3.1",
+  "imageio>=2.30",
+  "imageio-ffmpeg>=0.4",
+  "pillow>=9.0",
+]
+
+[project.optional-dependencies]
+app = ["gradio>=5.0"]
+science = ["scipy>=1.9"]
+
+[project.scripts]
+k1m = "k1m.cli:main"
+
+[tool.setuptools]
+packages = ["k1m"]
+
+[tool.setuptools.package-data]
+k1m = ["py.typed"]

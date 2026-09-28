@@ -57,3 +57,6 @@ docker/.env
 .claude/
 assets/motions/*.bvh
 assets/motions/*.npz
+
+# GVHMR demo clip pulled for testing the video path (not ours)
+assets/motions/video/*.mp4
