@@ -42,11 +42,15 @@ run_one p2_teacher_gait_v2 Isaac-Velocity-Rough-K1-Teacher-v0 "$TEACHER" \
 run_one p2_student_gait_v2 Isaac-Velocity-Distill-K1-Play-v0 "$STUDENT" \
   "$REPO/models/p2_move_student_gait_v2.pt" "P2 student · gait-v2 · model_2999" || exit 11
 
+# NOTE: posters are generated on the HOST, not here -- the Isaac Lab image has
+# no ffmpeg, so an in-container `ffmpeg` step fails silently, no poster appears,
+# and the artifact gate aborts *before* the movement check ever runs.  That is
+# exactly what happened: both videos recorded fine, then P2_REC_ARTIFACT_FAIL
+# fired on a healthy 18 MB file and nothing was uploaded.
 for name in p2_teacher_gait_v2 p2_student_gait_v2; do
-  ffmpeg -y -ss 7 -i "$OUT/$name.mp4" -frames:v 1 "$OUT/${name}_poster.png" >/tmp/p2_rec_ffmpeg_${name}.log 2>&1
   sz=$(stat -c%s "$OUT/$name.mp4" 2>/dev/null || echo 0)
   trace="$OUT/${name}_trace.npz"
-  if [ "$sz" -lt 200000 ] || [ ! -s "$trace" ] || [ ! -s "$OUT/${name}_poster.png" ]; then
+  if [ "$sz" -lt 200000 ] || [ ! -s "$trace" ]; then
     echo "P2_REC_ARTIFACT_FAIL_${name} size=${sz}B"
     exit 12
   fi
