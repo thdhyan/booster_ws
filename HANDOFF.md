@@ -1,5 +1,49 @@
 # Booster K1 Workspace — Handoff
 
+## 📌 HARDWARE / CAMERA FINDINGS — 2026-09-29 (unit A2, `10.37.11.3`)
+
+Full writeup: **[`docs/k1_hardware_camera_findings.md`](docs/k1_hardware_camera_findings.md)**
+
+**A2 has no camera sensor fitted.** The ROS camera graph is fully intact
+(135 topics, 13 nodes, every camera topic `Publisher count: 1`) but there is no
+hardware behind it:
+
+- `lsusb` — 9 devices, all accounted for (hubs, GbE, AX210 **Bluetooth**,
+  audio). No RealSense, no USB camera.
+- `lspci` — no multimedia/camera device at all.
+- `/dev/video*` — none. **`/sys/class/video4linux/` exists but is EMPTY**, which
+  proves V4L2 is compiled in but no device ever registered.
+- No `/dev/nvargus*`, no sensor node in device-tree, no sensor lines in dmesg.
+
+⚠️ **The pair did publish frames once, then died.** Immediately after a reboot
+(robot up ~2 min) `rclpy` measured **7.8 Hz on both
+`/boostercamera/head/rgb` and `/boostercamera/head/right/rgb`** (and depth; raw at
+29.6 Hz) with `booster-video-stream` alive. About five minutes later: **0.0 Hz**
+on all three, raw down to 0.375 Hz, and `booster-video-stream` had died with
+nothing to restart it. No OOM (4.5 GiB free throughout). So: graph → brief live
+frames → collapse, sensor never re-enumerating. This is the most diagnostic
+finding and rules out "there has never been a camera here".
+
+**QoS is required to see anything.** The publishers offer a non-standard
+durability that silently rejects default subscribers, so a healthy-looking
+`Publisher count: 1` can sit next to a subscriber receiving nothing. Match
+`RELIABLE` + `VOLATILE` + `KEEP_LAST(10)`. Also note `booster-video-stream` is a
+**RealSense** subscriber (logs `Publishing: '0'` forever), not the producer of
+`/boostercamera/head/*`.
+
+**Installed on A2:** cuVSLAM v17.0.0 native Orin build at `~/cuvslam`
+(aarch64, 0 unresolved libs) — working. `boosteros` 1.2.0 at `/tmp/venv_bos`
+(**will not survive reboot**). Watchdog service `k1-stereo-watchdog.service`
+enabled; it restarts what it can and reports `UNRECOVERABLE` rather than
+flapping when no sensor is present.
+
+**Next:** physical check that a head camera is fitted / reseat the MIPI ribbon —
+the watchdog will pick it up automatically. Then check A1/A3/B1–B3, which were
+off-network. **A2 also rebooted for low battery and its perception stack is
+currently degraded** — check charge and `booster-daemon-perception` before the walk.
+
+---
+
 ## 📌 SESSION HANDOFF — 2026-09-24 (read this first; older history below)
 
 > **Branches:** `dev/soccer-p3p4` (active — holds BOTH tracks; Track A gates landed) ·
@@ -113,7 +157,70 @@ frozen base assembled with the exact 68-dim partial obs; IK `body_name=*_hand_li
 offset integrator (curriculum 0.3→1.5 m), rewards on 8 corners + corner
 centroid + progress; teacher-group obs (fully observable by design).
 
-**Status (2026-09-24 19:05 UTC) — TRACK B: TRAINING BLOCKED ON FROZEN-BASE BUG; GAIT-V2 BASE RETRAIN RUNNING:**
+**Status (2026-09-28 16:55 CDT) — ✅ PHASE 1 TRAINING LIVE ON zz-bw:**
+- `feat/velocity-squat` = **`7e61244`** pushed (branched off
+  `origin/feat/video-to-motion` tip ⇒ sibling's 8 unpushed commits NOT
+  republished; mis-based `77494fe` reverted on `dev/soccer-p3p4` as `f37dfd5`).
+- zz-bw smoke **PASSED** (`import OK`, `[k1_contact] 23 rigid bodies`,
+  0 Traceback, iters 0/2–1/2, ckpts saved); debug video recorded + frame
+  checked vs the accepted teacher baseline (zz-bw render path now proven).
+- **Contact-sensor root cause:** zz-bw's `booster_train_ref` working tree had
+  15 files reverted to pre-`bf3342e` (incl. `booster.py` without
+  `_spawn_k1_urdf`) → stock spawn, root-only contact, `('Trunk',)`. Fixed with
+  `git -C isaac_tasks/booster_train_ref checkout -- .`. Parent status hides
+  submodule content dirt — check inside the submodule.
+- **Full run:** tmux `k1_squat_full` (GPU1) 4096 envs × 5000 iters, log
+  `/export/scratch/thakk100/k1/squat_full.log`, ETA ~18h45. Gates before
+  Phase 1b: velocity parity ±10%, height MAE <2 cm, done_rate 0.0000, then
+  Play-task squat→rise panel video + frame check.
+
+**Status (2026-09-27 21:30 CDT) — ⚠️ spark04 DEAD, BASE RECOVERED + RESUME RUNNING ON dl:**
+- **spark04 offline since 2026-09-24 ~00:32 UTC** (`No route to host`; dl's
+  sync loop logged 2352 consecutive FAILs since then). Needs the usual
+  power/network check by the user. The gait-v2 base retrain was at ~iter 840
+  when the box died — it did NOT finish. Auto-chain never fired.
+- **Rescue:** dl's `k1_spark_sync` had synced the run to
+  `dl:Projects/booster_ws/logs/spark04/rsl_rl/k1_partialctrl_base/
+  2026-09-24_18-44-39_k1_partialctrl_base/` through `model_800.pt`. Checkpoints
+  `model_0..800` are now materialized under the standard dl root
+  `logs/rsl_rl/k1_partialctrl_base/2026-09-24_18-44-39_k1_partialctrl_base/`.
+- **dl recovery stack (committed `5875c50` + follow-ups):**
+  `scripts/dl_push_base_resume_{host,container}.sh` (smoke marker-gated → FULL
+  512-env resume with `--checkpoint model_800`), `scripts/dl_push_chain2_host.sh`
+  (auto-chain, see gates below), `scripts/dl_partial800{,_walk}_record_host.sh`.
+  Sessions: `k1_dl_push_base_resume` (GPU 1), `k1_dl_push_chain2`,
+  `k1_dl_partial800_rec`/`k1_dl_partial800_walk` (GPU 2, done).
+- **Two dl-specific startup fixes (both marker-gated catches):**
+  1. `isaac_tasks/booster_train_ref` is a **submodule with a stale/uncommitted
+     pointer** — a git materialization (dl) gets the OLD fork whose bulk import
+     lists `resolve_joint_parameter` → `ImportError` on the image (rsync'd boxes
+     were fine because they carry the fixed working tree with the try/except
+     vendored fallback). Fixed by rsync'ing the fork source to dl. **Commit the
+     submodule pointer bump when convenient.**
+  2. `train.py --checkpoint` computes `load_run` as a relpath from
+     `logs/rsl_rl/<experiment>` and `get_checkpoint_path` **regex-matches run
+     dir NAMES**, so a `logs/spark04/...` path never matches → materialize the
+     ckpt under the standard root instead (done).
+- **Resume run:** smoke 16×3 `Learning iteration 2/3` OK → FULL launched
+  21:14 CDT, display total **3800** (rsl_rl adds `--max_iterations` to the ckpt
+  iter: 800+3000). chain2 gates: reaches `/3800` (iter ≥3700 line) AND newest
+  `model_*.pt` ≥ 3700 → export (`BASE_EXPORT_RC=0` + fresh mtime) →
+  `diag_frozen.sh` → pass-B `done_rate < 0.02` → `dl_push_host.sh reach`.
+  v1 chain's `2999/3000` markers were WRONG for resume (never print) — do not
+  resurrect them.
+- **Iter-800 progress videos recorded + frame-checked** (GPU 2, no training
+  concurrency): `videos/partial_gaitv2_iter800.mp4` (stand; 4/4 robots upright
+  through t=5.7 s, episode reward +4.90) and `videos/partial_gaitv2_iter800_walk.mp4`
+  (`cmd vx=+0.80`; all 4 upright with active stepping, **no forward translation
+  yet** — matches `error_vel_xy ≈ 0.95` in the curves). HUD shows ckpt + task +
+  cmd + step/episode reward + action/obs traces.
+- **Base-run curves @ iter 800** (synced tfevents): ep_len 10 → peak 190 →
+  158; `termination/base_orientation` 0.92 → 0.15 (good);
+  `termination/root_height` 0.03 → **0.80** (kneeling falls now dominant —
+  the remaining 2900 iters must fix this); `feet_air_time` ≈ 0 (gait not
+  emerged yet); timeout term 0 → 0.12.
+
+**Status (2026-09-24 19:05 UTC — historical): TRACK B: TRAINING BLOCKED ON FROZEN-BASE BUG; GAIT-V2 BASE RETRAIN RUNNING:**
 - **Zero-step OK:** `ZERO_STEP_RESULT=OK` (3 steps, obs `teacher (n,108)`, rewards
   compute, no terminations; box rests at `z = half_extents`, DR prints
   `edge 0.71-1.47 m, mass 3.6-19.2 kg`). Gate log `scripts/pushzero.log`.
@@ -146,32 +253,69 @@ centroid + progress; teacher-group obs (fully observable by design).
   `scripts/reach.push.full.crashed.log`. Training itself was NOT learning
   anyway: mean reward flat −3.85 → −3.60, ep_len 16–23 (0.3–0.46 s),
   99.7 % late terminations `root_height`, `wrist_box_proximity` ≈ 0.0001.
-- **Root cause (narrowed, OPEN):** the frozen TorchScript base
-  (`models/k1_partialctrl_base.pt`, Run-10 export) **falls every ~17 steps in
-  P6 even with zero commands**, while the same Run-10 policy walks upright in
-  its home partial env (`scripts/play_partial_diag.sh` →
-  `videos/partial_base_diag.mp4`; spark02 `hp.run10.log`: ep_len 42 → 605).
-  Two-pass diag (`scripts/diag_frozen.sh`, log `scripts/diagfrozen.log` on
-  spark04): A `PUSH_FROZEN_MODE=hold` → stand_frac 1.000, done_rate 0.0009
-  (env/physics/IK fine); B frozen policy cmd=0 → stand_frac 1.000 at reset but
-  done_rate 0.0603 (falls ≈ every 17 steps = exactly training's ep_len);
-  step-0 obs canonical (`gravity [0,0,−1]`, rest 0) but policy output
-  ±5–15 → leg targets ±1.25 rad. Static wiring (joint lists, obs order, vmdp
-  imports, sim dt/decimation, cmd ranges) verified identical partial↔push.
-  **Export EXONERATED (offline parity, 2026-09-24):**
-  `scripts/push_export_parity.py` — shipped `models/k1_partialctrl_base.pt`
-  == Run-10 eager runner actor == fresh `as_jit()`, max|diff| **0.0**
-  (bit-exact) on both canonical (exact P6 reset) obs AND partial-style
-  jittered obs. `obs_normalization=False` — no normalizer to drift. The
-  ±5–6 raw action scale is the policy's NORMAL output everywhere (Run-11
-  actor too) — it walks in the partial env with those outputs. So the fall
-  is an **env-side difference** (dynamics/actuation/obs beyond step 0 —
-  e.g. exact-default arm pose the partial curriculum never visits, or
-  ground friction), NOT an export bug. Next: in-env A/B on a free GPU box
-  (NOT concurrent with spark04 training): run the shipped .pt in
-  `Isaac-Velocity-PartialCtrl-K1-Play-v0` — if it walks there, diff the
-  two envs' actuation/reset; if it falls there too, diff the play-path vs
-  frozen-path obs feeds step-by-step.
+- **Root cause (RESOLVED 2026-09-28): joint-wiring mismatch in the frozen
+  term.** `FrozenBaseVelocityAction` resolved joint ids with
+  `find_joints(K1_*_JOINTS, preserve_order=True)` = left-then-right list
+  order, but the partial (home) env the policy trained in resolves BOTH its
+  action terms (`JointActionCfg.preserve_order=False`, confirmed in the home
+  play log: `Resolved ... JointPositionAction: [Left_Hip_Pitch, Right_Hip_Pitch, ...] [[3,4,8,9,...]]`)
+  and its obs terms (`SceneEntityCfg.preserve_order=False`) in
+  **articulation order** (interleaved L/R per joint type). Result in P6:
+  **11/12 leg dims drove the wrong joints** (hip-roll commands onto knees,
+  ankle commands onto hip-yaws) + permuted leg/arm obs blocks → the base
+  cartwheeled within ~17 steps. Everything else was exonerated along the
+  way: export bit-exact (`push_export_parity.py`), step-0 obs canonical,
+  home step-1 actions ≈ frozen `out0` (identical ±4 first output — only
+  *where it landed* differed). **Fix:** `push_mdp.py` resolves
+  `preserve_order=False` everywhere (arms: ONE find over all 8 — two
+  per-side finds concatenated would still be L-block-then-R-block).
+  **A/B ladder (dl GPU 2, same export, pass-B done_rate):** baseline
+  0.0425/0.0434 → ground-friction parity (1.0/1.0 multiply) 0.0434
+  **REFUTED** → stiff-arms (wrist terms dropped; nothing pinned targets →
+  arms ran to joint-zero at 6 rad/s) 0.0294 → full home-reset mimic
+  (legs ×U(0.5,1.5) + `randomize_arm_pose` with pinned PD targets,
+  verifiably applied in the dump) 0.0431 **REFUTED** → **wiring fix:
+  0.0000** (8 envs × 400 steps, zero falls, stand_frac 1.0; step-1
+  ang_vel absmax 0.981→0.169, leg_vel 3.2→1.3). Logs
+  `scripts/dl_ab_push_{frict,stiff,wiring}.log`; pre-fix gate evidence
+  preserved in `scripts/dl_push_chain2.v1gate-fail.log`. Gate `< 0.02`
+  PASSES → chain2 re-run 2026-09-28 launches reach.
+- **ROOT CAUSE #2 — reward sign inversion in P6 (RESOLVED 2026-09-28):** the
+  v1 reach+push runs trained "successfully" (reach `PUSH_FULL_MARKER=OK`,
+  24.7/ep; push `model_4498.pt`, 52.1/ep; base stood, stand_frac 1.0) but the
+  GPU-2 eval exposed **zero task performance**: reach `contact_both=0.0000`,
+  `wrist_tgt_err=0.839 m`; push `box_disp=0.0009 m`, `contact_both=0`,
+  `goal_err` 0→0.300 (= curriculum `d_max` cap at iter 0, not box motion).
+  Per-term `Episode_Reward/*` in the tb events gave the mechanism:
+  `wrist_target_tracking` logged **+0.931** (rate, reach) and
+  `corner_goal_tracking +1.012` / `centroid_goal_tracking +0.506` (push) —
+  i.e. the policy was PAID for keeping wrists/box FAR: those funcs return
+  the SIGNED quantity (`−error`, `−|ω|`) and the cfg paired them with
+  negative weights → **double-negative = reward for error** (reconciliation:
+  per-step = rate×dt: reach 1.266×0.02 ≈ 0.025 ≈ logged mean 24.7/1000 ✓).
+  Confirmed policy-indifferent vs controllable split: `corner/centroid/
+  box_goal_progress` depend only on `goal_offset` (goal = current box pose
+  + offset → d ≡ |offset|, env-driven by `advance_goal`), so only
+  `wrist_target_tracking`, `wrist_box_proximity` (exp(−gap/0.08), dead until
+  ~8 cm), `box_vel_toward_goal` and `track_cmd` shape behavior — and the
+  strongest of those (wrist) was inverted → contact actively avoided.
+  **Fix (`push_env_cfg.py`, sign-convention docstring added):** weights made
+  positive where the func is signed — corner 1.0, centroid 0.5, spin 0.1,
+  wrist push 0.3, wrist reach 1.0; all other penalties verified correct via
+  their logged negative contributions (positive func × negative weight).
+  Eval untouched (`tgt_err = −func` still right). v1 evidence preserved:
+  `scripts/{reach,push}.v1inverted.push.log`,
+  `scripts/dl_push_chain2.v2-wiringfix-reach.log`,
+  `scripts/dl_push_chain3.v1.log`, v1 ckpt run dirs
+  (`p6_push_reach/2026-09-28_06-25-35`, `p6_push/2026-09-28_07-51-35`).
+  **Follow-up (design, not a bug):** `goal_err=||goal_offset||` cannot be
+  reduced by pushing (goal glued to the box's current pose); the anchored
+  reading `goal_err_anchor = spawn+offset−box` is the true box-position
+  error and only `box_vel_toward_goal` (+0.5) currently rewards box motion —
+  consider anchoring the goal to the box spawn pose if box-position-error
+  should enter the reward. v2 retrain chain relaunched and **completed the
+  same day** (reach wrist gap halved 0.50→0.25 m, campaign-first 5.7 %
+  any-wrist contact, box still static → TRAINING.md § P6 quality report).
 - **Velocity gait-v2 review (2026-09-24) — APPROVED + committed:** the
   velocity cfg was reworked (H1/G1-style gait shaping + direct Cartesian
   commands; see README P2 tables). Verified on the training image via the new
@@ -192,16 +336,60 @@ centroid + progress; teacher-group obs (fully observable by design).
   session: P2 gait campaign teacher→student on spark02, tmux
   `k1_spark_p2_gait`.)
 
-**Remaining:**
-1. When `PUSH_BASE_FULL_MARKER=OK` in `scripts/push_base.host.log` (spark04):
-   re-export with `scripts/export_base_policy.sh` → run `scripts/diag_frozen.sh`
-   (expect diag B done_rate → ~0.001) → relaunch reach:
-   `ssh aim_spark04 '~/Projects/booster_ws/scripts/spark_push_host.sh reach'`.
-2. In-env A/B hunt for the fall (export is proven faithful — see parity note
-   above). Needs a free GPU box; never concurrent with spark04 training.
-3. Never run eval/record GPU containers concurrently with training on spark04
-   (wedged Run-10's CUDA context). Monitor: `tmux ls` /
-   `tail scripts/push_base.full.log` on spark04.
+**Remaining (updated 2026-09-28):**
+0. **NEXT PIPELINE (user 2026-09-28): squat-base → reach → push-v3 — Phase 0
+   audit DONE** (TRAINING.md § P6 Phase-0 degenerate audit: 15 findings —
+   goal anchoring makes corner/centroid/progress pure-env (A1–A3),
+   `track_cmd` stand-at-zero pull (A8), no success/OOB/tip termination
+   (A10/A11/A13), squat vs fixed `root_height`/`base_height` (A12)). User
+   decisions: **train on zz-bw** (SLURM, faster), **randomize box spawn AND
+   goal position**, **corner-point tracking** for the box (reward/eval/success
+   all via the 8 corners). Phase 1 next: `UniformHeightCommandCfg` squat
+   teacher in `velocity/` (cmd = vx, vy, wz, H* with ranges matching VR
+   `BASE_LIMITS`), depth curriculum gated on stand-back-up, then frozen-base
+   reach (10-dim action incl. H*) → push v3 (fixed randomized goal pose +
+   success/OOB/tip terms).
+1. ~~v2 RETRAIN + eval + record + report~~ **DONE 2026-09-28 (dl)** —
+   chain2 → reach 1500/1500 (`PUSH_FULL_MARKER=OK`; tb sanity passed:
+   `wrist_target_tracking` **−0.681**, negative as required) → re-armed
+   chain3 → push **3000/3000** (display 4498/4499, `PUSH_FULL_MARKER=OK`,
+   `PUSH_FULL_RC=0`, 0 tracebacks, ckpt
+   `p6_push/2026-09-28_11-34-52_p6_push/model_4498.pt`; goal curriculum
+   0.3→1.5 m complete, `box_vel_toward_goal` **+0.0025 positive**, falls
+   0.13 %). Evaluated on **GPU 2** (8×400 + 8×1000), both 4-panel deliverable
+   videos recorded + frame-checked (`videos/push_{reach,stage2}_policy.mp4`),
+   and the standing **mean-box-position-error / success-rate / reach-quality
+   report** is in TRAINING.md § “TRACK B — P6 quality report (v2,
+   2026-09-28)”: reach improved materially (wrist gap 0.50→0.25 m, tgt
+   0.84→0.63 m, campaign-first contacts 5.7 % any-wrist) but **success 0 %**
+   — dual contact 0, box displacement ≤1.5 mm, `goal_err_anchor` stuck at the
+   initial ≈0.198 m (box never moves). v1 protocol artifacts kept for the
+   record: warm-start fix in `scripts/spark_push_container.sh` (symlink child
+   `p6_push/warm_from_reach`, smoke without `--checkpoint`, gate
+   `END=ITER0+ITERS`), v1 logs `*.v1inverted.push.log`, v1 run dirs + wandb.
+   **Open (user decision):** iterate training (longer reach / proximity
+   dead-zone tune / anchor goal to box spawn — design note above) vs ship v2
+   as-is. **Delivery chain DONE 2026-09-28:** batch committed via detached
+   worktree `~/Projects/wt-trackb` on `dev/soccer-p3p4` (`fb7115b` fix(push)
+   root causes, `833cf03` docs+videos) → pushed to GitHub; videos uploaded
+   byte-exact to Drive folder `1TDRzuMYN_...` (reach `11nDdUDn...`, push
+   `1p5yUBOth...`) → embedded as slides `slide_p6v2_reach` /
+   `slide_p6v2_push` in deck "K1 RL Policy Play Videos — booster_ws"
+   (`1KamnVS6...`). Main tree (`feat/video-to-motion`) keeps these same edits
+   uncommitted on purpose — do not re-commit them there.
+2. ~~In-env A/B hunt for the P6 fall~~ **DONE 2026-09-28** — root cause was
+   the frozen term's joint-wiring (`preserve_order` mismatch vs the training
+   env); full A/B ladder + fix in the Root cause bullet above. Gate passed
+   (`done_rate=0.0000` < 0.02).
+3. GPU discipline per box: dl uses pinned GPUs (training GPU 1, records GPU 2)
+   so record/eval and training can coexist across GPUs; never run two heavy
+   jobs on the SAME GPU. spark04 (when revived) keeps the old rule: no
+   eval/record while training (it wedged Run-10's CUDA context).
+4. spark04 revive checklist: power/network, then `tmux ls` (old sessions are
+   dead), pull any newer ckpts if the base had progressed past model_800
+   before it died (unlikely — dl's sync saw nothing after model_800), and
+   re-sync its repo from git before any run (its tree also has the stale
+   booster_train_ref submodule).
 
 **Loop recipe (used):** patch → `rsync …/tasks/push/ aim_spark04:…/tasks/push/`
 (with `--no-owner --no-group --no-perms --exclude='__pycache__'`) → relaunch
