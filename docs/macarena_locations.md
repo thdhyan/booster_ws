@@ -1,0 +1,126 @@
+# Macarena — where it lives, and what state each copy is in
+
+Two independent Macarena motions exist. They are **not** the same clip.
+
+---
+
+## Route B (SOMA Retargeter) — the working one
+
+### Source motion
+SOMA's **bundled** dance BVH, shipped with the repo. Not Kimodo-generated.
+
+| | |
+|---|---|
+| On `dl` | `~/Projects/soma-retargeter/assets/motions/bvh/dance_hiphop_shuffle_square_R_fast_002__A318.bvh` |
+| Retargeted to T1 (reference) | `~/Projects/soma-retargeter/assets/motions/csv/booster_t1/dance_hiphop_shuffle_square_R_fast_002__A318.csv` — 690 frames, 29 DoF, **degrees**, cm, Euler XYZ |
+| Local copy of the T1 CSV | `/tmp/opencode/t1_dance.csv` |
+| **K1 CSV (the deliverable)** | `/tmp/opencode/k1_soma_dance.csv` — 690 × 29, radians, metres, quaternion xyzw |
+| **Video** | `~/Projects/wt-soma/docs/videos/k1_soma_dance.mp4` — 13.8 s, 5.6 MB |
+| Branch | `feat/retarget-soma-k1` (worktree `~/Projects/wt-soma`) |
+
+Gate result after grounding: **5 blocking failures** (ankle roll 0.095 rad over
+limit, knee accel 4.5×, sole 42.8 mm through floor, foot slip 1.14 m/s, root
+dips to 0.432 m). These are retarget-quality problems, not pipeline defects.
+
+### The text-generated Macarena (Kimodo → SOMA → K1)
+
+This is the true end-to-end text-to-robot path.
+
+| stage | location |
+|---|---|
+| Kimodo generation script | `~/Projects/kimodo_ws/gen5.sh` → output `out/mac.bvh`, `out/mac.npz` |
+| BVH on `dl` | `~/Projects/macarena_kimodo.bvh` |
+| BVH staged for retargeting | `~/Projects/soma-retargeter/incoming/macarena_kimodo.bvh` |
+| Retarget config | `~/Projects/soma-retargeter/local-configs/macarena_k1.json` |
+| Expected CSV out | `~/Projects/soma-retargeter/output/macarena_k1/macarena_kimodo.csv` |
+| Laptop copy of source BVH | `~/Projects/booster_ws/assets/motions/macarena_kimodo.bvh` (gitignored) |
+| Laptop copy of source NPZ | `~/Projects/booster_ws/assets/motions/macarena_kimodo.npz` (gitignored) |
+
+**Prompt used** (both routes):
+> "A person dances the Macarena: stepping side to side, swinging both arms out
+> and up in wide arcs, turning in place with hips and shoulders, knees bending
+> in rhythm."
+
+Model `Kimodo-SOMA-RP-v1.1`, 8 s, 30 Hz, 77-joint SOMA skeleton, seed 7,
+`--no-postprocess`.
+
+---
+
+## Route A (Kimodo-SMPLX → GMR) — blocked downstream
+
+| stage | location | state |
+|---|---|---|
+| AMASS npz on spark03 | `~/Projects/kimodo_ws/out/smplx_mac_amass.npz` | ✅ 240 frames, betas (16,) |
+| AMASS npz on spark03 GMR | `~/Projects/GMR/macarena_amass.npz` | ✅ |
+| GMR clone | `~/Projects/GMR` (spark03) | ✅ has `assets/booster_k1/K1_serial.xml` + `ik_configs/smplx_to_k1.json` |
+| GMR venv | `~/Projects/.venv-gmr` (spark03) | ✅ torch 2.11+cu130, mink, mujoco 3.14, smplx |
+| `utils/smpl.py` patch | same file, `.orig` kept | ✅ 2 call sites — batched `expression` |
+| `smplx_to_robot.py` run | — | ❌ **blocked**, see below |
+| K1 CSV | — | not produced |
+| Video | — | not produced |
+
+### Where route A is stuck
+
+First bug — **fixed**:
+```
+RuntimeError: Sizes of tensors must match except in dimension 1.
+Expected size 240 but got size 1 ... torch.cat([betas, expression], dim=-1)
+```
+GMR's `utils/smpl.py` had `expression=` commented out at both call sites, so
+SMPL-X's unbatched default failed to broadcast against the 240-frame pose batch.
+Patched to `expression=torch.zeros(num_frames, 10).float()`.
+
+Second bug — **open**:
+```
+RuntimeError: einsum(): subscript l has size 20 for operand 1
+which does not broadcast with previously seen size 26
+```
+A joint/keypoint-count disagreement (20 vs 26) between Kimodo's SMPL-X output
+and what GMR's SMPL-X processing expects. Kimodo's `Kimodo-SMPLX-*` is a
+**reduced-joint** SMPL-X variant, not the full 55-joint body model GMR's loader
+assumes.
+
+Likely fixes, cheapest first:
+1. Compare `Kimodo-SMPLX` joint count against `GMR/general_motion_retargeting/utils/smpl.py`'s
+   expected keypoint slice, and convert Kimodo's output to the full 55-joint layout.
+2. Or use real AMASS as a control: GMR's own test motions
+   (`BMLrub_rub081_0031_rom_stageii.npz`, `KIT_3_walk_6m_straight_line04_stageii.npz`)
+   are known-good. If one of those retargets to K1 cleanly, the bug is
+   Kimodo's output format, not GMR.
+
+Route A is the only reason `scripts/gmr_bvh_to_k1_csv.py` is not yet doing
+useful work.
+
+---
+
+## Native K1 target for SOMA Retargeter (new, on `dl`)
+
+Route B originally converted SOMA's bundled **`booster_t1`** (29 DoF) down to
+K1. That works but is lossy: T1-29dof has 3-DoF wrists/hands per arm that K1
+lacks, and inherits T1's IK weights and foot geometry.
+
+A native K1 target now exists:
+
+```
+dl:~/Projects/soma-retargeter/soma_retargeter/assets/robotics/booster/k1/
+  manifest.json
+  desc/K1_22dof.urdf            (from booster_assets)
+  desc/meshes/                  (STL, from booster_assets)
+  configs/soma_to_booster_k1_scaler_config.json
+  configs/soma_to_booster_k1_retargeter_config.json
+  configs/booster_k1_post_processing_config.json
+```
+
+Generated by `mk_k1.py` from the bundled T1 configs, dropping
+`Left/Right_Wrist_{Pitch,Yaw}`, `Left/Right_Hand_Roll` and `Waist`, and setting:
+
+```json
+"contact_correction": { "sole_normal_local": [0.0, 0.0, -1.0] }
+```
+
+**That last line matters.** The K1 foot box sits at local `[0.026, 0, -0.02]`,
+so sole-up is the link's **−Z**. SOMA's default is +Z; leaving it wrong makes
+foot flattening silently no-op.
+
+Next: run SOMA's IK-weight optimiser (`app/tools/ik-weight-optimizer`) over the
+bundled 15 BVH motions to tune these weights *for K1* rather than inheriting T1's.
