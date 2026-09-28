@@ -15,6 +15,7 @@ Robotics **K1** humanoid (22 DoF) — ROS 2 Jazzy + Isaac Sim 6.0.1 / Isaac Lab
 | Stereo head (ZED 2i replica) | Working in Isaac Sim: ±60 mm baseline, HD720, HFOV 101°, SGBM disparity |
 | RoboCup 3v3 field demo | MuJoCo: 6 K1s + goals + ball + scripted kick, image capture |
 | Multi-robot Isaac fleet | `fleet_sim.py` — bundled-jazzy rclpy, cross-stack DDS verified |
+| Video/text → K1 motion workflow | `k1m` — video or text in, 22-DoF joint angles + MuJoCo replay out. `csv`/`npz`/`text`/`video` paths; every path gated for physics before it is called usable. **Video output is not yet trustworthy — root frame needs normalising** (see [`docs/k1m.md`](docs/k1m.md)) |
 
 ## Repo layout
 
@@ -174,9 +175,47 @@ the standard fleet endpoints; `--capture` runs a scripted striker kick and
 saves snapshots. See `docs/robocup_gmr_research.md` for the Booster
 `robocup_demo` contract analysis and 3v3 replication plan.
 
+## Motion workflow: video or text → K1 joint angles
+
+[`k1m`](docs/k1m.md) wraps the whole chain and hands you joint angles plus a
+rendered replay. Full notes, including how GVHMR was ported to a GB10, are in
+**[`docs/k1m.md`](docs/k1m.md)**.
+
+```
+video ─► GVHMR ─► SMPL-X ─┐
+                          ├─► GMR ─► K1 CSV ─► feasibility gate ─► MuJoCo replay
+text  ─► Kimodo ──────────┘
+```
+
+The laptop is a client only — the models run on a DGX Spark over ssh, while the
+gate and the replay run locally.
+
+```bash
+uv venv --python 3.12 ~/.venvs/k1m
+uv pip install --python ~/.venvs/k1m/bin/python \
+    mujoco 'numpy<2' scipy imageio imageio-ffmpeg pillow gradio
+
+k1m doctor                               # which stages are usable
+k1m video dance.mp4                      # video → CSV + replay
+k1m text "a person dances the Macarena"   # text  → CSV + replay
+k1m joints out/dance_k1.csv --frame 125  # one frame vs URDF limits
+
+scripts/restart_k1m_app.sh               # serve the UI on :7860 (verified restart)
+```
+
+**Read the gate verdict, not the render.** The retargeters are kinematic IK
+solvers with no foot locking, no dynamics and no actuator model, so a
+clean-looking video can still be untrackable. An early Macarena render looked
+fine while asking `AAHead_yaw` for **9.58×** its effort limit and putting a sole
+**91 mm** through the floor. `k1m` exits non-zero on a gate failure so it works
+as a CI check, and the UI flags joints sitting exactly at their URDF limits —
+saturation, which a pass/fail boolean conceals.
+
 ## Docs
 
 - `guide_real.md` — **real robot deployment guide** (network, policies, safety, troubleshooting)
+- [`docs/k1m.md`](docs/k1m.md) — **video/text → K1 motion workflow** (pipeline, install, GVHMR-on-GB10 notes, known gaps)
+- [`docs/k1_ros_deployment_plan.md`](docs/k1_ros_deployment_plan.md) — **RL policy → real robot ROS 2** plan: verified joint order, topic contract, ordered runbook with abort criteria, ranked blockers
 - `docs/video_to_motion_plan.md` — **video → K1 motion plan** (GVHMR/GMR/SOMA/MotionBricks
   retargeting, replay vs. RL tracking, staged phases)
 - `docs/policy_io_reference.md` — per-policy input/output diagrams + 12-DoF rationale
