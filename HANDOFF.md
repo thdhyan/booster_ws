@@ -192,32 +192,69 @@ centroid + progress; teacher-group obs (fully observable by design).
   `scripts/reach.push.full.crashed.log`. Training itself was NOT learning
   anyway: mean reward flat −3.85 → −3.60, ep_len 16–23 (0.3–0.46 s),
   99.7 % late terminations `root_height`, `wrist_box_proximity` ≈ 0.0001.
-- **Root cause (narrowed, OPEN):** the frozen TorchScript base
-  (`models/k1_partialctrl_base.pt`, Run-10 export) **falls every ~17 steps in
-  P6 even with zero commands**, while the same Run-10 policy walks upright in
-  its home partial env (`scripts/play_partial_diag.sh` →
-  `videos/partial_base_diag.mp4`; spark02 `hp.run10.log`: ep_len 42 → 605).
-  Two-pass diag (`scripts/diag_frozen.sh`, log `scripts/diagfrozen.log` on
-  spark04): A `PUSH_FROZEN_MODE=hold` → stand_frac 1.000, done_rate 0.0009
-  (env/physics/IK fine); B frozen policy cmd=0 → stand_frac 1.000 at reset but
-  done_rate 0.0603 (falls ≈ every 17 steps = exactly training's ep_len);
-  step-0 obs canonical (`gravity [0,0,−1]`, rest 0) but policy output
-  ±5–15 → leg targets ±1.25 rad. Static wiring (joint lists, obs order, vmdp
-  imports, sim dt/decimation, cmd ranges) verified identical partial↔push.
-  **Export EXONERATED (offline parity, 2026-09-24):**
-  `scripts/push_export_parity.py` — shipped `models/k1_partialctrl_base.pt`
-  == Run-10 eager runner actor == fresh `as_jit()`, max|diff| **0.0**
-  (bit-exact) on both canonical (exact P6 reset) obs AND partial-style
-  jittered obs. `obs_normalization=False` — no normalizer to drift. The
-  ±5–6 raw action scale is the policy's NORMAL output everywhere (Run-11
-  actor too) — it walks in the partial env with those outputs. So the fall
-  is an **env-side difference** (dynamics/actuation/obs beyond step 0 —
-  e.g. exact-default arm pose the partial curriculum never visits, or
-  ground friction), NOT an export bug. Next: in-env A/B on a free GPU box
-  (NOT concurrent with spark04 training): run the shipped .pt in
-  `Isaac-Velocity-PartialCtrl-K1-Play-v0` — if it walks there, diff the
-  two envs' actuation/reset; if it falls there too, diff the play-path vs
-  frozen-path obs feeds step-by-step.
+- **Root cause (RESOLVED 2026-09-28): joint-wiring mismatch in the frozen
+  term.** `FrozenBaseVelocityAction` resolved joint ids with
+  `find_joints(K1_*_JOINTS, preserve_order=True)` = left-then-right list
+  order, but the partial (home) env the policy trained in resolves BOTH its
+  action terms (`JointActionCfg.preserve_order=False`, confirmed in the home
+  play log: `Resolved ... JointPositionAction: [Left_Hip_Pitch, Right_Hip_Pitch, ...] [[3,4,8,9,...]]`)
+  and its obs terms (`SceneEntityCfg.preserve_order=False`) in
+  **articulation order** (interleaved L/R per joint type). Result in P6:
+  **11/12 leg dims drove the wrong joints** (hip-roll commands onto knees,
+  ankle commands onto hip-yaws) + permuted leg/arm obs blocks → the base
+  cartwheeled within ~17 steps. Everything else was exonerated along the
+  way: export bit-exact (`push_export_parity.py`), step-0 obs canonical,
+  home step-1 actions ≈ frozen `out0` (identical ±4 first output — only
+  *where it landed* differed). **Fix:** `push_mdp.py` resolves
+  `preserve_order=False` everywhere (arms: ONE find over all 8 — two
+  per-side finds concatenated would still be L-block-then-R-block).
+  **A/B ladder (dl GPU 2, same export, pass-B done_rate):** baseline
+  0.0425/0.0434 → ground-friction parity (1.0/1.0 multiply) 0.0434
+  **REFUTED** → stiff-arms (wrist terms dropped; nothing pinned targets →
+  arms ran to joint-zero at 6 rad/s) 0.0294 → full home-reset mimic
+  (legs ×U(0.5,1.5) + `randomize_arm_pose` with pinned PD targets,
+  verifiably applied in the dump) 0.0431 **REFUTED** → **wiring fix:
+  0.0000** (8 envs × 400 steps, zero falls, stand_frac 1.0; step-1
+  ang_vel absmax 0.981→0.169, leg_vel 3.2→1.3). Logs
+  `scripts/dl_ab_push_{frict,stiff,wiring}.log`; pre-fix gate evidence
+  preserved in `scripts/dl_push_chain2.v1gate-fail.log`. Gate `< 0.02`
+  PASSES → chain2 re-run 2026-09-28 launches reach.
+- **ROOT CAUSE #2 — reward sign inversion in P6 (RESOLVED 2026-09-28):** the
+  v1 reach+push runs trained "successfully" (reach `PUSH_FULL_MARKER=OK`,
+  24.7/ep; push `model_4498.pt`, 52.1/ep; base stood, stand_frac 1.0) but the
+  GPU-2 eval exposed **zero task performance**: reach `contact_both=0.0000`,
+  `wrist_tgt_err=0.839 m`; push `box_disp=0.0009 m`, `contact_both=0`,
+  `goal_err` 0→0.300 (= curriculum `d_max` cap at iter 0, not box motion).
+  Per-term `Episode_Reward/*` in the tb events gave the mechanism:
+  `wrist_target_tracking` logged **+0.931** (rate, reach) and
+  `corner_goal_tracking +1.012` / `centroid_goal_tracking +0.506` (push) —
+  i.e. the policy was PAID for keeping wrists/box FAR: those funcs return
+  the SIGNED quantity (`−error`, `−|ω|`) and the cfg paired them with
+  negative weights → **double-negative = reward for error** (reconciliation:
+  per-step = rate×dt: reach 1.266×0.02 ≈ 0.025 ≈ logged mean 24.7/1000 ✓).
+  Confirmed policy-indifferent vs controllable split: `corner/centroid/
+  box_goal_progress` depend only on `goal_offset` (goal = current box pose
+  + offset → d ≡ |offset|, env-driven by `advance_goal`), so only
+  `wrist_target_tracking`, `wrist_box_proximity` (exp(−gap/0.08), dead until
+  ~8 cm), `box_vel_toward_goal` and `track_cmd` shape behavior — and the
+  strongest of those (wrist) was inverted → contact actively avoided.
+  **Fix (`push_env_cfg.py`, sign-convention docstring added):** weights made
+  positive where the func is signed — corner 1.0, centroid 0.5, spin 0.1,
+  wrist push 0.3, wrist reach 1.0; all other penalties verified correct via
+  their logged negative contributions (positive func × negative weight).
+  Eval untouched (`tgt_err = −func` still right). v1 evidence preserved:
+  `scripts/{reach,push}.v1inverted.push.log`,
+  `scripts/dl_push_chain2.v2-wiringfix-reach.log`,
+  `scripts/dl_push_chain3.v1.log`, v1 ckpt run dirs
+  (`p6_push_reach/2026-09-28_06-25-35`, `p6_push/2026-09-28_07-51-35`).
+  **Follow-up (design, not a bug):** `goal_err=||goal_offset||` cannot be
+  reduced by pushing (goal glued to the box's current pose); the anchored
+  reading `goal_err_anchor = spawn+offset−box` is the true box-position
+  error and only `box_vel_toward_goal` (+0.5) currently rewards box motion —
+  consider anchoring the goal to the box spawn pose if box-position-error
+  should enter the reward. v2 retrain chain relaunched and **completed the
+  same day** (reach wrist gap halved 0.50→0.25 m, campaign-first 5.7 %
+  any-wrist contact, box still static → TRAINING.md § P6 quality report).
 - **Velocity gait-v2 review (2026-09-24) — APPROVED + committed:** the
   velocity cfg was reworked (H1/G1-style gait shaping + direct Cartesian
   commands; see README P2 tables). Verified on the training image via the new
@@ -238,17 +275,33 @@ centroid + progress; teacher-group obs (fully observable by design).
   session: P2 gait campaign teacher→student on spark02, tmux
   `k1_spark_p2_gait`.)
 
-**Remaining (updated 2026-09-27):**
-1. Watch `tail -f scripts/dl_push_chain2.log` on **dl** (not spark04). At
-   `DL_PUSH_CHAIN2_DONE` the reach run is live in tmux `k1_spark_push_reach`
-   (log `scripts/reach.push.log`, marker `PUSH_FULL_MARKER=OK`, wandb
-   `p6_push_reach`). Chain2 stages each stop with `DL_PUSH_CHAIN2_GATE=...`
-   on failure — fix that stage and re-run only the remaining stages.
-2. In-env A/B hunt for the P6 fall (export proven faithful — parity note
-   below) only if chain2's diag gate fails (`DIAG_FAILED_BASE_STILL_FALLS`):
-   run the shipped .pt in `Isaac-Velocity-PartialCtrl-K1-Play-v0` on a **free
-   GPU** (dl GPU 2, or another box) — never concurrent with dl training on the
-   same GPU.
+**Remaining (updated 2026-09-28):**
+1. ~~v2 RETRAIN + eval + record + report~~ **DONE 2026-09-28 (dl)** —
+   chain2 → reach 1500/1500 (`PUSH_FULL_MARKER=OK`; tb sanity passed:
+   `wrist_target_tracking` **−0.681**, negative as required) → re-armed
+   chain3 → push **3000/3000** (display 4498/4499, `PUSH_FULL_MARKER=OK`,
+   `PUSH_FULL_RC=0`, 0 tracebacks, ckpt
+   `p6_push/2026-09-28_11-34-52_p6_push/model_4498.pt`; goal curriculum
+   0.3→1.5 m complete, `box_vel_toward_goal` **+0.0025 positive**, falls
+   0.13 %). Evaluated on **GPU 2** (8×400 + 8×1000), both 4-panel deliverable
+   videos recorded + frame-checked (`videos/push_{reach,stage2}_policy.mp4`),
+   and the standing **mean-box-position-error / success-rate / reach-quality
+   report** is in TRAINING.md § “TRACK B — P6 quality report (v2,
+   2026-09-28)”: reach improved materially (wrist gap 0.50→0.25 m, tgt
+   0.84→0.63 m, campaign-first contacts 5.7 % any-wrist) but **success 0 %**
+   — dual contact 0, box displacement ≤1.5 mm, `goal_err_anchor` stuck at the
+   initial ≈0.198 m (box never moves). v1 protocol artifacts kept for the
+   record: warm-start fix in `scripts/spark_push_container.sh` (symlink child
+   `p6_push/warm_from_reach`, smoke without `--checkpoint`, gate
+   `END=ITER0+ITERS`), v1 logs `*.v1inverted.push.log`, v1 run dirs + wandb.
+   **Open (user decision):** iterate training (longer reach / proximity
+   dead-zone tune / anchor goal to box spawn — design note above) vs ship v2
+   as-is. **Remaining infra step:** Track B batch commit → GitHub →
+   Drive/Slides upload.
+2. ~~In-env A/B hunt for the P6 fall~~ **DONE 2026-09-28** — root cause was
+   the frozen term's joint-wiring (`preserve_order` mismatch vs the training
+   env); full A/B ladder + fix in the Root cause bullet above. Gate passed
+   (`done_rate=0.0000` < 0.02).
 3. GPU discipline per box: dl uses pinned GPUs (training GPU 1, records GPU 2)
    so record/eval and training can coexist across GPUs; never run two heavy
    jobs on the SAME GPU. spark04 (when revived) keeps the old rule: no
