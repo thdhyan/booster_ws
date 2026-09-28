@@ -298,7 +298,7 @@ class CommandsCfg:
         # AGILE: 25% of envs get a true stand command, and the ranges are
         # deliberately small (0.5 m/s). Asking a biped that cannot yet stand for
         # 1.5 m/s guarantees collapse. Widen via curriculum, not day one.
-        rel_standing_envs=0.25,
+        rel_standing_envs=0.02,
         rel_heading_envs=0.0,
         heading_command=False,
         heading_control_stiffness=0.5,
@@ -340,7 +340,7 @@ class RewardsCfg:
     # --- Task: velocity tracking (AGILE weight 5.0, std 0.2) ---
     track_lin_vel_xy_exp = RewTerm(
         func=mdp.track_lin_vel_xy_yaw_frame_exp,
-        weight=5.0,
+        weight=10.0,
         params={"command_name": "base_velocity", "std": 0.25},
     )
     track_ang_vel_z_exp = RewTerm(
@@ -352,11 +352,16 @@ class RewardsCfg:
     # --- Upright / posture (AGILE) ---
     # sensor_cfg shifts the target by the terrain height under the trunk, so this
     # stays correct on rough ground instead of pinning an absolute world height.
+    # Positive, not a penalty.  As a -8.0 L2 bill it taxed every metre walked
+    # out of the same budget as the task reward, and the first teacher learned
+    # to stand perfectly (0 % falls) while walking 0.17 m in 36 s.  AGILE pays
+    # for uprightness instead and penalises tilt separately.
     base_height = RewTerm(
-        func=mdp.base_height_l2,
-        weight=-8.0,
+        func=gait.base_height_exp,
+        weight=2.0,
         params={
             "target_height": K1_TRUNK_HEIGHT,
+            "std": 0.1,
             "asset_cfg": SceneEntityCfg("robot"),
             "sensor_cfg": SceneEntityCfg("height_scanner"),
         },
@@ -444,16 +449,10 @@ class RewardsCfg:
         func=mdp.joint_deviation_l1, weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_ARM_HEAD_JOINTS)},
     )
-    # A true stand command should not be turned into marching in place.
-    stand_still = RewTerm(
-        func=mdp.stand_still_joint_deviation_l1,
-        weight=-0.5,
-        params={
-            "command_name": "base_velocity",
-            "command_threshold": 0.1,
-            "asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS),
-        },
-    )
+    # NOTE: the former ``stand_still`` term was removed.  With 25 % of envs
+    # commanded to zero velocity it paid the policy to hold still, reinforcing
+    # exactly the stand-in-place optimum that stopped the first teacher
+    # walking.  Standing is now handled by the positive base_height reward.
     # Do not use hip/trunk ground contact to crawl or kneel forward.
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,

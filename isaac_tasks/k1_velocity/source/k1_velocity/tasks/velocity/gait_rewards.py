@@ -72,3 +72,31 @@ def feet_distance_from_ref(env, asset_cfg: SceneEntityCfg, ref_distance: float) 
     pos = robot.data.body_pos_w[:, asset_cfg.body_ids, :]
     sep = torch.linalg.norm(pos[:, 0, :2] - pos[:, 1, :2], dim=-1)
     return torch.square(sep - ref_distance)
+
+
+def base_height_exp(
+    env,
+    target_height: float,
+    std: float = 0.1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    sensor_cfg: SceneEntityCfg | None = None,
+) -> torch.Tensor:
+    """Positive reward for holding the trunk at ``target_height`` (AGILE).
+
+    AGILE pays for uprightness (``+2.0``) *and* penalises tilt, rather than
+    charging a large L2 bill for height.  That distinction matters: with a
+    negative height penalty, every metre travelled has to be paid for out of the
+    same budget as the task reward, and "stand still" becomes a strong local
+    optimum.  Measured: the first teacher learned to stand flawlessly (0 % falls
+    over 900 steps) and walked 0.17 m in 36 s against a 0.4 m/s command.
+
+    ``sensor_cfg`` shifts the target by the terrain height under the trunk so
+    this stays correct on rough ground.
+    """
+    robot = env.scene[asset_cfg.name]
+    target = torch.full_like(robot.data.root_pos_w[:, 2], float(target_height))
+    if sensor_cfg is not None:
+        sensor = env.scene.sensors[sensor_cfg.name]
+        target = target + sensor.data.ray_hits_w.torch[..., 2].mean(dim=1)
+    err = robot.data.root_pos_w[:, 2] - target
+    return torch.exp(-(err * err) / (std * std))
