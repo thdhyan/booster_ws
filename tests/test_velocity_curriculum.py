@@ -35,21 +35,39 @@ mod = _load()
 
 
 # --- fakes -------------------------------------------------------------------
-class FakeTerm:
-    """Stands in for Isaac Lab's UniformVelocityCommand."""
+class FakeRanges:
+    """Matches UniformVelocityCommandCfg.Ranges, which is what the term reads."""
 
     def __init__(self, lin=0.5, ang=1.0):
-        self.lin_vel_x_range = (-lin, lin)
-        self.lin_vel_y_range = (-lin, lin)
-        self.ang_vel_z_range = (-ang, ang)
+        self.lin_vel_x = (-lin, lin)
+        self.lin_vel_y = (-lin, lin)
+        self.ang_vel_z = (-ang, ang)
+
+
+class FakeCfg:
+    def __init__(self, lin=0.5, ang=1.0):
+        self.ranges = FakeRanges(lin, ang)
+
+
+class FakeTerm:
+    """Stands in for Isaac Lab's UniformVelocityCommand.
+
+    The ranges live at term.cfg.ranges, NOT on the term as attributes: the real
+    command samples with r.uniform_(*self.cfg.ranges.lin_vel_x). A fake that put
+    them on the term is what made the first two launch attempts look plausible
+    and fail in the container.
+    """
+
+    def __init__(self, lin=0.5, ang=1.0):
+        self.cfg = FakeCfg(lin, ang)
 
     @property
     def lin(self):
-        return self.lin_vel_x_range[1]
+        return self.cfg.ranges.lin_vel_x[1]
 
     @property
     def ang(self):
-        return self.ang_vel_z_range[1]
+        return self.cfg.ranges.ang_vel_z[1]
 
 
 class FakeValue:
@@ -77,8 +95,14 @@ class FakeEnv:
 
         outer = self
 
+        class FakeCommandTensor:
+            """get_command returns a TENSOR, not the term. Using it is the bug."""
+
         class CM:
             def get_command(self, name):
+                return FakeCommandTensor()
+
+            def get_term(self, name):
                 assert name == "base_velocity"
                 return outer.term
 
@@ -229,9 +253,9 @@ def test_range_stays_symmetric():
     cur = make(env, patience=1)
     prime(cur, env)
     run(cur, env, intervals=6)
-    lo, hi = env.term.lin_vel_x_range
+    lo, hi = env.term.cfg.ranges.lin_vel_x
     assert lo == pytest.approx(-hi), "backward range must widen with forward"
-    lo, hi = env.term.lin_vel_y_range
+    lo, hi = env.term.cfg.ranges.lin_vel_y
     assert lo == pytest.approx(-hi)
 
 
@@ -247,19 +271,78 @@ def test_missing_reward_term_never_widens():
 
 
 def test_raises_instead_of_silently_doing_nothing():
-    """A renamed Isaac attribute must be loud, not a no-op curriculum."""
+    """A term without reachable ranges must be loud, not a no-op curriculum."""
 
-    class Renamed(FakeTerm):
+    class NoRanges:
         def __init__(self):
-            super().__init__()
-            del self.lin_vel_x_range
-            self.something_else = (-0.5, 0.5)
+            self.cfg = object()
 
     env = FakeEnv()
-    env.term = Renamed()
+    env.term = NoRanges()
     cur = make(env)
-    with pytest.raises(AttributeError, match="lin_vel_x"):
+    with pytest.raises(AttributeError, match="ranges"):
         cur(env, None)
+
+
+def test_raises_when_ranges_lack_a_velocity_axis():
+    class PartialRanges:
+        lin_vel_x = (-0.5, 0.5)
+
+    class Term:
+        def __init__(self):
+            self.cfg = type("C", (), {"ranges": PartialRanges()})()
+
+    env = FakeEnv()
+    env.term = Term()
+    cur = make(env)
+    with pytest.raises(AttributeError, match="lin_vel_y"):
+        cur(env, None)
+
+
+def test_detects_a_write_that_does_not_take_effect():
+    """A silently-ignored write must be caught, not run 3000 iterations inert."""
+
+    class FrozenRanges(FakeRanges):
+        def __setattr__(self, name, value):
+            if name == "lin_vel_x" and getattr(self, "_frozen", False):
+                return  # pretend the config is immutable
+            object.__setattr__(self, name, value)
+
+    # The term must start somewhere else, otherwise the first write is a no-op
+    # (0.5 -> 0.5) and the read-back legitimately matches.
+    class Term:
+        def __init__(self):
+            r = FrozenRanges(lin=0.1, ang=0.2)
+            object.__setattr__(r, "_frozen", True)
+            self.cfg = type("C", (), {"ranges": r})()
+
+    env = FakeEnv()
+    env.term = Term()
+    cur = make(env)
+    with pytest.raises(RuntimeError, match="inert"):
+        cur(env, None)
+
+
+def test_uses_get_term_not_get_command():
+    """get_command returns a Tensor; using it is how the container run failed."""
+    seen = {"get_term": 0, "get_command": 0}
+    env = FakeEnv()
+    inner = env.command_manager
+
+    class CM:
+        def get_command(self, name):
+            seen["get_command"] += 1
+            return object()
+
+        def get_term(self, name):
+            seen["get_term"] += 1
+            return inner._terms["base_velocity"] if hasattr(inner, "_terms") else env.term
+
+    env.command_manager = CM()
+    cur = make(env)
+    cur(env, None)
+    assert seen["get_term"] == 1
+    assert seen["get_command"] == 0
 
 
 def test_interval_gates_measurement_rate():
@@ -290,8 +373,8 @@ def test_config_points_at_the_managerterm_adapter():
 
 
 # --- cfg plumbing -----------------------------------------------------------
-class FakeCfg:
-    """Shape Isaac Lab actually hands a term: the values live under .params."""
+class FakeTermCfg:
+    """Shape Isaac Lab hands a *term* at construction: values under .params."""
 
     def __init__(self, **params):
         self.params = params
@@ -305,7 +388,7 @@ def test_params_arrive_nested_under_cfg_params():
     Getting this wrong is only visible after a full Isaac boot:
     TypeError: ... got an unexpected keyword argument 'params'
     """
-    cfg = FakeCfg(init_lin_vel=0.5, target_max_lin_vel=1.5, patience=5)
+    cfg = FakeTermCfg(init_lin_vel=0.5, target_max_lin_vel=1.5, patience=5)
     kw = mod._as_kwargs(cfg)
     assert kw == {"init_lin_vel": 0.5, "target_max_lin_vel": 1.5, "patience": 5}
     # And they must be acceptable to the real constructor.
@@ -325,7 +408,7 @@ def test_flat_dict_still_accepted():
 
 def test_private_and_callable_cfg_fields_are_dropped():
     """cfg.func and friends must not be forwarded to __init__."""
-    cfg = FakeCfg(init_lin_vel=0.5)
+    cfg = FakeTermCfg(init_lin_vel=0.5)
     kw = mod._as_kwargs(cfg)
     assert "func" not in kw
     assert mod.VelocityRangeCurriculum(FakeEnv(), **kw) is not None

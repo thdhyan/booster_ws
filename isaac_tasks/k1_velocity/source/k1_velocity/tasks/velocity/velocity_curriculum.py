@@ -31,37 +31,36 @@ so a policy that regresses gets help straight away instead of after a plateau.
 
 from __future__ import annotations
 
-# Isaac Lab has renamed these attributes across versions, so probe instead of
-# assuming one. Guessing wrong here silently does nothing, which is the exact
-# failure mode this module exists to prevent.
-_RANGE_ATTRS = (
-    "lin_vel_x_range",
-    "_lin_vel_x_range",
-    "lin_vel_x",
-    "_lin_vel_x",
-)
-_Y_ATTRS = ("lin_vel_y_range", "_lin_vel_y_range", "lin_vel_y", "_lin_vel_y")
-_ANG_ATTRS = ("ang_vel_z_range", "_ang_vel_z_range", "ang_vel_z", "_ang_vel_z")
-
-
-def find_range_attr(term):
-    """Return the attribute name holding the lin_vel_x range, or raise."""
-    for name in _RANGE_ATTRS:
-        if getattr(term, name, None) is not None:
-            return name
-    raise AttributeError(
-        f"cannot find the lin_vel_x range attribute on {type(term).__name__}; tried "
-        f"{list(_RANGE_ATTRS)}. Update _RANGE_ATTRS for this Isaac Lab version rather "
-        "than letting the curriculum silently do nothing."
-    )
-
-
-def _set_range(term, attrs, magnitude):
-    for name in attrs:
-        if getattr(term, name, None) is not None:
-            setattr(term, name, (-magnitude, magnitude))
-            return name
-    return None
+# How to reach the object that actually owns the command ranges.
+#
+# Isaac Lab's UniformVelocityCommand samples from **cfg**, not from instance
+# attributes: _resample_command does `r.uniform_(*self.cfg.ranges.lin_vel_x)`.
+# So widening means mutating `term.cfg.ranges`, and probing the term for an
+# attribute like `lin_vel_x_range` finds nothing -- which is why a launch failed
+# with "cannot find the lin_vel_x range attribute on Tensor".
+#
+# Note also that `command_manager.get_command(name)` returns the command *tensor*,
+# not the term. The term comes from `command_manager.get_term(name)`.
+def resolve_ranges(term):
+    """Return the mutable ranges object of a command term, or raise."""
+    cfg = getattr(term, "cfg", None)
+    ranges = getattr(cfg, "ranges", None) if cfg is not None else None
+    if ranges is None and isinstance(term, dict):
+        ranges = term.get("ranges")
+    if ranges is None:
+        raise AttributeError(
+            f"cannot reach the command ranges on {type(term).__name__}: expected "
+            "term.cfg.ranges, because UniformVelocityCommand samples from "
+            "self.cfg.ranges.lin_vel_x. Refusing to guess -- guessing wrong leaves "
+            "the range unchanged and the curriculum silently does nothing."
+        )
+    for axis in ("lin_vel_x", "lin_vel_y", "ang_vel_z"):
+        if not hasattr(ranges, axis):
+            raise AttributeError(
+                f"command ranges object {type(ranges).__name__} has no '{axis}'; "
+                "the velocity command layout changed and widening would be a no-op"
+            )
+    return ranges
 
 
 class VelocityRangeCurriculum:
@@ -98,14 +97,18 @@ class VelocityRangeCurriculum:
         self._streak = 0
         self._since = 0
         self._applied = False
-        self._attr = None
         self.expansions = 0
         self.contractions = 0
         self.peak_lin = float(init_lin_vel)
 
     # -- introspection --------------------------------------------------------
     def _command_term(self):
-        return self._env.command_manager.get_command("base_velocity")
+        """The base_velocity CommandTerm (not the command tensor)."""
+        mgr = self._env.command_manager
+        getter = getattr(mgr, "get_term", None)
+        if getter is not None:
+            return getter("base_velocity")
+        return mgr._terms["base_velocity"]
 
     def _reward_mean(self):
         """Mean of the velocity-tracking reward term, or None if not found."""
@@ -124,11 +127,22 @@ class VelocityRangeCurriculum:
 
     # -- the actual work ------------------------------------------------------
     def _apply(self, term):
-        self._attr = find_range_attr(term)
-        _set_range(term, _Y_ATTRS, self._lin)
-        _set_range(term, _ANG_ATTRS, self._ang)
-        # lin_vel_x last so a failure above leaves the command axis untouched.
-        _set_range(term, (self._attr,), self._lin)
+        """Write the widened range into the term's config, then verify it stuck.
+
+        The read-back matters: if the config object were immutable or the write
+        silently missed, the run would look perfectly healthy for 3000 iterations
+        while never leaving the starting range.
+        """
+        ranges = resolve_ranges(term)
+        ranges.lin_vel_x = (-self._lin, self._lin)
+        ranges.lin_vel_y = (-self._lin, self._lin)
+        ranges.ang_vel_z = (-self._ang, self._ang)
+        got = ranges.lin_vel_x[1]
+        if abs(got - self._lin) > 1e-6:
+            raise RuntimeError(
+                f"wrote lin_vel_x=+/-{self._lin} but the command term still reports "
+                f"{got}; the range is not being applied and the curriculum is inert"
+            )
         self._applied = True
 
     def __call__(self, env, env_ids):
