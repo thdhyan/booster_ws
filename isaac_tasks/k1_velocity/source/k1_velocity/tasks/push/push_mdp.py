@@ -504,17 +504,30 @@ class FrozenBaseVelocityAction(ActionTerm):
         self._diag_debug = os.environ.get("PUSH_FROZEN_DEBUG", "") == "1"
         self._dbg_n = 0
         dev = self._asset.device
-        # find_joints returns python lists in this Isaac Lab build -> tensors here
-        leg_ids, _ = self._asset.find_joints(K1_LEG_JOINTS, preserve_order=True)
-        head_ids, _ = self._asset.find_joints(K1_HEAD_JOINTS, preserve_order=True)
-        arm_l_ids, _ = self._asset.find_joints(K1_LEFT_ARM_JOINTS, preserve_order=True)
-        arm_r_ids, _ = self._asset.find_joints(K1_RIGHT_ARM_JOINTS, preserve_order=True)
+        # find_joints returns python lists in this Isaac Lab build -> tensors here.
+        #
+        # preserve_order=False = ARTICULATION joint order, mirroring BOTH
+        # consumers in the partial (home) env the frozen policy trained in:
+        #   JointActionCfg.preserve_order=False  (joint_pos/head_pos action terms)
+        #   SceneEntityCfg.preserve_order=False  (PolicyCfg joint_pos/vel obs terms)
+        # The K1_*_JOINTS lists are left-then-right, but the articulation
+        # interleaves L/R per joint type (legs resolve [3,4,8,9,12,13,16,17,
+        # 18,19,20,21] = LHP,RHP,LHR,RHR,..., arms [1,2,6,7,10,11,14,15]).
+        # With preserve_order=True this term wired 11/12 leg dims to the WRONG
+        # joints (hip-roll cmds onto knees etc.) -> the frozen base tipped and
+        # fell in ~17 steps (pass-B done_rate 0.043, immune to friction/reset/
+        # arm-pose A/Bs; home stood on the identical first output).
+        leg_ids, _ = self._asset.find_joints(K1_LEG_JOINTS, preserve_order=False)
+        head_ids, _ = self._asset.find_joints(K1_HEAD_JOINTS, preserve_order=False)
+        # One resolution over all 8 arms: two per-side finds concatenated would
+        # still be L-block-then-R-block instead of the interleaved order the
+        # arm_pos/arm_vel obs blocks had during training.
+        arm_ids, _ = self._asset.find_joints(
+            K1_LEFT_ARM_JOINTS + K1_RIGHT_ARM_JOINTS, preserve_order=False)
         self._leg_ids = torch.as_tensor(leg_ids, dtype=torch.long, device=dev)
         self._head_ids = torch.as_tensor(head_ids, dtype=torch.long, device=dev)
-        self._arm_l_ids = torch.as_tensor(arm_l_ids, dtype=torch.long, device=dev)
-        self._arm_r_ids = torch.as_tensor(arm_r_ids, dtype=torch.long, device=dev)
         self._ids14 = torch.cat([self._leg_ids, self._head_ids], dim=0)
-        self._arm_ids = torch.cat([self._arm_l_ids, self._arm_r_ids], dim=0)
+        self._arm_ids = torch.as_tensor(arm_ids, dtype=torch.long, device=dev)
         self._default14 = self._asset.data.default_joint_pos[:, self._ids14].clone()
         self._last = torch.zeros((env.num_envs, 14), device=self._asset.device)
         self._vel = torch.zeros((env.num_envs, 3), device=self._asset.device)

@@ -15,9 +15,11 @@ size, current corners, goal pose + corners, cumulative offset).
 """
 from __future__ import annotations
 
+import os
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
-from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.envs import ManagerBasedRLEnvCfg, mdp as env_mdp
 from isaaclab.managers import (
     CurriculumTermCfg as CurrTerm,
     EventTermCfg as EventTerm,
@@ -34,6 +36,7 @@ from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from . import push_mdp as mdp
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
 from k1_velocity.sim_backend import apply_physics_backend
+from k1_velocity.tasks.partial.mdp import randomize_arm_pose
 
 
 @configclass
@@ -42,7 +45,22 @@ class K1PushSceneCfg(InteractiveSceneCfg):
 
     replicate_physics = False
 
-    ground = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
+    # Ground material MUST match the velocity/partial terrain the frozen base
+    # trained on (static/dynamic 1.0, combine multiply). GroundPlaneCfg()
+    # defaults to 0.5/0.5 default-combine — quantified env-side delta in the
+    # A/B hunt (home@cmd=0 stands, P6@cmd=0 falls in ~17 steps; chain2 gate
+    # DIAG_FAILED_BASE_STILL_FALLS done_rate=0.0425).
+    ground = AssetBaseCfg(
+        prim_path="/World/ground",
+        spawn=sim_utils.GroundPlaneCfg(
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="multiply",
+                restitution_combine_mode="multiply",
+                static_friction=1.0,
+                dynamic_friction=1.0,
+            )
+        ),
+    )
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(intensity=750.0, color=(0.9, 0.9, 0.9)),
@@ -128,16 +146,24 @@ class K1PushCommandsCfg:
 
 @configclass
 class K1PushRewardsCfg:
-    """Corner-goal pushing rewards + reach shaping + regularization."""
+    """Corner-goal pushing rewards + reach shaping + regularization.
+
+    SIGN CONVENTION (2026-09-28): the *_tracking / *_penalty funcs return the
+    SIGNED quantity itself (corner/centroid/wrist return NEGATIVE error,
+    box_spin returns NEGATIVE |w|), so their weights must be POSITIVE to make
+    the product a penalty. The original negative weights double-negated and
+    the policies were literally PAID for keeping wrists/box far (0 % contact
+    in v1 runs) — see HANDOFF "Reward sign inversion".
+    """
 
     # primary: corners -> goal corners (normalized), centroid ("cumulative sum")
-    corner_goal_tracking = RewTerm(func=mdp.corner_goal_tracking, weight=-1.0)
-    centroid_goal_tracking = RewTerm(func=mdp.centroid_goal_tracking, weight=-0.5)
+    corner_goal_tracking = RewTerm(func=mdp.corner_goal_tracking, weight=1.0)
+    centroid_goal_tracking = RewTerm(func=mdp.centroid_goal_tracking, weight=0.5)
     box_goal_progress = RewTerm(func=mdp.box_goal_progress, weight=2.0)
     box_vel_toward_goal = RewTerm(func=mdp.box_vel_toward_goal, weight=0.5)
-    box_spin_penalty = RewTerm(func=mdp.box_spin_penalty, weight=-0.1)
+    box_spin_penalty = RewTerm(func=mdp.box_spin_penalty, weight=0.1)
     # reach/contact shaping
-    wrist_target_tracking = RewTerm(func=mdp.wrist_target_tracking, weight=-0.3)
+    wrist_target_tracking = RewTerm(func=mdp.wrist_target_tracking, weight=0.3)
     wrist_box_proximity = RewTerm(func=mdp.wrist_box_proximity, weight=0.5)
     # commanded-velocity tracking (command = action's velocity slice)
     track_cmd_lin_vel = RewTerm(func=mdp.track_cmd_lin_vel_exp, weight=0.5, params={"std": 0.5})
@@ -167,7 +193,8 @@ class K1PushReachRewardsCfg(K1PushRewardsCfg):
     box_goal_progress = None
     box_vel_toward_goal = None
     box_spin_penalty = None
-    wrist_target_tracking = RewTerm(func=mdp.wrist_target_tracking, weight=-1.0)
+    # func returns NEGATIVE distance -> positive weight = penalty for error
+    wrist_target_tracking = RewTerm(func=mdp.wrist_target_tracking, weight=1.0)
     wrist_box_proximity = RewTerm(func=mdp.wrist_box_proximity, weight=1.0)
     track_cmd_lin_vel = RewTerm(func=mdp.track_cmd_lin_vel_exp, weight=0.25, params={"std": 0.5})
     track_cmd_ang_vel = RewTerm(func=mdp.track_cmd_ang_vel_exp, weight=0.1, params={"std": 0.5})
@@ -247,6 +274,47 @@ class K1PushEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 4
         self.episode_length_s = 20.0
         self.sim.render_interval = self.decimation
+        # Diag A/B (arm-hold + reset-semantics hunt), PUSH_DIAG_STIFF_ARMS=1:
+        # replicate the partial (home) env's reset/hold semantics, which the
+        # frozen base trained against (its step-1 action is identical to
+        # home's — the first cmd snaps hip_yaw ~0.9 rad in BOTH envs, yet
+        # only P6 tips):
+        #   * drop the two wrist IK terms — stock relative-mode IK rebases
+        #     ee_pos_des = current EE pose + cmd EVERY control step
+        #     (DifferentialIKController.set_command), so zero wrist actions
+        #     leave the arms with no hold stiffness at all;
+        #   * pin arm pose AND persistent PD targets via randomize_arm_pose
+        #     (the exact partial-env function). Dropping the IK terms alone
+        #     is NOT enough: nothing writes the target buffer, it stays at
+        #     stale/zero and the arms ran away to joint-zero at 6+ rad/s
+        #     (done_rate only 0.0434 -> 0.0294);
+        #   * scale leg joints U(0.5,1.5) like velocity reset_robot_joints —
+        #     home never resets to the exact default pose, P6 did.
+        # Baseline pass-B done_rate 0.0434; friction parity already refuted.
+        # Diag-only: default runs unchanged.
+        if os.environ.get("PUSH_DIAG_STIFF_ARMS", "") == "1":
+            self.actions.wrist_left = None
+            self.actions.wrist_right = None
+            # Appended AFTER the existing reset terms (config field order =
+            # event application order) so the sampled arm pose survives
+            # reset_scene/reset_box/reset_robot_joints.
+            self.events.reset_robot_joints = EventTerm(
+                func=env_mdp.reset_joints_by_scale,
+                mode="reset",
+                params={"position_range": (0.5, 1.5), "velocity_range": (0.0, 0.0)},
+            )
+            self.events.arm_pose_random = EventTerm(
+                func=randomize_arm_pose,
+                mode="reset",
+                params={
+                    "asset_cfg":
+                        SceneEntityCfg("robot",
+                                       joint_names=list(mdp.K1_LEFT_ARM_JOINTS)
+                                       + list(mdp.K1_RIGHT_ARM_JOINTS)),
+                    "offset_range": (-1.0, 1.0),
+                    "curriculum_scale": 1.0,
+                },
+            )
 
 
 @configclass
