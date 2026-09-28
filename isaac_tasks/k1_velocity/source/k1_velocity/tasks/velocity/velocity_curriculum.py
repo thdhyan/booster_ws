@@ -240,7 +240,29 @@ def _as_kwargs(cfg):
 if ManagerTermBase is not None:  # pragma: no cover - requires Isaac Lab
 
     class VelocityRangeCurriculumTerm(ManagerTermBase):
-        """ManagerTermBase wrapper so Isaac Lab accepts the curriculum term."""
+        """ManagerTermBase wrapper so Isaac Lab accepts the curriculum term.
+
+        Isaac Lab's two-stage call convention, which this has to match exactly:
+
+        1. ``manager_base._prepare_terms`` replaces the class with a single
+           instance::
+
+               term_cfg.func = term_cfg.func(cfg=term_cfg, env=self._env)
+
+           so ``__init__`` is called once, with keywords, and the instance
+           persists -- which is what lets the streak and range survive across
+           steps.
+
+        2. ``curriculum_manager.compute`` then calls that instance directly::
+
+               state = term_cfg.func(self._env, env_ids, **term_cfg.params)
+
+           i.e. ``__call__(env, env_ids, **params)``. The params arrive a second
+           time here, so ``__call__`` has to absorb them; omitting ``**kwargs``
+           fails with::
+
+               TypeError: ...__call__() got an unexpected keyword argument
+        """
 
         def __init__(self, cfg, env):
             super().__init__(cfg, env)
@@ -255,5 +277,12 @@ if ManagerTermBase is not None:  # pragma: no cover - requires Isaac Lab
         def current_ang(self) -> float:
             return self._impl.current_ang()
 
-        def __call__(self, env, env_ids):
+        @property
+        def expansions(self) -> int:
+            return self._impl.expansions
+
+        def __call__(self, env, env_ids, **kwargs):
+            # kwargs repeats cfg.params; the instance is already configured, so
+            # they are accepted and ignored rather than used to re-init.
             self._impl(env, env_ids)
+            return None

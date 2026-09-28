@@ -333,3 +333,39 @@ def test_private_and_callable_cfg_fields_are_dropped():
 
 def test_none_cfg_is_tolerated():
     assert mod._as_kwargs(None) == {}
+
+
+def test_call_signature_absorbs_repeated_params():
+    """Isaac calls ``instance(env, env_ids, **cfg.params)`` every step.
+
+    manager_base._prepare_terms does ``term_cfg.func(cfg=term_cfg, env=env)``
+    once, then curriculum_manager.compute calls
+    ``term_cfg.func(env, env_ids, **term_cfg.params)`` on that instance. So
+    __call__ must take **kwargs, or every step dies with
+    ``TypeError: ...__call__() got an unexpected keyword argument``.
+    """
+    import inspect
+    import textwrap
+
+    src = MODULE_PATH.read_text()
+    # The adapter only exists with Isaac present, so assert the source contract
+    # rather than instantiating it.
+    assert "def __call__(self, env, env_ids, **kwargs):" in textwrap.dedent(src), (
+        "the ManagerTermBase adapter's __call__ must accept **kwargs"
+    )
+
+
+def test_adapter_is_instantiated_once_so_state_persists():
+    """A fresh instance per step would reset the streak every call.
+
+    Isaac replaces term_cfg.func with the instance in _prepare_terms, so the
+    logic object's counters must live on the instance, not in __call__ locals.
+    """
+    import inspect as _inspect
+
+    sig = _inspect.signature(mod.VelocityRangeCurriculum.__init__)
+    # Everything the curriculum needs is set up in __init__ so it can persist.
+    assert "env" in sig.parameters
+    src = MODULE_PATH.read_text()
+    assert "self._streak = 0" in src
+    assert "self._lin = float(init_lin_vel)" in src
