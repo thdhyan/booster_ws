@@ -67,11 +67,21 @@ def convert(pred_path: str, out_path: str, fps: int = 30) -> dict:
     go = _f3(_get(p, "global_orient", "root_orient", default=np.zeros((frames, 3))),
              frames)
     tr = _f3(_get(p, "transl", "trans", "translation"), frames)
-    betas = np.asarray(_get(p, "betas", default=np.zeros(16)),
-                       dtype=np.float32).reshape(-1)
-    # GVHMR may carry a reduced shape space; AMASS consumers expect at least 10.
-    if betas.size < 10:
-        betas = np.pad(betas, (0, 10 - betas.size))
+
+    # GVHMR predicts betas PER FRAME, i.e. (F, n_betas). AMASS wants a single
+    # shape vector for the whole clip, so average over time. Without this the
+    # flattened array is F*n_betas long (3120 for a 312-frame clip) and GMR
+    # dies in blend_shapes with a nonsense einsum mismatch.
+    raw_betas = np.asarray(_get(p, "betas", default=np.zeros((1, 10))),
+                           dtype=np.float32)
+    raw_betas = raw_betas.reshape(-1, raw_betas.shape[-1]) if raw_betas.ndim > 1 \
+        else raw_betas.reshape(1, -1)
+    n_shape = raw_betas.shape[-1]
+    betas = raw_betas.mean(axis=0)
+    if n_shape < 10:
+        betas = np.pad(betas, (0, 10 - n_shape))
+    print(f"[gvhmr] betas raw shape {raw_betas.shape} -> per-clip vector "
+          f"({betas.size}) by mean over frames")
 
     if body.shape[1] != N_BODY * 3:
         raise SystemExit(

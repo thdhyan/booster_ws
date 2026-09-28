@@ -91,19 +91,43 @@ post-processing, not a better retarget. See `docs/robocup_gmr_research.md` and
 | `k1m csv` | works, no GPU — gate + replay verified |
 | `k1m npz` | works — GMR on `aim_spark03`, numbers match the wt-smplx run exactly |
 | `k1m text` | wired; Kimodo's real CLI is `python -m kimodo.scripts.generate "<prompt>" --model Kimodo-SMPLX-RP-v1 --output STEM` |
-| `k1m video` | **blocked** — GVHMR needs `pytorch3d`, which has no aarch64 wheel and is building from source |
+| `k1m video` | runs end to end (~34 s for a 10 s clip) — GVHMR → AMASS → GMR → gate → replay |
 
-GVHMR on a GB10 needed more than a plain install: its `requirements.txt` pins
-`torch==2.3.0+cu121` (no aarch64 wheel), `chumpy` breaks on numpy >= 1.24
-(`np.int` removal), and `detectron2` refuses to build unless `CUDA_HOME`'s
-toolkit matches `torch.version.cuda`. Current state on `aim_spark02`: torch
-2.14.0+cu130, 17/18 modules import, detectron2 0.6 built. `pytorch3d` is the
-last one.
+### Getting GVHMR onto a GB10
 
-Note GVHMR does not export AMASS — `tools/demo/demo.py` writes a `pred` torch
-dict — so `k1m/gvhmr_amass_export.py` reshapes it into the AMASS layout GMR
-consumes. Its `body_pose` is `(F, 63)`, i.e. 21 joints, which already matches
-AMASS `pose_body`.
+Not a plain install. What actually had to be solved, in order:
+
+| problem | fix |
+|---|---|
+| `torch==2.3.0+cu121` has no aarch64 wheel | torch 2.14.0+cu130 |
+| `detectron2` refuses to build unless `CUDA_HOME`'s toolkit matches `torch.version.cuda` (13.0 vs 12.8) | align torch to cu130, then set `CUDA_HOME=/usr/local/cuda` explicitly — `nvcc` is not on the default PATH, so it silently resolved to `.` |
+| `pytorch3d`: "C++20 or later compatible compiler is required to use ATen" | its `setup.py` pins `cxx_std=17`; patch to 20 |
+| `pycolmap` has no aarch64 wheel | stub it — GVHMR imports it only from the DPVO relative-pose path, which `-s` (static cam) disables. The stub raises on any attribute access so it cannot fail silently |
+| `chumpy` dies on numpy ≥ 1.24 (`from numpy import int`) | shim the removed aliases behind a `try/except ImportError` |
+| `~/.triton/cache` is owned by root (base image) | point `TRITON_CACHE_DIR`/`TORCH_HOME` at a user-writable cache |
+| missing checkpoints | `camenduru/GVHMR` on HF: `gvhmr_siga24_release.ckpt`, `vitpose-h-multi-coco.pth`, `yolov8x.pt`, `hmr2/epoch=10-step=25000.ckpt` (5.4 GB) |
+| missing body models | `SMPLX_NEUTRAL.npz` at `inputs/checkpoints/body_models/smplx/`, `SMPL_NEUTRAL.pkl` at `.../body_models/smpl/` — one extra `smplx/` level for the first |
+
+GVHMR does not export AMASS: `tools/demo/demo.py` `torch.save`s a `pred` dict,
+so `k1m/gvhmr_amass_export.py` reshapes it. Two things it has to get right:
+
+- `body_pose` is `(F, 63)` = 21 joints, which already matches AMASS `pose_body`.
+- **`betas` is per-frame**, `(F, 10)`. AMASS wants one shape vector per clip, so
+  it must be averaged over time — flattened as-is it is `F*10` long (3120 for a
+  312-frame clip) and GMR dies in `blend_shapes` with an einsum mismatch.
+
+### Known gap: the video path's root frame
+
+The chain runs, but the output is not usable yet. A tennis clip retargets to an
+**inverted, airborne** K1: `contact=air`, `root_z=0.297 m`, `q_err=1.008 rad`,
+root bottoming at −0.369 m, a sole 734 mm through the floor.
+
+GVHMR's world frame for a moving person is not gravity-aligned to K1's
+convention the way Kimodo's in-place dance output is. The missing step is root
+normalisation — reorient the human root so "up" maps to K1 up, and make the
+translation relative with a correct z. The SOMA route already has an equivalent
+(`soma_csv_to_k1_csv.py --ground-feet` solves root height from K1 FK); that
+logic needs porting to this path.
 
 ## Layout
 

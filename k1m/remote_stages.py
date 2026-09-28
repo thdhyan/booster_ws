@@ -94,9 +94,20 @@ def gvhrm(video_local: str, host: str = GVHMR_HOST, fps: int = 30,
 
     # Running `python tools/demo/demo.py` puts tools/demo on sys.path, not the
     # cwd, so the in-repo `hmr4d` package is not importable without this.
-    cmd = (_cd(host, GVHMR_DIR) + "export PYTHONPATH=. && "
+    # The video path must be absolute: demo.py does `Path(args.video).exists()`
+    # and python never expands `~`, so a tilde path fails the assert.
+    #
+    # ~/.triton/cache on this host is owned by root (created by a root-run job
+    # in the base image), so triton cannot create its cache dirs there. Redirect
+    # it -- and torch's hub dir -- into a user-writable cache.
+    cache = "~/Projects/.cache-gvhrm"
+    remote.run(host, f"mkdir -p {_q(host, cache)}/{{triton,torch}}")
+    cmd = (_cd(host, GVHMR_DIR)
+           + f"export PYTHONPATH=. TRITON_CACHE_DIR={cache}/triton "
+             f"TORCH_HOME={cache}/torch && "
            f"{shlex.quote(py)} tools/demo/demo.py "
-           f"--video={shlex.quote(rv)} --output_root={shlex.quote(_q(host, wd))}")
+           f"--video={shlex.quote(remote.expand(host, rv))} "
+           f"--output_root={shlex.quote(_q(host, wd))}")
     if static_cam:
         # Skip DPVO SLAM: right for a mostly-static camera, and much cheaper.
         cmd += " -s"
