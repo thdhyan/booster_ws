@@ -239,29 +239,38 @@ def _as_kwargs(cfg):
 
 if ManagerTermBase is not None:  # pragma: no cover - requires Isaac Lab
 
+    # The parameter names below MUST match the keys in the ``velocity_range``
+    # CurrTerm params dict exactly, and each must carry a default. Isaac Lab's
+    # manager_base._resolve_common_term_cfg does a purely static signature
+    # comparison and does not understand **kwargs, so a generic signature is
+    # rejected:
+    #
+    #   ValueError: The term 'velocity_range' expects mandatory parameters:
+    #   ['kwargs'] and optional parameters: [], but received: ['init_lin_vel', ...]
+    #
+    # That is why the list is spelled out instead of using **kwargs. The
+    # duplication is forced by the API, so it is pinned by a test that compares
+    # this signature against the config's params dict.
     class VelocityRangeCurriculumTerm(ManagerTermBase):
         """ManagerTermBase wrapper so Isaac Lab accepts the curriculum term.
 
-        Isaac Lab's two-stage call convention, which this has to match exactly:
+        Isaac Lab's two-stage call convention, matched exactly:
 
         1. ``manager_base._prepare_terms`` replaces the class with a single
            instance::
 
                term_cfg.func = term_cfg.func(cfg=term_cfg, env=self._env)
 
-           so ``__init__`` is called once, with keywords, and the instance
-           persists -- which is what lets the streak and range survive across
+           so ``__init__`` runs once, with keywords, and the instance persists --
+           which is what lets the streak counter and widened range survive between
            steps.
 
-        2. ``curriculum_manager.compute`` then calls that instance directly::
+        2. ``curriculum_manager.compute`` then calls that instance::
 
                state = term_cfg.func(self._env, env_ids, **term_cfg.params)
 
-           i.e. ``__call__(env, env_ids, **params)``. The params arrive a second
-           time here, so ``__call__`` has to absorb them; omitting ``**kwargs``
-           fails with::
-
-               TypeError: ...__call__() got an unexpected keyword argument
+           The params therefore arrive twice. The instance is already configured,
+           so they are accepted and ignored here rather than used to re-init.
         """
 
         def __init__(self, cfg, env):
@@ -281,8 +290,20 @@ if ManagerTermBase is not None:  # pragma: no cover - requires Isaac Lab
         def expansions(self) -> int:
             return self._impl.expansions
 
-        def __call__(self, env, env_ids, **kwargs):
-            # kwargs repeats cfg.params; the instance is already configured, so
-            # they are accepted and ignored rather than used to re-init.
+        def __call__(
+            self,
+            env,
+            env_ids,
+            init_lin_vel: float = 0.5,
+            init_ang_vel: float = 1.0,
+            target_max_lin_vel: float = 1.5,
+            target_max_ang_vel: float = 2.0,
+            step_lin_vel: float = 0.25,
+            step_ang_vel: float = 0.25,
+            success_threshold: float = 0.85,
+            patience: int = 5,
+            interval_steps: int = 50,
+            reward_name_contains: str = "track_lin_vel",
+        ):
             self._impl(env, env_ids)
             return None

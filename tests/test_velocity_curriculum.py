@@ -335,24 +335,18 @@ def test_none_cfg_is_tolerated():
     assert mod._as_kwargs(None) == {}
 
 
-def test_call_signature_absorbs_repeated_params():
-    """Isaac calls ``instance(env, env_ids, **cfg.params)`` every step.
+def test_call_signature_is_not_generic():
+    """A **kwargs signature is rejected by Isaac's static check.
 
-    manager_base._prepare_terms does ``term_cfg.func(cfg=term_cfg, env=env)``
-    once, then curriculum_manager.compute calls
-    ``term_cfg.func(env, env_ids, **term_cfg.params)`` on that instance. So
-    __call__ must take **kwargs, or every step dies with
-    ``TypeError: ...__call__() got an unexpected keyword argument``.
+    manager_base._resolve_common_term_cfg compares the declared parameter names
+    against cfg.params and treats **kwargs as a mandatory parameter named
+    'kwargs', so it fails. The concrete signature is checked against the config
+    in the two tests below.
     """
-    import inspect
-    import textwrap
-
-    src = MODULE_PATH.read_text()
-    # The adapter only exists with Isaac present, so assert the source contract
-    # rather than instantiating it.
-    assert "def __call__(self, env, env_ids, **kwargs):" in textwrap.dedent(src), (
-        "the ManagerTermBase adapter's __call__ must accept **kwargs"
-    )
+    tree = ast.parse(MODULE_PATH.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "__call__":
+            assert node.args.kwarg is None, "**kwargs is not accepted by the manager"
 
 
 def test_adapter_is_instantiated_once_so_state_persists():
@@ -369,3 +363,88 @@ def test_adapter_is_instantiated_once_so_state_persists():
     src = MODULE_PATH.read_text()
     assert "self._streak = 0" in src
     assert "self._lin = float(init_lin_vel)" in src
+
+
+def _adapter_call_params():
+    """Parameter names of VelocityRangeCurriculumTerm.__call__, via AST.
+
+    There are two __call__ definitions in the module -- the logic class's and the
+    adapter's -- so this has to select by enclosing class name, not just by
+    function name.
+    """
+    tree = ast.parse(MODULE_PATH.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "VelocityRangeCurriculumTerm":
+            for sub in node.body:
+                if isinstance(sub, ast.FunctionDef) and sub.name == "__call__":
+                    a = sub.args
+                    return [x.arg for x in a.posonlyargs + a.args + a.kwonlyargs]
+    raise AssertionError("VelocityRangeCurriculumTerm.__call__ not found")
+
+
+def _velocity_range_cfg_params():
+    """Keys of the velocity_range CurrTerm params dict in the env config.
+
+    The config has two CurrTerms (terrain_levels and velocity_range), so this
+    selects the one whose func points at the velocity curriculum.
+    """
+    cfg = ROOT / "isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/velocity_env_cfg.py"
+    tree = ast.parse(cfg.read_text())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if name != "CurrTerm":
+            continue
+        if "velocity_curriculum" not in ast.dump(node):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "params" and isinstance(kw.value, ast.Dict):
+                return [k.value for k in kw.value.keys if isinstance(k, ast.Constant)]
+    raise AssertionError("no velocity_range CurrTerm(params={...}) found in velocity_env_cfg.py")
+
+
+def test_call_signature_matches_config_params_exactly():
+    """Isaac compares the __call__ signature to cfg.params by name, statically.
+
+    manager_base._resolve_common_term_cfg does
+        set(args[min_argc:]) != set(term_params + args_with_defaults)
+    and does not understand **kwargs, so a generic signature is rejected with
+    "expects mandatory parameters: ['kwargs']". Every config param must appear by
+    name in __call__ with a default. This test is what stops that duplication
+    from drifting out of sync without a 4-minute Isaac boot.
+    """
+    call_params = set(_adapter_call_params()) - {"self", "env", "env_ids"}
+    cfg_params = set(_velocity_range_cfg_params())
+    # Every config param must be declared by name with a default. The reverse is
+    # NOT required: the check compares set(args[3:]) against
+    # set(term_params + args_with_defaults), and an extra declared-with-default
+    # parameter appears on both sides, so it passes. Omitting a config param does
+    # not, and that is the direction that breaks at runtime.
+    missing = cfg_params - call_params
+    assert not missing, (
+        f"config passes {sorted(missing)} but __call__ does not declare them; "
+        f"declared={sorted(call_params)}"
+    )
+
+
+def test_call_params_all_have_defaults():
+    """Params without defaults are counted as mandatory and fail the same check."""
+    tree = ast.parse(MODULE_PATH.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "VelocityRangeCurriculumTerm":
+            for sub in node.body:
+                if not (isinstance(sub, ast.FunctionDef) and sub.name == "__call__"):
+                    continue
+                a = sub.args
+                positional = [x.arg for x in a.posonlyargs + a.args]
+                required = positional[: len(positional) - len(a.defaults)]
+                assert set(required) <= {"self", "env", "env_ids"}, (
+                    f"these have no default and Isaac will treat them as mandatory: {required}"
+                )
+                assert a.kwarg is None, (
+                    "**kwargs breaks Isaac's static signature check; list the params "
+                    "explicitly with defaults instead"
+                )
+                return
+    raise AssertionError("VelocityRangeCurriculumTerm.__call__ not found")
