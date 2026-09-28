@@ -56,6 +56,17 @@ parser.add_argument(
     default=False,
     help="use a fixed low LR and tighter gradient clip for a short checkpoint recovery",
 )
+parser.add_argument(
+    "--vel_success_threshold",
+    type=float,
+    default=None,
+    help=(
+        "Override the velocity-curriculum gate: the fraction of an episode the robot "
+        "must survive before the commanded velocity range widens. The default (0.80) is "
+        "the legged_gym standard; 0.60 was needed here because the first full run "
+        "reached only ~0.53 in 3000 iterations and the gate never opened."
+    ),
+)
 # NOTE: --checkpoint comes from AppLauncher (do not re-add: duplicate option)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -135,6 +146,39 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
+
+    # Velocity-curriculum gate override.
+    #
+    # The gate is the fraction of an episode the robot must survive, and it is
+    # what decides when the commanded velocity range widens. It needs to be
+    # settable per-run because the right value is an empirical question: the
+    # first full run reached ~0.53 after 3000 iterations and was still climbing,
+    # so the legged_gym-standard 0.80 never opened and that run produced a
+    # 0.5 m/s policy rather than a velocity result.
+    #
+    # Overridable rather than edited into the config so a run's gate is visible
+    # in its command line and its log, instead of being a silent property of
+    # whatever the config happened to say that day.
+    vel_curr = getattr(getattr(env_cfg, "curriculum", None), "velocity_range", None)
+    if vel_curr is not None:
+        default_thr = vel_curr.params.get("success_threshold")
+        if args_cli.vel_success_threshold is not None:
+            vel_curr.params["success_threshold"] = args_cli.vel_success_threshold
+            print(
+                f"[INFO]: VEL_CURRICULUM success_threshold {default_thr} -> "
+                f"{args_cli.vel_success_threshold} (episode-length fraction)"
+            )
+        print(
+            f"[INFO]: VEL_CURRICULUM gate={vel_curr.params.get('success_threshold')} "
+            f"patience={vel_curr.params.get('patience')} "
+            f"interval_steps={vel_curr.params.get('interval_steps')} "
+            f"max_lin={vel_curr.params.get('target_max_lin_vel')}"
+        )
+    elif args_cli.vel_success_threshold is not None:
+        print(
+            "[WARN]: --vel_success_threshold given but this task has no "
+            "curriculum.velocity_range term; ignoring"
+        )
 
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
