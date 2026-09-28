@@ -57,3 +57,7 @@ docker/.env
 .claude/
 assets/motions/*.bvh
 assets/motions/*.npz
+
+# VR teleop: HMD-Poser weights and SMPL-X-derived body files (licensed, never commit)
+assets/hmd_poser/
+assets/body_models/
