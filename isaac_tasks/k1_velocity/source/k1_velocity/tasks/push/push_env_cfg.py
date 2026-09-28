@@ -1,17 +1,25 @@
-"""P6 box-push envs: frozen locomotion base + wrist IK, corner-goal rewards.
+"""P6 box-push envs (v3): frozen squat base + wrist IK, fixed-goal rewards.
 
 Two ids share this cfg:
   Isaac-Push-Reach-K1-v0 : walk up + extend wrists to contact (heavy box, no
                            push rewards) -> warm-start for the push task.
   Isaac-Push-K1-v0       : full corner-goal pushing (box DR 0.7-1.5x size,
-                           3-25 kg, friction 0.3-1.2; cumulative goal walks
-                           away 0.3 -> 1.5 m on a curriculum).
+                           3-25 kg, friction 0.3-1.2; FIXED randomized goal:
+                           distance 0.3 -> 1.5 m + yaw +-30 -> +-180 deg on
+                           phased curricula).
 
-Action (9) = velocity override (3) | left wrist EE delta (3) | right (3).
-The velocity slice feeds the FROZEN Run-11 partial-control TorchScript policy
-(legs+head); the wrist slices feed DifferentialIK position terms whose EE is
-the hand link. Obs group is TeacherCfg = fully observable by design (mass,
-size, current corners, goal pose + corners, cumulative offset).
+Action (10) = [vx, vy, wz, H*] | left wrist EE delta (3) | right (3).
+The 4-dim command slice feeds the FROZEN squat base teacher (TorchScript,
+236-dim obs assembled in FrozenBaseVelocityAction - blocker 2a); the wrist
+slices feed DifferentialIK position terms whose EE is the hand link. Obs
+group is TeacherCfg = fully observable by design (mass, size, current
+corners, FIXED goal pose + corners, goal-box delta).
+
+v3 per the Phase-0 degenerate audit (TRAINING.md "P6 Phase-0 degenerate
+audit"): fixed randomized goal (A1-A3), world-frame box velocity toward goal
+(A4), two-scale proximity (A7), track_cmd cut to 0.25/0.10 (A8), sparse
+success + failure accounting (A9-A11/A14), command-relative height terms
+(A12), box tip/OOB terminations (A11/A13), spin penalty retired (A3).
 """
 from __future__ import annotations
 
@@ -30,6 +38,7 @@ from isaaclab.managers import (
     TerminationTermCfg as DoneTerm,
 )
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
@@ -37,6 +46,11 @@ from . import push_mdp as mdp
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
 from k1_velocity.sim_backend import apply_physics_backend
 from k1_velocity.tasks.partial.mdp import randomize_arm_pose
+
+# Frozen-base policy path. PUSH_BASE_POLICY overrides it (docker/dl runs; env
+# vars are stripped by singularity --containall, so the zz-bw chain points the
+# default models/k1_push_base.pt symlink at the wanted export instead).
+_PUSH_BASE_POLICY = os.environ.get("PUSH_BASE_POLICY", "models/k1_push_base.pt")
 
 
 @configclass
@@ -76,14 +90,25 @@ class K1PushSceneCfg(InteractiveSceneCfg):
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(1.2, 0.0, 0.5)),
     )
+    # v3: the frozen SQUAT base observes the privileged height scan - exact
+    # copy of the velocity env's sensor (same robot = same
+    # {ENV_REGEX_NS}/Robot/Geometry/Trunk prim, same 17x11 grid = 187 rays).
+    height_scanner = RayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/Geometry/Trunk",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),  # 17x11 = 187 pts
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
 
 
 @configclass
 class ObservationsCfg:
     @configclass
     class TeacherCfg(ObsGroup):
-        """Fully observable (privileged by design): box mass/size/corners/goal
-        + goal pose & corners + cumulative offset, wrist targets, proprio."""
+        """Fully observable (privileged by design): box mass/size/corners,
+        FIXED goal pose & corners, goal-box delta, wrist targets, proprio."""
 
         box_state = ObsTerm(func=mdp.push_box_teacher)          # 68
         base_lin_vel = ObsTerm(func=mdp.vmdp.base_lin_vel, noise=Unoise(n_min=-0.05, n_max=0.05))
@@ -102,7 +127,7 @@ class ObservationsCfg:
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=mdp.K1_LEFT_ARM_JOINTS + mdp.K1_RIGHT_ARM_JOINTS)},
             noise=Unoise(n_min=-0.5, n_max=0.5),
         )                                                        # 8
-        actions = ObsTerm(func=mdp.vmdp.last_action)             # 9
+        actions = ObsTerm(func=mdp.vmdp.last_action)             # 10 (v3)
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -113,11 +138,13 @@ class ObservationsCfg:
 
 @configclass
 class K1PushActionsCfg:
-    """9-dim: velocity override (frozen base) + two wrist IK position terms."""
+    """10-dim (v3): [vx, vy, wz, H*] frozen-base command + two wrist IK terms.
+    Legacy partial mode resolves the command slice to 3 (blocker 2a: the cmd
+    slice grew 3 -> 4 when the squat base brought H*)."""
 
     base_velocity = mdp.FrozenBaseVelocityActionCfg(
         asset_name="robot",
-        base_policy_path="models/k1_partialctrl_base.pt",
+        base_policy_path=_PUSH_BASE_POLICY,
     )
     wrist_left = mdp.DifferentialInverseKinematicsActionCfg(
         asset_name="robot",
@@ -149,25 +176,34 @@ class K1PushRewardsCfg:
     """Corner-goal pushing rewards + reach shaping + regularization.
 
     SIGN CONVENTION (2026-09-28): the *_tracking / *_penalty funcs return the
-    SIGNED quantity itself (corner/centroid/wrist return NEGATIVE error,
-    box_spin returns NEGATIVE |w|), so their weights must be POSITIVE to make
-    the product a penalty. The original negative weights double-negated and
-    the policies were literally PAID for keeping wrists/box far (0 % contact
-    in v1 runs) — see HANDOFF "Reward sign inversion".
+    SIGNED quantity itself (corner/centroid/wrist return NEGATIVE error),
+    so their weights must be POSITIVE to make the product a penalty. The
+    original negative weights double-negated and the policies were literally
+    PAID for keeping wrists/box far (0 % contact in v1 runs) - see HANDOFF
+    "Reward sign inversion". v3 weights below carry the Phase-0 audit fixes
+    (A8/A10/A12) on top of that sign correction.
     """
 
-    # primary: corners -> goal corners (normalized), centroid ("cumulative sum")
+    # primary: corners -> FIXED goal corners (normalized), centroid, progress
     corner_goal_tracking = RewTerm(func=mdp.corner_goal_tracking, weight=1.0)
     centroid_goal_tracking = RewTerm(func=mdp.centroid_goal_tracking, weight=0.5)
     box_goal_progress = RewTerm(func=mdp.box_goal_progress, weight=2.0)
-    box_vel_toward_goal = RewTerm(func=mdp.box_vel_toward_goal, weight=0.5)
-    box_spin_penalty = RewTerm(func=mdp.box_spin_penalty, weight=0.1)
+    box_vel_toward_goal = RewTerm(func=mdp.box_vel_toward_goal, weight=0.5)   # world-frame (A4)
+    # A3: the goal owns its yaw now - rotation is part of the task, so the
+    # spin penalty is retired (corners track orientation; func kept for A/B)
+    box_spin_penalty = None
     # reach/contact shaping
     wrist_target_tracking = RewTerm(func=mdp.wrist_target_tracking, weight=0.3)
-    wrist_box_proximity = RewTerm(func=mdp.wrist_box_proximity, weight=0.5)
-    # commanded-velocity tracking (command = action's velocity slice)
-    track_cmd_lin_vel = RewTerm(func=mdp.track_cmd_lin_vel_exp, weight=0.5, params={"std": 0.5})
-    track_cmd_ang_vel = RewTerm(func=mdp.track_cmd_ang_vel_exp, weight=0.25, params={"std": 0.5})
+    wrist_box_proximity = RewTerm(func=mdp.wrist_box_proximity, weight=0.5)   # two-scale (A7)
+    # commanded-velocity tracking (command = action's command slice)
+    # A8: cut 0.5/0.25 -> 0.25/0.10 - v2's stand-at-zero was worth ~0.5/step
+    # and beat every positive shaping term before the box ever moved
+    track_cmd_lin_vel = RewTerm(func=mdp.track_cmd_lin_vel_exp, weight=0.25, params={"std": 0.5})
+    track_cmd_ang_vel = RewTerm(func=mdp.track_cmd_ang_vel_exp, weight=0.1, params={"std": 0.5})
+    # A12/E1: trunk height tracks the CURRENT command H*, not a fixed 0.57
+    base_height_command = RewTerm(func=mdp.base_height_command, weight=1.0, params={"std": 0.05})
+    # A10/A14: sparse success, paid once on the goal_reached firing step
+    success_bonus = RewTerm(func=mdp.success_bonus, weight=50.0)
     # regularization
     flat_orientation_l2 = RewTerm(func=mdp.vmdp.flat_orientation_l2, weight=-1.0)
     action_rate_l2 = RewTerm(func=mdp.vmdp.action_rate_l2, weight=-0.005)
@@ -181,18 +217,23 @@ class K1PushRewardsCfg:
         weight=-1.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=mdp.K1_LEFT_ARM_JOINTS + mdp.K1_RIGHT_ARM_JOINTS)},
     )
-    termination_penalty = RewTerm(func=mdp.vmdp.is_terminated, weight=-200.0)
+    # A9: failures only - excludes time_out AND success (vmdp.is_terminated
+    # would have charged -200 to a successful episode)
+    termination_penalty = RewTerm(func=mdp.failure_terminated, weight=-200.0)
 
 
 @configclass
 class K1PushReachRewardsCfg(K1PushRewardsCfg):
-    """Reach stage: no push rewards; box is heavy so bumps do not slide it."""
+    """Reach stage: no push rewards; box is heavy so bumps do not slide it.
+    Height/success/failure terms stay active: reaching the contact height is
+    exactly the squat-to-box-height skill (wrist/height interplay, blocker 2a),
+    and a heavy box can never cover the 0.3+ m goal distance, so the success
+    machinery is inert here."""
 
     corner_goal_tracking = None
     centroid_goal_tracking = None
     box_goal_progress = None
     box_vel_toward_goal = None
-    box_spin_penalty = None
     # func returns NEGATIVE distance -> positive weight = penalty for error
     wrist_target_tracking = RewTerm(func=mdp.wrist_target_tracking, weight=1.0)
     wrist_box_proximity = RewTerm(func=mdp.wrist_box_proximity, weight=1.0)
@@ -203,8 +244,14 @@ class K1PushReachRewardsCfg(K1PushRewardsCfg):
 @configclass
 class K1PushTerminationsCfg:
     time_out = DoneTerm(func=mdp.vmdp.time_out, time_out=True)
-    root_height = DoneTerm(func=mdp.vmdp.root_height_below_minimum, params={"minimum_height": 0.35})
+    # A12: command-relative floor H* - 0.05 replaces the fixed 0.35 root_height
+    height_below_command = DoneTerm(func=mdp.height_below_command, params={"margin": 0.05})
     bad_orientation = DoneTerm(func=mdp.vmdp.bad_orientation, params={"limit_angle": 0.8})
+    # A10/A14: success (updates st.success_hold, drives success_bonus)
+    goal_reached = DoneTerm(func=mdp.goal_reached, params={"err_thresh": 0.08, "hold_s": 1.0})
+    # A11/A13: failures counted as terminations (Episode_Termination/*)
+    box_oob = DoneTerm(func=mdp.box_out_of_bounds, params={"radius": 1.9})
+    box_tip = DoneTerm(func=mdp.box_tipped, params={"limit_deg": 45.0})
 
 
 @configclass
@@ -230,13 +277,12 @@ class K1PushEventCfg:
         },
     )
     green_alpha = EventTerm(func=mdp.apply_box_green_alpha, mode="startup")
-    # per-episode
+    # per-episode (order matters: pose -> goal -> wrist targets)
     reset_scene = EventTerm(func=mdp.vmdp.reset_scene_to_default, mode="reset")
-    reset_box = EventTerm(func=mdp.reset_box, mode="reset")
+    reset_box = EventTerm(func=mdp.reset_box, mode="reset")      # spawn + FIXED goal
     reset_wrist_targets = EventTerm(func=mdp.reset_wrist_targets, mode="reset")
-    advance_goal = EventTerm(
-        func=mdp.advance_goal, mode="interval", interval_range_s=(0.24, 0.26), params={"dt": 0.25}
-    )
+    # v3: advance_goal (interval integrator, A1/A2) deleted - the goal is
+    # sampled once in reset_box and never moves.
     push_robot = EventTerm(
         func=mdp.vmdp.push_by_setting_velocity,
         mode="interval",
@@ -250,6 +296,11 @@ class K1PushCurriculumCfg:
     goal_dist = CurrTerm(
         func=mdp.goal_dist_curriculum,
         params={"start_iter": 200, "end_iter": 1800, "d_max": 1.5},
+    )
+    # A3: goal yaw delta phased AFTER the distance walk (1800 -> 3000)
+    goal_yaw = CurrTerm(
+        func=mdp.goal_yaw_curriculum,
+        params={"start_iter": 1800, "end_iter": 3000, "yaw0_deg": 30.0, "yaw_max_deg": 180.0},
     )
 
 
@@ -274,6 +325,9 @@ class K1PushEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 4
         self.episode_length_s = 20.0
         self.sim.render_interval = self.decimation
+        # frozen-base obs parity: the height scanner must tick once per
+        # control step, exactly like the velocity env the teacher trained in
+        self.scene.height_scanner.update_period = self.decimation * self.sim.dt
         # Diag A/B (arm-hold + reset-semantics hunt), PUSH_DIAG_STIFF_ARMS=1:
         # replicate the partial (home) env's reset/hold semantics, which the
         # frozen base trained against (its step-1 action is identical to

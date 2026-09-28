@@ -12,7 +12,7 @@ head) in Isaac Lab 3.0. Four task families live under
 | [**P2f**](#p2f--p2--force-torque-shoves) | P2 + native force/torque shoves | `Isaac-Velocity-Rough-K1-Teacher-F-v0` → `Isaac-Velocity-Distill-K1-F-v0` | 48 blind | 12 legs |
 | [**Partial control**](#partial-control-leghead-randomized-arms) | legs+head policy, arms randomized outside the action space | `Isaac-Velocity-PartialCtrl-K1-v0` → `…-Play-v0` | 68 blind | 14 (12 legs + 2 head) |
 | [**Kick ball**](#kick-ball) | locomotion + ball manipulation (gated) | `Isaac-Kick-Ball-K1-Teacher-v0` → `Isaac-Kick-Ball-K1-Distill-v0` | 45 blind | 12 legs |
-| [**P6 push**](#p6-push-box-pushing) | box pushing, frozen base + wrist IK (teacher-only) | `Isaac-Push-Reach-K1-v0` → `Isaac-Push-K1-v0` | 108 privileged | 9 (3 vel + 6 wrist) |
+| [**P6 push**](#p6-push-box-pushing) | box pushing, frozen squat base + wrist IK (teacher-only) | `Isaac-Push-Reach-K1-v0` → `Isaac-Push-K1-v0` | 109 privileged | 10 (4 cmd + 6 wrist) |
 
 **Teacher → student pattern.** Every family trains a privileged *teacher* with
 PPO (sees the 187-point height scan — plus ball state / foot slip / shove wrench
@@ -337,66 +337,82 @@ guarantee a retrain). No checkpoints yet.
 ## P6 push (box pushing)
 
 Hierarchical manipulation: walk the K1 up to a box, place both wrist stubs on
-it, and push its corners to a moving goal. The hierarchy splits **legs from
-arms** — a 3-dim velocity override feeds the **frozen** Run-11 partial-control
-TorchScript policy (`models/k1_partialctrl_base.pt`, 68-dim obs → 14 leg+head
-actions), while the 6 wrist dims feed two DifferentialIK position terms
-(hand-link EE, `scale=0.05`, DLS, relative mode). Trains in two stages:
-`Isaac-Push-Reach-K1-v0` (heavy box, contact-only rewards) warm-starts
-`Isaac-Push-K1-v0` (corner-goal pushing). Teacher-group obs is fully
-privileged **by design** — no student/distill stage is planned for P6.
+it, and push its corners to a **fixed randomized goal**. The hierarchy splits
+**legs from arms** — a 4-dim command slice `(v_x, v_y, ω_z, H*)` feeds the
+**frozen squat-capable base teacher** (Phase-1 export `models/k1_squat_base.pt`;
+its 236-dim obs is assembled in the exact squat TeacherCfg order → 12 leg
+targets; `H*` maps to the command-relative height terms, `[0.40, 0.55]` m),
+while the 6 wrist dims feed two DifferentialIK position terms (hand-link EE,
+`scale=0.05`, DLS, relative mode). A legacy partial mode (3-dim slice, 68-dim
+obs → 14 leg+head targets, `models/k1_partialctrl_base.pt`) is kept for A/B
+smokes. Trains in two stages: `Isaac-Push-Reach-K1-v0` (heavy box,
+contact-only rewards) warm-starts `Isaac-Push-K1-v0` (corner-goal pushing).
+Teacher-group obs is fully privileged **by design** — no student/distill stage
+is planned for P6.
 
 ### Observations
 
-`teacher` group — **108-dim** (single group, no deployable split):
+`teacher` group — **109-dim** (single group, no deployable split):
 
 | Term | Function | Dim | Uniform noise |
 |---|---|---|---|
-| `box_state` | `mdp.push_box_teacher` — mass 1 + half-extents 3 + 8 corners×3 + box vel 6 + goal pose 7 + cumulative goal offset 3 + 8 goal corners×3 | 68 | — |
+| `box_state` | `mdp.push_box_teacher` — mass 1 + half-extents 3 + 8 corners×3 + box vel 6 + goal pose 7 + goal−box delta 3 + 8 goal corners×3 | 68 | — |
 | `base_lin_vel` | `mdp.base_lin_vel` | 3 | ±0.05 |
 | `base_ang_vel` | `mdp.base_ang_vel` | 3 | ±0.1 |
 | `projected_gravity` | `mdp.projected_gravity` | 3 | — |
 | `wrist_targets` | generated command (2×3 contact targets, base frame) | 6 | — |
 | `arm_joint_pos` | `mdp.joint_pos_rel` (8 arm joints) | 8 | ±0.01 |
 | `arm_joint_vel` | `mdp.joint_vel_rel` | 8 | ±0.5 |
-| `actions` | `mdp.last_action` | 9 | — |
-| **Total** | | **108** | |
+| `actions` | `mdp.last_action` | 10 | — |
+| **Total** | | **109** | |
 
-### Actions (9)
+### Actions (10)
 
 | Slice | Dim | Path |
 |---|---|---|
-| velocity override `(v_x, v_y, ω_z)` | 3 | assembled into the frozen base's 68-dim partial obs → TorchScript policy → 12 leg + 2 head joint targets |
+| command `(v_x, v_y, ω_z, H*)` | 4 | assembled into the frozen base's 236-dim squat obs (vx/vy/wz clamped ±0.5/±0.3/±0.8; H\* → `[0.40, 0.55]` m) → TorchScript policy → 12 leg joint targets (default + clip ±1) |
 | left wrist EE delta | 3 | `DifferentialInverseKinematics` (position, relative, dls) → left arm 4 joints |
 | right wrist EE delta | 3 | same → right arm 4 joints |
 
 ### Commands & goals
 
-`WristTargetCommand` (6): 2×3 wrist contact targets on the box near-face
-(mid-height), written by the reset event — never auto-resamples. The goal is
-an integrator: box pose + cumulative `(dx, dy)` offset that walks away from
-the robot (`advance_goal` every 0.24–0.26 s), curriculum `goal_dist`
-**0.3 → 1.5 m** over iterations **200 → 1800**.
+`WristTargetCommand` (6): 2×3 wrist contact targets on the box **near face**
+(mid-height, derived from the fresh spawn pose — works for any spawn
+direction), written by the reset event — never auto-resamples. The goal is a
+**fixed pose sampled per reset**: box spawns in an annulus **0.9–1.4 m**
+(full direction, full yaw) and the goal sits `d ∈ [0.3, cap]` away (first
+feasible of 4 sampled directions inside the 1.5 m workspace), with
+`goal_yaw = spawn_yaw ± yaw_cap`. Curricula: `goal_dist` **0.3 → 1.5 m**
+over iterations **200 → 1800**, then `goal_yaw` **±30° → ±180°** over
+**1800 → 3000** (phased after the distance walk).
 
 ### Rewards
 
+Weights are positive for terms whose function returns the (negative) error —
+the product is the penalty (see the "Reward sign inversion" note in HANDOFF).
+
 | Term | Weight (push) | Weight (reach) | Meaning |
 |---|---|---|---|
-| `corner_goal_tracking` | −1.0 | — | 8 box corners → 8 goal corners (normalized) |
-| `centroid_goal_tracking` | −0.5 | — | box centroid → goal centroid |
-| `box_goal_progress` | +2.0 | — | cumulative goal distance shrinks |
-| `box_vel_toward_goal` | +0.5 | — | box velocity aligned with goal direction |
-| `box_spin_penalty` | −0.1 | — | discourage yaw spin while pushing |
-| `wrist_target_tracking` | −0.3 | −1.0 | wrists → contact targets |
-| `wrist_box_proximity` | +0.5 | +1.0 | box-frame distance-to-surface shaping |
-| `track_cmd_lin_vel` / `track_cmd_ang_vel` | +0.5 / +0.25 | +0.25 / +0.1 | follow the action's velocity slice (exp, std 0.5) |
+| `corner_goal_tracking` | +1.0 | — | 8 box corners → 8 **fixed** goal corners (normalized) |
+| `centroid_goal_tracking` | +0.5 | — | box centroid → goal centroid |
+| `box_goal_progress` | +2.0 | — | corner-centroid error shrinks (telescoping) |
+| `box_vel_toward_goal` | +0.5 | — | world-frame box velocity toward world (goal − box) |
+| `box_spin_penalty` | — (retired) | — | v2 only: goal now owns its yaw, corners track rotation |
+| `wrist_target_tracking` | +0.3 | +1.0 | wrists → contact targets |
+| `wrist_box_proximity` | +0.5 | +1.0 | two-scale box-surface shaping (`exp(-gap/0.30)+exp(-gap/0.05)`) |
+| `track_cmd_lin_vel` / `track_cmd_ang_vel` | +0.25 / +0.1 | +0.25 / +0.1 | follow the action's command slice (exp, std 0.5) |
+| `base_height_command` | +1.0 | +1.0 | trunk height tracks the current `H*` (Laplacian σ 0.05) |
+| `success_bonus` | +50 | +50 | sparse, paid once on the `goal_reached` firing step |
 | `flat_orientation_l2` | −1.0 | −1.0 | upright torso |
 | `action_rate_l2` | −0.005 | −0.005 | smooth actions |
 | `dof_torques_l2` (arms) | −1.5e−7 | −1.5e−7 | torque regularization |
 | `joint_pos_limits` (arms) | −1.0 | −1.0 | stay inside joint limits |
-| `termination_penalty` | −200.0 | −200.0 | fall penalty |
+| `termination_penalty` (`failure_terminated`) | −200.0 | −200.0 | failures only: excludes `time_out` **and** success |
 
-**Terminations:** `time_out` (20 s), `root_height < 0.35 m`, `|tilt| > 0.8 rad`.
+**Terminations:** `time_out` (20 s), `height < H* − 0.05 m`,
+`|tilt| > 0.8 rad`, **success** `goal_reached` (mean corner error < 0.08 m
+held 1 s), `box_oob` (centre > 1.9 m from env origin), `box_tip` (up-axis
+< cos 45°).
 
 ### Domain randomization
 
@@ -405,7 +421,7 @@ the robot (`advance_goal` every 0.24–0.26 s), curriculum `goal_dist`
 | `randomize_box_geometry` | `prestartup` (USD-time, per env; `replicate_physics=False`) | edge **0.7–1.5 m**, mass **3–25 kg** (reach: 12–25 kg); `MassAPI` + `Gf.Vec3f` inertia scaling |
 | `randomize_friction` | `startup` (needs `root_view` post-play) | static/dyn friction **0.3–1.2**, restitution 0–0.05 (32 buckets) |
 | `green_alpha` | `startup` | translucent green box (α 0.35) |
-| `reset_box` | reset | box 0.9–1.4 m ahead, yaw ±30°, resting `z = half_extents.z` |
+| `reset_box` | reset | annulus **0.9–1.4 m** (full direction, full yaw), goal fixed at `d ∈ [0.3, 1.5]` + yaw ±30…180°, both resting on `z = half_extents.z` |
 | `push_robot` | interval 10–15 s | ±0.3 m/s velocity impulses |
 
 ### Smoke video (16 envs × 3 iters)
@@ -421,9 +437,11 @@ Box-size DR is visible across envs (edge 0.7–1.5 m). Zero-step gate:
 `Learning iteration 2/3` via `scripts/smoke_push.sh push`.
 
 **Runs:** Reach 256×1500 → warm-start Push 256×3000 (wandb
-`p6_push_reach` → `p6_push`, launchers `scripts/spark_push_{host,container}.sh`).
-Frozen base: `models/k1_partialctrl_base.pt` (Run-10 export; batch-agnostic,
-verified 1–64).
+`p6_push_reach` → `p6_push`, launchers `scripts/spark_push_{host,container}.sh`
+on dl/spark, `scripts/zzbw_push_{host,chain_host}.sh` on zz-bw).
+Frozen base: `models/k1_squat_base.pt` (Phase-1 squat-teacher export, mode
+derived from the `models/k1_push_base.pt` symlink); legacy partial mode via
+`PUSH_BASE_POLICY=models/k1_partialctrl_base.pt`.
 
 ---
 
