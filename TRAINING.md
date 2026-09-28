@@ -485,3 +485,113 @@ tighter than the wrist-finger geometry allows; `wrist_box_proximity` dead zone
 training (3000 iters from a reach ckpt that itself never made contact cannot
 invent contact); anchor the goal to the box spawn pose so box-position error
 enters the reward directly (design note).
+
+---
+
+## TRACK B — push v3: Phase-0 audit fixes A1–A15 + zz-bw chain (2026-09-28)
+
+> The full Phase-0 degenerate-audit table (v2 evidence + fix spec) lives in
+> the **main tree's** TRAINING.md (uncommitted, consolidates at delivery).
+> This section records what LANDED on `dev/soccer-p3p4` (`c0fe6fb`, pushed).
+
+### Code (`tasks/push/`)
+
+- **Fixed randomized goal** (A1/A2): goal pose sampled once per reset — box
+  spawn annulus r ∈ [0.9, 1.4] m full circle + full yaw; goal distance
+  d ∈ [0.3, cap] (first feasible of 4 candidate directions inside the 1.5 m
+  workspace, inward fallback), goal yaw = spawn yaw ± cap. The
+  `advance_goal` / `goal_offset` / `push_dir` integrator machinery is
+  **deleted**; the goal is world state (`goal_pos` / `goal_quat`) in the
+  push_state namespace; `push_box_teacher` stays 68-dim (goal−box delta
+  replaces goal_offset).
+- **Curricula** (A3): `goal_dist` 0.3→1.5 m over iters 200→1800 (v2 numbers
+  kept); NEW `goal_yaw` ±30°→±180° over 1800→3000 (phased after distance).
+- **Terminations** (A9–A13): `time_out` | `height_below_command`
+  (H\*−0.05; replaces the fixed 0.35 floor) | bad_orientation |
+  `goal_reached` (mean corner err < 0.08 m held 1 s — updates
+  `success_hold` BEFORE rewards so the sparse bonus lands on the firing
+  step) | `box_out_of_bounds` (centre > 1.9 m from env origin) |
+  `box_tipped` (up-axis < cos 45°). `failure_terminated` = terminated &
+  ~goal_reached, weight −200 — success no longer pays the failure penalty.
+- **Rewards** (A4–A8): `box_vel_toward_goal` world-frame (dir = goal − box
+  recomputed every step); two-scale `wrist_box_proximity`
+  exp(−g/0.30)+exp(−g/0.05) w=0.5; `track_cmd` 0.25/0.10; NEW
+  `base_height_command` exp(−|z−H\*|/0.05) w=1.0; `success_bonus` +50
+  sparse; `box_spin_penalty` retired (goal owns its yaw; corners track the
+  rotation); corner/centroid/progress keep their sign-fixed v2 weights.
+- **Frozen base dual-mode** (blocker 2a): `FrozenBaseVelocityAction` —
+  **squat default**: 4-dim action `[vx±0.5, vy±0.3, wz±0.8, H*=0.40–0.55 m]`
+  → 236-dim noise-free obs in the EXACT velocity TeacherCfg order
+  (lin3|ang3|grav3|cmd4|leg_pos12|leg_vel12|last12|height_scan187 clip ±1)
+  → 12 leg targets = default + clip(out, ±1) (velocity scale 1.0/clip ±1).
+  **partial legacy**: v2 path (3-dim/68/14, `models/k1_partialctrl_base.pt`)
+  for A/B — now pins `st.h_cmd = 0.40` each step so the termination floor is
+  v2-exact (0.35) and the height reward stays near-dead (v2 push had no
+  height term). Mode = resolved basename of the `models/k1_push_base.pt`
+  symlink (`PUSH_BASE_POLICY`/`PUSH_BASE_MODE` env on dl; zz-bw
+  `--containall` strips env → the symlink basename IS the switch).
+- Scene gains `height_scanner` RayCaster (verbatim velocity copy: Trunk
+  prim, offset z 20, yaw-aligned, GridPattern 0.1/[1.6,1.0] = 187 rays,
+  mesh `/World/ground`; `update_period = decimation·dt` in `__post_init__`,
+  same as velocity_env_cfg L563).
+- Docs: `tasks/push/__init__.py` docstring + k1_velocity README P6 section
+  updated (109-dim obs / 10 actions / fixed-goal design); `eval_push_check.py`
+  and `zero_step_check.py` follow the v3 state (goal_err = ‖goal_pos − box‖).
+
+### Blocker scripts (blockers 5/6)
+
+- `scripts/push_preflight.sh` (blocker 5): booster_train_ref submodule
+  **content dirt** (the 2026-09-27 contact regression — invisible in the
+  parent `git status`), gitlink == recorded sha, `_spawn_k1_urdf` present,
+  **v3 code marker** (`goal_yaw_curriculum`), disk ≥ `PRE_MIN_FREE_GB` (60),
+  `run_unbuffered.py`, frozen base (WARN default; fatal with
+  `K1_PRE_REQUIRE_BASE=1`). Gate: `PREFLIGHT_RESULT=PASS`.
+  **PASSED on the zz-bw clone 2026-09-28** (6 PASS + base WARN pre-export).
+- `scripts/zzbw_push_smoke.sh reach|push` — 16×3, `--video --video_length 48
+  --video_interval 24`; gates `[k1-entrypoint] workspace packages import OK`
+  + `Learning iteration 2/3` + no Traceback (never rc). Standing rule:
+  extract + view a PNG frame (`imageio` inside the SIF — no ffmpeg on host)
+  before calling a smoke done.
+- `scripts/zzbw_push_host.sh reach|push` — preflight gate → squat-base
+  symlink retarget → (push) warm-start staged as DIRECT child
+  `logs/rsl_rl/p6_push/warm_from_reach` + `--checkpoint <ct path>` +
+  `ITERS = 3000 − ITER0` (rsl_rl `--max_iterations` is ADDITIONAL on
+  resume) → tmux `k1_push_<stage>`; exit codes 10–14 per failure class.
+- `scripts/zzbw_push_chain_host.sh` — full chain in tmux `k1_push_chain`:
+  preflight → wait `k1_squat_full` (Phase-1) → gate `squat_full.log`
+  (final `4999/5000`, no Traceback, newest ckpt) + **branch check
+  `feat/velocity-squat` (the chain never switches branches)** → export
+  `models/k1_squat_base.pt` via `play_record.py` (gates `TorchScript saved`
+  + file exists) → parity `--layout squat` (gate `PARITY_OK`) → smoke reach
+  → reach 256×1500 (gate `1499/1500` + `model_1499.pt`) → smoke push →
+  push 256×3000 warm-started (gate `2999/3000`) → artifact summary. Stage
+  logs under `/export/scratch/thakk100/k1/` (`chain_*.log`,
+  `reach/push_push.host.log`, `*_smoke.log`).
+- `scripts/push_export_parity.py`: `--layout partial|squat` (68/14 or
+  236/12), `--obs_dim/--act_dim` overrides, `--threshold`; gates
+  `PARITY_MAX_DIFF=` + `PARITY_OK|PARITY_FAIL` (no `--ckpt` reference →
+  FAIL, safe for automation).
+
+### Validation done so far
+
+- `py_compile` (push_mdp, push_env_cfg, `__init__`, parity/eval/zero) +
+  `bash -n` (all four new scripts) ✓.
+- Static cross-checks: all 31 `mdp.*` refs in push_env_cfg resolve in
+  push_mdp `__all__` ✓; TeacherCfg obs parity vs velocity
+  `velocity_env_cfg.py` L238–255 — 236 = 3+3+3+4+12+12+12+187, identical
+  12-joint K1_LEG_JOINTS list, `SceneEntityCfg.preserve_order` default
+  `False` == frozen term's `find_joints(..., preserve_order=False)` →
+  identical articulation ordering (keeps the v2 joint-wiring fix) ✓;
+  height_scanner block + update_period identical ✓.
+- Runtime API vs IsaacLab-ea source: `env.step_dt` (manager_based_env L270),
+  `TerminationManager.terminated` / `get_term` / bool buffers, compute
+  order termination→reward→reset (bonus lands pre-reset) ✓.
+- rsync'd to the zz-bw clone (`--no-owner --no-group --no-perms
+  --exclude='__pycache__'`), stray `scripts/README.md` removed, marker
+  verified (`goal_yaw_curriculum`), **preflight PASS** ✓; running Phase-1
+  unaffected (push package imported once at process start).
+- **Remaining:** dl validation smokes (partial + squat-structural w/ fake
+  policy, PNG frames) → Phase-1 gate (velocity parity ±10 %, height MAE
+  < 2 cm, done 0.0000) → Play-task squat→rise panel video + frame check →
+  start `k1_push_chain` → Phase 4 eval harness (A15: corner-err-<0.08-held
+  metric) → report/videos/Drive/Slides.

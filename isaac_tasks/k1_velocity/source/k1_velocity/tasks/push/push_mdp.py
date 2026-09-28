@@ -883,13 +883,20 @@ class FrozenBaseVelocityAction(ActionTerm):
                 break
 
     def _process_partial(self, actions: torch.Tensor) -> None:
-        """Legacy v2 path: 3-dim cmd -> 68-dim partial obs -> 14 targets."""
+        """Legacy v2 path: 3-dim cmd -> 68-dim partial obs -> 14 targets.
+
+        h_cmd is pinned to H_CMD_MIN (0.40): the partial base has no H*
+        input, and this gives the EXACT v2 termination floor (0.40 - 0.05
+        = 0.35) while leaving the height reward near-dead (v2 push had no
+        height term at all) - so the A/B differs from v2 only in the goal /
+        reward machinery under test, not in floor or height dynamics."""
         st = _state(self._env)
         self._raw_actions[:] = actions
         vel = actions[:, :3].clamp(-0.8, 0.8)
         self._processed_actions[:] = vel
         self._vel = vel
         st.last_vel_cmd = vel
+        st.h_cmd = H_CMD_MIN    # see docstring: exact v2 floor (0.35) in A/B
         robot = self._asset
         lin = vmdp.base_lin_vel(self._env)
         ang = vmdp.base_ang_vel(self._env)
