@@ -19,6 +19,24 @@ echo "=== P2_GAIT INSTALL k1_assets"
 TEACHER_TASK=Isaac-Velocity-Rough-K1-Teacher-v0
 STUDENT_TASK=Isaac-Velocity-Distill-K1-v0
 
+# Pre-flight gate.  Two silent failures cost us a day: the K1 could not hold
+# itself up under zero action (trunk sank 0.589 -> 0.076 m), and every
+# termination was inert because TerminationsCfg had lost its @configclass.
+# Both are cheap to detect in ~2 min and fatal to discover 3000 iterations in.
+echo "=== P2_GAIT PREFLIGHT reward probe (standing + terminations + reward terms)"
+PREFLIGHT_LOG="$REPO/scripts/p2_gait.preflight.log"
+timeout 1200 "$PY" -u isaac_tasks/k1_velocity/scripts/probe_rewards.py \
+  --task "$TEACHER_TASK" --num_envs 8 --steps 150 --viz none 2>&1 | tee "$PREFLIGHT_LOG"
+if ! grep -q "REWARD_PROBE_MARKER=OK" "$PREFLIGHT_LOG"; then
+  echo "P2_GAIT_PREFLIGHT_MARKER=FAIL"
+  exit 30
+fi
+if ! grep -q "STANDS" "$PREFLIGHT_LOG"; then
+  echo "P2_GAIT_PREFLIGHT_MARKER=FAIL_NOT_STANDING"
+  exit 31
+fi
+echo "P2_GAIT_PREFLIGHT_MARKER=OK"
+
 SMOKE_TEACHER_LOG="$REPO/scripts/p2_gait.teacher.smoke.train.log"
 SMOKE_STUDENT_LOG="$REPO/scripts/p2_gait.student.smoke.train.log"
 FULL_TEACHER_LOG="$REPO/scripts/p2_gait.teacher.full.train.log"

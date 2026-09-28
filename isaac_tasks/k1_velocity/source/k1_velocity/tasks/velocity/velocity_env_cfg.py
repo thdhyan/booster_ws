@@ -19,6 +19,7 @@ Requires:
 """
 
 from __future__ import annotations
+import copy
 import math
 
 import isaaclab.sim as sim_utils
@@ -76,7 +77,32 @@ K1_ARM_HEAD_JOINTS = [
 K1_TRUNK_HEIGHT = 0.57
 
 # K1 articulation — imported from booster_train (real actuators, K1_22dof.urdf, init_pos z=0.57)
-K1_ARTICULATION_CFG = BOOSTER_K1_CFG
+#
+# Leg-gain override for locomotion training.  booster_train derives
+# stiffness = armature * (2*pi*f)^2 with natural_freq = 4 Hz, which yields hip
+# gains of only 17.8-30.2 and knee 60.4.  Measured consequence (reward probe,
+# zero action): the trunk sinks monotonically from 0.589 m to 0.076 m in 2.4 s --
+# the robot cannot hold itself up, so no reward can produce a walk.  AGILE's
+# Booster T1, a biped validated for standing and velocity tracking with sim2real,
+# runs stiffness 100 on hips and knee.
+#
+# These gains are SIM-ONLY and deliberately do not live in booster.py: the
+# shared hardware model keeps its real-robot values, and Track B is unaffected.
+K1_P2_LEG_STIFFNESS = {
+    ".*_Hip_Pitch": 100.0,
+    ".*_Hip_Roll": 100.0,
+    ".*_Hip_Yaw": 60.0,
+    ".*_Knee_Pitch": 100.0,
+}
+K1_P2_LEG_DAMPING = {
+    ".*_Hip_Pitch": 5.0,
+    ".*_Hip_Roll": 5.0,
+    ".*_Hip_Yaw": 3.0,
+    ".*_Knee_Pitch": 5.0,
+}
+K1_ARTICULATION_CFG = copy.deepcopy(BOOSTER_K1_CFG)
+K1_ARTICULATION_CFG.actuators["legs"].stiffness = dict(K1_P2_LEG_STIFFNESS)
+K1_ARTICULATION_CFG.actuators["legs"].damping = dict(K1_P2_LEG_DAMPING)
 
 
 # ---------------------------------------------------------------------------

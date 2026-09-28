@@ -24,6 +24,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--task", default="Isaac-Velocity-Rough-K1-Teacher-v0")
 parser.add_argument("--num_envs", type=int, default=16)
 parser.add_argument("--steps", type=int, default=60)
+parser.add_argument("--min-stand-z", type=float, default=0.45,
+                    help="required mean trunk height at the end of the probe")
+ZERO_ACTION_INERT = {"action_rate_l2", "dof_vel_limits", "torque_limits",
+                     "undesired_contacts", "termination_penalty"}
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -75,6 +79,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     print(f"{'term':28s} {'weight':>9s} {'mean':>11s} {'max':>11s}  status")
 
     dead, nonfinite, missing = [], [], []
+    unexpected_dead = []
     # RewardManager keeps the per-term, per-step, already-weight-scaled values in
     # _step_reward[:, i].  (compute() applies *weight * dt, then divides by dt for
     # this buffer, so it reads as the weighted per-step reward.)
@@ -94,6 +99,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             nonfinite.append(name)
         if not nonzero:
             dead.append(name)
+            if name not in ZERO_ACTION_INERT:
+                unexpected_dead.append(name)
         status = "ok"
         if not finite:
             status = "NON-FINITE"
@@ -109,14 +116,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     print(f"total weighted reward/step: {float(total.mean()):.4f}")
     print(f"term count: {len(names)}")
 
-    ok = not (dead or nonfinite or missing)
+    tail = height_log[len(height_log) // 2:]
+    min_tail_z = min(z for _, z in tail)
+    end_z = height_log[-1][1]
+    stands = end_z >= args_cli.min_stand_z and min_tail_z >= args_cli.min_stand_z - 0.08
+    print(f"standing check: end z={end_z:.3f} m, min over last half={min_tail_z:.3f} m, "
+          f"required >= {args_cli.min_stand_z:.2f} m -> {'STANDS' if stands else 'COLLAPSED'}")
+    if dead:
+        print(f"(inert under zero action, expected: {sorted(set(dead))})")
+    ok = not (unexpected_dead or nonfinite or missing) and stands
     print("=" * 78)
     if missing:
         print(f"REWARD_PROBE_MISSING={missing}")
     if nonfinite:
         print(f"REWARD_PROBE_NONFINITE={nonfinite}")
-    if dead:
-        print(f"REWARD_PROBE_DEAD={dead}")
+    if unexpected_dead:
+        print(f"REWARD_PROBE_DEAD={unexpected_dead}")
+    if not stands:
+        print(f"REWARD_PROBE_NOT_STANDING end_z={end_z:.3f} min_tail_z={min_tail_z:.3f}")
     print(f"REWARD_PROBE_MARKER={'OK' if ok else 'FAIL'}")
     wrapped.close()
     return 0 if ok else 1
