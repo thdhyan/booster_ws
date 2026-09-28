@@ -52,6 +52,9 @@ parser.add_argument("--focal", type=float, default=17.0, help="camera focal leng
 parser.add_argument("--width", type=int, default=1024, help="video width px")
 parser.add_argument("--height", type=int, default=576, help="video height px")
 parser.add_argument("--disable_jit", action="store_true")
+parser.add_argument("--panel_video", action="store_true",
+                    help="write a labelled overview/top-down/follow/side debug panel instead of the HUD clip")
+parser.add_argument("--panel_fps", type=int, default=25)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -69,6 +72,8 @@ import torch  # noqa: E402
 
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 import imageio.v2 as imageio  # noqa: E402
+
+from panel_video import K1DebugMarkers, PanelCameras, TiledPanelRecorder, pump_app  # noqa: E402
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner  # noqa: E402
 
@@ -272,6 +277,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     gym_env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
     base_env = gym_env.unwrapped
     robot = base_env.scene["robot"]
+    panel_cams = panel_recorder = markers = None
+    if args_cli.panel_video:
+        if not args_cli.video_out:
+            raise ValueError("--panel_video requires --video_out")
+        panel_cams = PanelCameras()
+        markers = K1DebugMarkers()
+        panel_recorder = TiledPanelRecorder(
+            args_cli.video_out, panel_cams.names, fps=args_cli.panel_fps
+        )
+        print(f"[INFO] panel recording -> {args_cli.video_out}")
     env = RslRlVecEnvWrapper(gym_env)
 
     # -- runner: PPO vs distillation (mirrors play.py / play_student.py) ---
@@ -317,7 +332,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
               dt=float(getattr(env, "step_dt", 0.02)),
               width=args_cli.width, height=args_cli.height)
     writer = None
-    if args_cli.video_out:
+    if args_cli.video_out and not args_cli.panel_video:
         os.makedirs(os.path.dirname(os.path.abspath(args_cli.video_out)),
                     exist_ok=True)
         fps = int(getattr(env, "metadata", {}).get("render_fps", 50)) or 50
@@ -339,6 +354,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     ep_reward = torch.zeros(args_cli.num_envs, device=env.device)
     frames_written = 0
+
+    def _panel_views():
+        root = robot.data.root_pos_w[0].detach().cpu().numpy()
+        return [
+            ("overview", root + np.array([5.0, -7.0, 4.5]), root + np.array([0.0, 0.0, 0.3])),
+            ("top_down", root + np.array([0.001, -0.001, 9.0]), root),
+            ("follow", root + np.array([2.8, -2.8, 1.8]), root + np.array([0.0, 0.0, 0.5])),
+            ("side", root + np.array([-4.0, 0.0, 2.2]), root + np.array([0.0, 0.0, 0.45])),
+        ]
+
+    def _panel_status(step, step_reward, episode_reward):
+        info = markers.update(base_env, robot, args_cli.task) if markers else {"knowledge": "n/a"}
+        visible = ""
+        state = getattr(base_env, "head_track", None)
+        if state is not None and getattr(state, "yolo", None) is not None:
+            visible = f" detector_visible={float(state.yolo[0, 0]):.0f}"
+        return (f"{args_cli.label or args_cli.task} | step {step}/{args_cli.steps} | "
+                f"t={step * float(getattr(env, 'step_dt', 0.02)):.1f}s | "
+                f"cmd={cmd_text} | reward={step_reward:+.3f} | episode={episode_reward:+.2f} | "
+                f"{info['knowledge']}{visible}")
+
     with torch.inference_mode():
         for n in range(args_cli.steps):
             if not simulation_app.is_running():
@@ -350,17 +386,25 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
             # ---- capture + overlay ------------------------------------
             _set_recording_camera(base_env, robot, eye_offset, lookat_offset)
-            frame = gym_env.render()
-            if frame is None:
-                sys.exit("[ERROR] env.render() returned None — rgb_array "
-                         "video_recorder/visualizer not active; cannot record.")
-            hud_frame = hud.draw(
-                frame, step=n, actions=actions[0].cpu().numpy(),
-                obs={k: v[0].cpu().numpy() for k, v in obs.items()},
-                step_reward=float(rew[0]), ep_reward=float(ep_reward[0]))
-            if writer is not None:
-                writer.append_data(hud_frame)
+            if panel_recorder is not None:
+                markers.update(base_env, robot, args_cli.task)
+                panel_cams.set_views(_panel_views())
+                pump_app()
+                images = {name: panel_cams.read(name) for name in panel_cams.names}
+                panel_recorder.add(images, _panel_status(n, float(rew[0]), float(ep_reward[0])))
                 frames_written += 1
+            else:
+                frame = gym_env.render()
+                if frame is None:
+                    sys.exit("[ERROR] env.render() returned None — rgb_array "
+                             "video_recorder/visualizer not active; cannot record.")
+                hud_frame = hud.draw(
+                    frame, step=n, actions=actions[0].cpu().numpy(),
+                    obs={k: v[0].cpu().numpy() for k, v in obs.items()},
+                    step_reward=float(rew[0]), ep_reward=float(ep_reward[0]))
+                if writer is not None:
+                    writer.append_data(hud_frame)
+                    frames_written += 1
 
             # ---- trace ------------------------------------------------
             trace["actions"].append(actions.cpu().numpy())
@@ -375,6 +419,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
                 print(f"[rec {n:5d}/{args_cli.steps}] step_rew={float(rew.mean()):+.4f} "
                       f"ep_rew={float(ep_reward.mean()):+.2f}")
 
+    if panel_recorder is not None:
+        panel_recorder.close()
+        panel_cams.close()
+        print(f"[INFO] panel video saved -> {args_cli.video_out} ({frames_written} frames)")
     if writer is not None:
         writer.close()
         print(f"[INFO] video saved -> {args_cli.video_out} "

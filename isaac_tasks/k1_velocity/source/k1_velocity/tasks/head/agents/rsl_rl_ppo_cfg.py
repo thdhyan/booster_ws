@@ -22,7 +22,7 @@ class K1HeadTrackPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         hidden_dims=[256, 128, 64],
         activation="elu",
         obs_normalization=False,
-        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0, std_type="log"),
     )
     critic = RslRlMLPModelCfg(hidden_dims=[256, 128, 64], activation="elu", obs_normalization=False)
     algorithm = RslRlPpoAlgorithmCfg(

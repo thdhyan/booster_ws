@@ -62,6 +62,14 @@ class K1VelocityPPOTeacherRunnerCfg(K1VelocityPPORunnerCfg):
 
     experiment_name = "p2_move_teacher"
     obs_groups = {"actor": ["teacher"], "critic": ["teacher"]}
+    # Log-parameterized std stays positive.  The rsl-rl default "scalar"
+    # parameterization can cross zero late in long PPO runs.
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[512, 256, 128],
+        activation="elu",
+        obs_normalization=False,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0, std_type="log"),
+    )
 
 
 @configclass

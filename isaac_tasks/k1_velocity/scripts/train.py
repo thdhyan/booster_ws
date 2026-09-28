@@ -50,6 +50,12 @@ parser.add_argument("--seed", type=int, default=None)
 parser.add_argument("--max_iterations", type=int, default=None)
 parser.add_argument("--distributed", action="store_true", default=False)
 parser.add_argument("--export_io_descriptors", action="store_true", default=False)
+parser.add_argument(
+    "--safe_resume",
+    action="store_true",
+    default=False,
+    help="use a fixed low LR and tighter gradient clip for a short checkpoint recovery",
+)
 # NOTE: --checkpoint comes from AppLauncher (do not re-add: duplicate option)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -107,6 +113,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
          agent_cfg: RslRlOnPolicyRunnerCfg):
     """Train with RSL-RL agent."""
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    if args_cli.safe_resume:
+        if not args_cli.checkpoint:
+            raise ValueError("--safe_resume requires --checkpoint")
+        # Conservative tail recovery: the source run is already trained and only
+        # needs a short, stable finish.  Fixed LR prevents the adaptive schedule
+        # from amplifying a late critic spike; tighter clipping protects both nets.
+        agent_cfg.algorithm.learning_rate = 1.0e-4
+        agent_cfg.algorithm.schedule = "fixed"
+        agent_cfg.algorithm.max_grad_norm = 0.5
+        agent_cfg.algorithm.value_loss_coef = 0.5
+        agent_cfg.algorithm.entropy_coef = 0.001
+        print("[INFO]: SAFE_RESUME lr=1e-4 schedule=fixed max_grad_norm=0.5 value_loss_coef=0.5")
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations

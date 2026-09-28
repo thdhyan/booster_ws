@@ -29,7 +29,7 @@ run_one() {
   echo "=== P2_REC $name checkpoint=$ckpt"
   "$PY" -u isaac_tasks/k1_velocity/scripts/play_record.py \
     --task "$task" --checkpoint "$ckpt" --num_envs 4 --steps 750 --headless \
-    --eye 5.5,-5.5,3.0 --lookat 0,0,0.5 --cmd 0.6 0 0 \
+    --eye 5.5,-5.5,3.0 --lookat 0,0,0.5 --cmd 0.6 0 0 --panel_video \
     --video_out "$OUT/${name}.mp4" --trace_out "$OUT/${name}_trace.npz" \
     --export "$export_path" --label "$label"
   local rc=$?
