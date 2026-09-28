@@ -83,3 +83,26 @@ gym.register(
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.rsl_rl_distill_cfg:K1VelocityDistillForceRunnerCfg",
     },
 )
+
+# Phase 1 (TRACK B next pipeline): squat-capable base teacher — velocity + commanded
+# trunk height H* at VR teleop BASE_LIMITS (squat_env_cfg.py / squat_command.py).
+gym.register(
+    id="Isaac-Velocity-Squat-K1-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.velocity.squat_env_cfg:K1VelocitySquatEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.squat_ppo_cfg:K1SquatPPOTeacherRunnerCfg",
+    },
+)
+
+# Phase-1 debug video: flat, stationary squat->rise demo (trained policy).
+gym.register(
+    id="Isaac-Velocity-Squat-K1-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.velocity.squat_env_cfg:K1VelocitySquatPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.squat_ppo_cfg:K1SquatPPOTeacherRunnerCfg",
+    },
+)
