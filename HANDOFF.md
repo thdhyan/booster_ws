@@ -113,7 +113,53 @@ frozen base assembled with the exact 68-dim partial obs; IK `body_name=*_hand_li
 offset integrator (curriculum 0.3→1.5 m), rewards on 8 corners + corner
 centroid + progress; teacher-group obs (fully observable by design).
 
-**Status (2026-09-24 19:05 UTC) — TRACK B: TRAINING BLOCKED ON FROZEN-BASE BUG; GAIT-V2 BASE RETRAIN RUNNING:**
+**Status (2026-09-27 21:30 CDT) — ⚠️ spark04 DEAD, BASE RECOVERED + RESUME RUNNING ON dl:**
+- **spark04 offline since 2026-09-24 ~00:32 UTC** (`No route to host`; dl's
+  sync loop logged 2352 consecutive FAILs since then). Needs the usual
+  power/network check by the user. The gait-v2 base retrain was at ~iter 840
+  when the box died — it did NOT finish. Auto-chain never fired.
+- **Rescue:** dl's `k1_spark_sync` had synced the run to
+  `dl:Projects/booster_ws/logs/spark04/rsl_rl/k1_partialctrl_base/
+  2026-09-24_18-44-39_k1_partialctrl_base/` through `model_800.pt`. Checkpoints
+  `model_0..800` are now materialized under the standard dl root
+  `logs/rsl_rl/k1_partialctrl_base/2026-09-24_18-44-39_k1_partialctrl_base/`.
+- **dl recovery stack (committed `5875c50` + follow-ups):**
+  `scripts/dl_push_base_resume_{host,container}.sh` (smoke marker-gated → FULL
+  512-env resume with `--checkpoint model_800`), `scripts/dl_push_chain2_host.sh`
+  (auto-chain, see gates below), `scripts/dl_partial800{,_walk}_record_host.sh`.
+  Sessions: `k1_dl_push_base_resume` (GPU 1), `k1_dl_push_chain2`,
+  `k1_dl_partial800_rec`/`k1_dl_partial800_walk` (GPU 2, done).
+- **Two dl-specific startup fixes (both marker-gated catches):**
+  1. `isaac_tasks/booster_train_ref` is a **submodule with a stale/uncommitted
+     pointer** — a git materialization (dl) gets the OLD fork whose bulk import
+     lists `resolve_joint_parameter` → `ImportError` on the image (rsync'd boxes
+     were fine because they carry the fixed working tree with the try/except
+     vendored fallback). Fixed by rsync'ing the fork source to dl. **Commit the
+     submodule pointer bump when convenient.**
+  2. `train.py --checkpoint` computes `load_run` as a relpath from
+     `logs/rsl_rl/<experiment>` and `get_checkpoint_path` **regex-matches run
+     dir NAMES**, so a `logs/spark04/...` path never matches → materialize the
+     ckpt under the standard root instead (done).
+- **Resume run:** smoke 16×3 `Learning iteration 2/3` OK → FULL launched
+  21:14 CDT, display total **3800** (rsl_rl adds `--max_iterations` to the ckpt
+  iter: 800+3000). chain2 gates: reaches `/3800` (iter ≥3700 line) AND newest
+  `model_*.pt` ≥ 3700 → export (`BASE_EXPORT_RC=0` + fresh mtime) →
+  `diag_frozen.sh` → pass-B `done_rate < 0.02` → `dl_push_host.sh reach`.
+  v1 chain's `2999/3000` markers were WRONG for resume (never print) — do not
+  resurrect them.
+- **Iter-800 progress videos recorded + frame-checked** (GPU 2, no training
+  concurrency): `videos/partial_gaitv2_iter800.mp4` (stand; 4/4 robots upright
+  through t=5.7 s, episode reward +4.90) and `videos/partial_gaitv2_iter800_walk.mp4`
+  (`cmd vx=+0.80`; all 4 upright with active stepping, **no forward translation
+  yet** — matches `error_vel_xy ≈ 0.95` in the curves). HUD shows ckpt + task +
+  cmd + step/episode reward + action/obs traces.
+- **Base-run curves @ iter 800** (synced tfevents): ep_len 10 → peak 190 →
+  158; `termination/base_orientation` 0.92 → 0.15 (good);
+  `termination/root_height` 0.03 → **0.80** (kneeling falls now dominant —
+  the remaining 2900 iters must fix this); `feet_air_time` ≈ 0 (gait not
+  emerged yet); timeout term 0 → 0.12.
+
+**Status (2026-09-24 19:05 UTC — historical): TRACK B: TRAINING BLOCKED ON FROZEN-BASE BUG; GAIT-V2 BASE RETRAIN RUNNING:**
 - **Zero-step OK:** `ZERO_STEP_RESULT=OK` (3 steps, obs `teacher (n,108)`, rewards
   compute, no terminations; box rests at `z = half_extents`, DR prints
   `edge 0.71-1.47 m, mass 3.6-19.2 kg`). Gate log `scripts/pushzero.log`.
@@ -192,16 +238,26 @@ centroid + progress; teacher-group obs (fully observable by design).
   session: P2 gait campaign teacher→student on spark02, tmux
   `k1_spark_p2_gait`.)
 
-**Remaining:**
-1. When `PUSH_BASE_FULL_MARKER=OK` in `scripts/push_base.host.log` (spark04):
-   re-export with `scripts/export_base_policy.sh` → run `scripts/diag_frozen.sh`
-   (expect diag B done_rate → ~0.001) → relaunch reach:
-   `ssh aim_spark04 '~/Projects/booster_ws/scripts/spark_push_host.sh reach'`.
-2. In-env A/B hunt for the fall (export is proven faithful — see parity note
-   above). Needs a free GPU box; never concurrent with spark04 training.
-3. Never run eval/record GPU containers concurrently with training on spark04
-   (wedged Run-10's CUDA context). Monitor: `tmux ls` /
-   `tail scripts/push_base.full.log` on spark04.
+**Remaining (updated 2026-09-27):**
+1. Watch `tail -f scripts/dl_push_chain2.log` on **dl** (not spark04). At
+   `DL_PUSH_CHAIN2_DONE` the reach run is live in tmux `k1_spark_push_reach`
+   (log `scripts/reach.push.log`, marker `PUSH_FULL_MARKER=OK`, wandb
+   `p6_push_reach`). Chain2 stages each stop with `DL_PUSH_CHAIN2_GATE=...`
+   on failure — fix that stage and re-run only the remaining stages.
+2. In-env A/B hunt for the P6 fall (export proven faithful — parity note
+   below) only if chain2's diag gate fails (`DIAG_FAILED_BASE_STILL_FALLS`):
+   run the shipped .pt in `Isaac-Velocity-PartialCtrl-K1-Play-v0` on a **free
+   GPU** (dl GPU 2, or another box) — never concurrent with dl training on the
+   same GPU.
+3. GPU discipline per box: dl uses pinned GPUs (training GPU 1, records GPU 2)
+   so record/eval and training can coexist across GPUs; never run two heavy
+   jobs on the SAME GPU. spark04 (when revived) keeps the old rule: no
+   eval/record while training (it wedged Run-10's CUDA context).
+4. spark04 revive checklist: power/network, then `tmux ls` (old sessions are
+   dead), pull any newer ckpts if the base had progressed past model_800
+   before it died (unlikely — dl's sync saw nothing after model_800), and
+   re-sync its repo from git before any run (its tree also has the stale
+   booster_train_ref submodule).
 
 **Loop recipe (used):** patch → `rsync …/tasks/push/ aim_spark04:…/tasks/push/`
 (with `--no-owner --no-group --no-perms --exclude='__pycache__'`) → relaunch

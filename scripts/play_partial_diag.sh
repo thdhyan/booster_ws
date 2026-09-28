@@ -15,7 +15,7 @@ echo "=== PARTIAL DIAG ckpt=$CKPT"
   --checkpoint "$CKPT" \
   --num_envs 4 --steps 300 --headless \
   --eye 6,-6,3 --lookat 3,0,0.5 \
-  --video_out "$OUT" --label "partial diag"
+  --video_out "$OUT" --label "partial diag" "${@:3}"
 if [ -s "$OUT" ] && [ "$(find "$OUT" -mmin -5 | wc -l)" -gt 0 ]; then
   echo "PARTIAL_DIAG_OK size=$(stat -c%s "$OUT")"
 else
