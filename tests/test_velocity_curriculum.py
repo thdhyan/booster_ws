@@ -116,11 +116,31 @@ class FakeLogger:
 
 
 class FakeEnv:
-    def __init__(self, tracking=0.9, term=None):
+    """Env fake exposing exactly what the curriculum reads.
+
+    ``upright`` is the fraction of an episode the robot survives; ``tracking`` is
+    the raw velocity-tracking reward, which is logged but NOT the gate.
+    """
+
+    def __init__(self, tracking=0.9, term=None, upright=None):
         self.term = term or FakeTerm()
         self.logger = FakeLogger()
         self._tracking = tracking
+        # upright defaults to something clearly passing, so tests that only care
+        # about the reward plumbing still drive the gate open.
+        self._upright = 0.95 if upright is None else upright
         self.tracking_calls = 0
+        self.max_episode_length = 1000
+        self.upright_reads = 0
+        # live, like the real buffer
+        outer = self
+
+        class Buf:
+            def float(_self):
+                outer.upright_reads += 1
+                return FakeTensor(outer._upright * outer.max_episode_length)
+
+        self.episode_length_buf = Buf()
 
         outer = self
         self.reward_reads = []
@@ -234,13 +254,13 @@ def test_first_call_installs_range_without_measuring():
     env = FakeEnv()
     cur = make(env)
     cur(env, None)
-    # The first call installs the range; it must not also gate on a reward.
-    assert len(env.reward_reads) == 0
+    # The first call installs the range; it must not also take a measurement.
+    assert env.upright_reads == 0
     assert env.term.lin == pytest.approx(0.5)
 
 
 def test_expands_only_after_patience_of_success():
-    env = FakeEnv(tracking=0.99)
+    env = FakeEnv(upright=0.95)
     cur = make(env, patience=3)
     prime(cur, env)
     run(cur, env, intervals=2)
@@ -251,29 +271,29 @@ def test_expands_only_after_patience_of_success():
     assert env.term.lin == pytest.approx(0.75)
 
 
-def test_patience_resets_when_tracking_dips():
-    env = FakeEnv(tracking=0.99)
+def test_patience_resets_when_upright_dips():
+    env = FakeEnv(upright=0.95)
     cur = make(env, patience=3)
     prime(cur, env)
     run(cur, env, intervals=2)
-    env._tracking = 0.1
+    env._upright = 0.1
     run(cur, env, intervals=1)
     assert cur.expansions == 0
-    env._tracking = 0.99
+    env._upright = 0.95
     run(cur, env, intervals=2)
     assert cur.expansions == 0, "streak was not reset by the dip"
     run(cur, env, intervals=1)
     assert cur.expansions == 1
 
 
-def test_contracts_when_tracking_collapses():
-    env = FakeEnv(tracking=0.99)
+def test_contracts_when_upright_collapses():
+    env = FakeEnv(upright=0.95)
     cur = make(env, patience=2)
     prime(cur, env)
     run(cur, env, intervals=2)
     widened = env.term.lin
     assert widened > 0.5
-    env._tracking = 0.2
+    env._upright = 0.2
     run(cur, env, intervals=1)
     assert env.term.lin < widened
     assert cur.contractions == 1
@@ -281,7 +301,7 @@ def test_contracts_when_tracking_collapses():
 
 def test_never_exceeds_target_ceiling():
     """1.5 m/s is the real-robot-evidenced ceiling; 3 m/s must not be reachable."""
-    env = FakeEnv(tracking=1.0)
+    env = FakeEnv(upright=0.95)
     cur = make(env, patience=1, target_max_lin_vel=1.5, step_lin_vel=0.25)
     prime(cur, env)
     run(cur, env, intervals=60)
@@ -290,18 +310,18 @@ def test_never_exceeds_target_ceiling():
 
 
 def test_contracts_back_to_initial_floor():
-    env = FakeEnv(tracking=1.0)
+    env = FakeEnv(upright=0.95)
     cur = make(env, patience=1)
     prime(cur, env)
     run(cur, env, intervals=8)
     assert env.term.lin > 0.5
-    env._tracking = 0.0
+    env._upright = 0.0
     run(cur, env, intervals=60)
     assert env.term.lin == pytest.approx(0.5), "must not contract below the start range"
 
 
 def test_range_stays_symmetric():
-    env = FakeEnv(tracking=1.0)
+    env = FakeEnv(upright=0.95)
     cur = make(env, patience=1)
     prime(cur, env)
     run(cur, env, intervals=6)
@@ -311,15 +331,34 @@ def test_range_stays_symmetric():
     assert lo == pytest.approx(-hi)
 
 
-def test_missing_reward_term_never_widens():
-    """An absent signal must not read as success."""
-    env = FakeEnv()
+def test_missing_upright_signal_never_widens():
+    """An absent gate signal must not read as success."""
+    env = FakeEnv(upright=0.95)
     cur = make(env, patience=1)
     prime(cur, env)
-    env.reward_manager.active_terms = ["something_else"]
+    env.episode_length_buf = None
     run(cur, env, intervals=50)
     assert cur.expansions == 0
     assert env.term.lin == pytest.approx(0.5)
+
+
+def test_missing_max_episode_length_never_widens():
+    env = FakeEnv(upright=0.95)
+    cur = make(env, patience=1)
+    prime(cur, env)
+    env.max_episode_length = 0
+    run(cur, env, intervals=50)
+    assert cur.expansions == 0
+
+
+def test_tracking_term_missing_does_not_block_widening():
+    """Tracking is logged, not gated, so its absence must not freeze the range."""
+    env = FakeEnv(upright=0.95)
+    cur = make(env, patience=1)
+    prime(cur, env)
+    env.reward_manager.active_terms = ["something_else"]
+    run(cur, env, intervals=3)
+    assert cur.expansions >= 1, "the gate is upright survival, not the reward term"
 
 
 def test_raises_instead_of_silently_doing_nothing():
@@ -398,11 +437,11 @@ def test_uses_get_term_not_get_command():
 
 
 def test_interval_gates_measurement_rate():
-    env = FakeEnv(tracking=1.0)
+    env = FakeEnv(upright=0.95)
     cur = make(env, patience=1, interval_steps=10)
     prime(cur, env)
     run(cur, env, intervals=1)
-    assert len(env.reward_reads) == 1, "did not measure once the interval elapsed"
+    assert env.upright_reads == 1, "did not measure once the interval elapsed"
 
 
 def test_default_ceiling_matches_real_robot_evidence():
@@ -592,7 +631,7 @@ def test_unknown_reward_weight_raises_rather_than_mis_gating():
     RewardManager stores func * weight. Guessing the weight would silently
     mis-gate the curriculum, so an unreadable weight is an error.
     """
-    env = FakeEnv(tracking=0.99)
+    env = FakeEnv(upright=0.95)
     # get_term_cfg is a bound method on the class, so shadow it on the instance
     # rather than deleting it.
     env.reward_manager.get_term_cfg = None
@@ -606,7 +645,7 @@ def test_zero_weight_raises():
     class ZeroCfg:
         weight = 0.0
 
-    env = FakeEnv(tracking=0.99)
+    env = FakeEnv(upright=0.95)
     env.reward_manager.get_term_cfg = lambda name: ZeroCfg()
     cur = make(env, patience=1)
     prime(cur, env)
@@ -619,7 +658,7 @@ def test_raw_value_is_weight_normalised():
     env = FakeEnv(tracking=0.95)
     assert env.reward_manager.WEIGHT == 10.0
     cur = make(env, patience=1)
-    assert cur._reward_mean() == pytest.approx(0.95), (
+    assert cur._tracking_mean() == pytest.approx(0.95), (
         "must divide by the weight, otherwise 0.95*10=9.5 would sail past any "
         "threshold on the raw scale"
     )

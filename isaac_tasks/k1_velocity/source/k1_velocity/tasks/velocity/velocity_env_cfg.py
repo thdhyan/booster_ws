@@ -518,7 +518,7 @@ class CurriculumCfg:
             "target_max_ang_vel": 2.0,
             "step_lin_vel": 0.25,
             "step_ang_vel": 0.25,
-            "success_threshold": 0.85,
+            "success_threshold": 0.80,
             "patience": 5,
             "interval_steps": 50,
         },

@@ -23,10 +23,15 @@ goal, and a sim result at 3 m/s must not be reported as deployable.
 
 HOW IT EXPANDS
 --------------
-Gated on the running mean of the linear-velocity tracking reward, which is ~1 when
-tracking is perfect. Expansion needs the mean to hold above ``success_threshold``
-for ``patience`` consecutive checks; contraction is immediate and well below it,
-so a policy that regresses gets help straight away instead of after a plateau.
+Gated on **upright survival**: the fraction of a full episode the robot survives
+(``episode_length_buf.mean() / max_episode_length``), which is the signal every
+legged-gym / Isaac Lab velocity curriculum uses. It is deliberately not the
+velocity-tracking reward -- on the first real run the policy survived 22 of 1000
+steps with a raw tracking term of ~0.011, so tracking skill was not yet a
+meaningful signal to gate on. Expansion needs the ratio to hold above
+``success_threshold`` for ``patience`` consecutive checks; contraction is
+immediate and well below it, so a policy that regresses gets help straight away
+instead of after a plateau.
 """
 
 from __future__ import annotations
@@ -75,7 +80,7 @@ class VelocityRangeCurriculum:
         target_max_ang_vel: float = 2.0,
         step_lin_vel: float = 0.25,
         step_ang_vel: float = 0.25,
-        success_threshold: float = 0.85,
+        success_threshold: float = 0.80,
         patience: int = 5,
         interval_steps: int = 50,
         reward_name_contains: str = "track_lin_vel",
@@ -89,6 +94,7 @@ class VelocityRangeCurriculum:
         self.target_max_ang = float(target_max_ang_vel)
         self.step_lin = float(step_lin_vel)
         self.step_ang = float(step_ang_vel)
+        # Fraction of the episode the robot must survive to count as "good".
         self.threshold = float(success_threshold)
         self.patience = int(patience)
         self.interval_steps = int(interval_steps)
@@ -100,6 +106,7 @@ class VelocityRangeCurriculum:
         self.expansions = 0
         self.contractions = 0
         self.peak_lin = float(init_lin_vel)
+        self.last_signal = None
 
     # -- introspection --------------------------------------------------------
     def _command_term(self):
@@ -110,10 +117,38 @@ class VelocityRangeCurriculum:
             return getter("base_velocity")
         return mgr._terms["base_velocity"]
 
-    def _reward_mean(self):
+    def _upright_ratio(self):
+        """Fraction of a full episode the robot survives, or None.
+
+        This is the gate, deliberately, and not the velocity-tracking reward.
+
+        Measured on the first real run of this curriculum, the raw tracking term
+        sat at ~0.011 with mean episode reward -4.24 and mean episode length 22
+        of 1000 steps: the robot was falling almost immediately, so "can it
+        track a commanded velocity" was not yet a meaningful question. Gating on
+        tracking reward therefore gated on noise, and would have kept the range
+        pinned for reasons that had nothing to do with the policy's ability.
+
+        Surviving the episode is the precondition for tracking anything at all,
+        it rises smoothly as the policy improves, and it is the signal every
+        legged-gym / Isaac Lab velocity curriculum uses for exactly this. The
+        tracking reward is still read and logged, just not used as the gate.
+        """
+        env = self._env
+        buf = getattr(env, "episode_length_buf", None)
+        max_len = getattr(env, "max_episode_length", None)
+        if buf is None or not max_len:
+            return None
+        try:
+            mean_len = float(buf.float().mean().item())
+        except AttributeError:
+            return None
+        return mean_len / float(max_len)
+
+    def _tracking_mean(self):
         """Mean RAW value of the velocity-tracking reward term, or None.
 
-        Two Isaac Lab details matter here and both cost a launch:
+        Two Isaac Lab details matter here:
 
         * ``RewardManager`` has **no** ``get_term``. The per-step values live in
           a ``_step_reward`` matrix of shape (num_envs, num_terms), indexed by
@@ -121,11 +156,9 @@ class VelocityRangeCurriculum:
           ``AttributeError: 'RewardManager' object has no attribute 'get_term'``.
         * ``_step_reward`` holds ``func(...) * weight``, i.e. the **weighted**
           value. ``track_lin_vel_xy_exp`` has weight 10.0, so the raw exponential
-          has to be recovered by dividing by the weight or the 0.85 threshold
-          below is meaningless (it would compare against ~8.5).
+          is only recovered by dividing by the weight.
 
-        The public ``get_active_iterable_terms`` is used as a fallback, but it
-        loops per env and still returns weighted values.
+        Used for logging and diagnostics only, not as the expansion gate.
         """
         mgr = self._env.reward_manager
         names = list(getattr(mgr, "active_terms", []) or [])
@@ -138,16 +171,15 @@ class VelocityRangeCurriculum:
         if cfg_getter is None:
             raise AttributeError(
                 "RewardManager has no get_term_cfg, so the reward weight is unknown. "
-                "The gate threshold is expressed against the RAW term value, so "
-                "guessing the weight would compare a weighted value to a raw "
-                "threshold and silently mis-gate the curriculum."
+                "Recovering the raw term value would otherwise compare a weighted "
+                "value to a raw threshold and silently mis-report."
             )
         cfg = cfg_getter(target)
         raw_weight = getattr(cfg, "weight", None)
         if not raw_weight:
             raise ValueError(
                 f"reward term '{target}' has weight {raw_weight!r}; cannot recover the "
-                "raw term value the success_threshold is expressed against"
+                "raw term value"
             )
         weight = float(raw_weight)
 
@@ -156,8 +188,7 @@ class VelocityRangeCurriculum:
         term_names = getattr(mgr, "_term_names", None)
         if step_reward is not None and term_names is not None and target in term_names:
             idx = list(term_names).index(target)
-            col = step_reward[:, idx]
-            values = float(col.mean().item())
+            values = float(step_reward[:, idx].mean().item())
         else:
             getter = getattr(mgr, "get_active_iterable_terms", None)
             if getter is not None:
@@ -205,15 +236,16 @@ class VelocityRangeCurriculum:
             return
         self._since = 0
 
-        mean_reward = self._reward_mean()
-        if mean_reward is None:
-            # Never widen on a missing signal: an absent term must not be read as
-            # success, or the range would climb while nothing is being measured.
+        signal = self._upright_ratio()
+        if signal is None:
+            # Never widen on a missing signal: an absent measurement must not be
+            # read as success, or the range would climb while nothing is measured.
             self._streak = 0
             return
+        self.last_signal = signal
 
         term = self._command_term()
-        if mean_reward >= self.threshold:
+        if signal >= self.threshold:
             self._streak += 1
             if self._streak >= self.patience:
                 self._streak = 0
@@ -225,8 +257,9 @@ class VelocityRangeCurriculum:
                 self.peak_lin = max(self.peak_lin, self._lin)
                 _log(
                     env,
-                    f"[vel-curriculum] tracking={mean_reward:.3f} >= {self.threshold} for "
-                    f"{self.patience} checks: lin {before:.2f} -> {self._lin:.2f} m/s",
+                    f"[vel-curriculum] upright={signal:.3f} >= {self.threshold} for "
+                    f"{self.patience} checks: lin {before:.2f} -> {self._lin:.2f} m/s "
+                    f"(tracking={self._tracking_mean()})",
                 )
         else:
             self._streak = 0
@@ -238,7 +271,7 @@ class VelocityRangeCurriculum:
                 self.contractions += 1
                 _log(
                     env,
-                    f"[vel-curriculum] tracking={mean_reward:.3f} < {self.threshold}: "
+                    f"[vel-curriculum] upright={signal:.3f} < {self.threshold}: "
                     f"contracted lin {before:.2f} -> {self._lin:.2f} m/s",
                 )
 
@@ -364,7 +397,7 @@ if ManagerTermBase is not None:  # pragma: no cover - requires Isaac Lab
             target_max_ang_vel: float = 2.0,
             step_lin_vel: float = 0.25,
             step_ang_vel: float = 0.25,
-            success_threshold: float = 0.85,
+            success_threshold: float = 0.80,
             patience: int = 5,
             interval_steps: int = 50,
             reward_name_contains: str = "track_lin_vel",
