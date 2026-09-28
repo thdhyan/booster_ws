@@ -12,6 +12,7 @@ names the exact setup command instead of a stack trace from a missing module.
 from __future__ import annotations
 
 import os
+import re
 import posixpath
 import shlex
 
@@ -40,6 +41,17 @@ def _q(host: str, path: str) -> str:
     every `cd ~/Projects/...` would fail with "No such file or directory".
     """
     return shlex.quote(remote.expand(host, path))
+
+
+def _safe(name: str, maxlen: int = 40) -> str:
+    """Filesystem-safe stem for a remote workdir.
+
+    Uploads are named by whoever recorded them ("Screencast from ..."), and
+    GVHMR derives its output subdirectory from the filename, so unsanitised
+    stems leak spaces into paths it then prints in its own errors.
+    """
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._-")
+    return (s or "clip")[:maxlen]
 
 
 def _cd(host: str, path: str) -> str:
@@ -76,17 +88,21 @@ def gvhrm(video_local: str, host: str = GVHMR_HOST, fps: int = 30,
     py = _venv_py(host, GVHMR_VENV, "see docs/k1m.md for the GVHMR setup")
     if not os.path.exists(video_local):
         raise FileNotFoundError(video_local)
-    base = os.path.splitext(os.path.basename(video_local))[0]
+    base = _safe(os.path.splitext(os.path.basename(video_local))[0])
     wd = workdir or f"~/Projects/kimodo_ws/runs/gvhrm/{base}"
     remote.run(host, f"mkdir -p {_q(host, wd)}")
     rv = posixpath.join(wd, posixpath.basename(video_local))
     remote.put(host, video_local, rv)
 
+    # GVHMR names its output subdirectory after the *video file it is given*, so
+    # trimming produces a different stem than the upload. Track the actual name
+    # rather than assuming it, and also fall back to a search below.
     if max_seconds:
         trimmed = posixpath.join(wd, f"clip_{int(max_seconds)}s.mp4")
         remote.run(host, f"ffmpeg -y -v error -i {_q(host, rv)} -t {max_seconds} "
                          f"-an -c:v libx264 -crf 20 {_q(host, trimmed)}")
         rv = trimmed
+    clip_stem = _safe(os.path.splitext(posixpath.basename(rv))[0])
 
     conv = posixpath.join(wd, "gvhmr_amass_export.py")
     remote.put(host, os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -113,18 +129,29 @@ def gvhrm(video_local: str, host: str = GVHMR_HOST, fps: int = 30,
         cmd += " -s"
     remote.run(host, cmd)
 
-    # demo.py writes hmr4d_results.pt under <output_root>/<clip stem>/
+    # demo.py writes hmr4d_results.pt under <output_root>/<clip stem>/, where
+    # the stem is derived from the video it was handed. Try the expected spot
+    # first, then just search, because guessing wrong is the failure mode here.
     pred = None
-    for cand in (posixpath.join(wd, base, "hmr4d_results.pt"),
+    for cand in (posixpath.join(wd, clip_stem, "hmr4d_results.pt"),
                  posixpath.join(wd, "hmr4d_results.pt")):
         if remote.have(host, cand):
             pred = cand
             break
     if pred is None:
+        found = remote.run(
+            host, f"find {_q(host, wd)} -name hmr4d_results.pt 2>/dev/null | head -1",
+            check=False, quiet=True).strip().splitlines()
+        found = [f for f in found if f.strip()]
+        if found:
+            pred = found[0].strip()
+    if pred is None:
+        listing = remote.run(host, f"find {_q(host, wd)} -maxdepth 2 2>/dev/null "
+                                   f"| head -20", check=False, quiet=True)
         raise RemoteError(
             f"GVHMR wrote no hmr4d_results.pt under {wd}. Its layout is "
-            f"<output_root>/<clip stem>/hmr4d_results.pt; list {wd} on {host} "
-            f"to see what it actually produced.")
+            f"<output_root>/<clip stem>/hmr4d_results.pt. What is there:\n"
+            f"{listing.strip()}")
     rnpz = posixpath.join(wd, f"{base}_amass.npz")
     remote.run(host, f"{shlex.quote(py)} {_q(host, conv)} "
                      f"--pred {shlex.quote(remote.expand(host, pred))} "
