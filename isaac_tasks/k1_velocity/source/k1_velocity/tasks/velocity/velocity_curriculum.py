@@ -185,3 +185,75 @@ def _log(env, msg):
         logger.info(msg)
     else:
         print(msg)
+
+
+# ---------------------------------------------------------------------------
+# Isaac Lab adapter
+# ---------------------------------------------------------------------------
+# isaaclab.managers.CurriculumManager rejects any term whose ``func`` is not a
+# ManagerTermBase subclass:
+#
+#   TypeError: Configuration for the term 'velocity_range' is not of type
+#   ManagerTermBase. Received: '<class 'type'>'.
+#
+# So the config cannot point straight at the logic class. The adapter is a thin
+# shell and the import is guarded, which is what lets the logic above stay
+# importable -- and therefore testable -- on a machine with no Isaac Sim.
+try:  # pragma: no cover - only importable inside the Isaac container
+    from isaaclab.managers import ManagerTermBase
+except ImportError:  # pragma: no cover
+    ManagerTermBase = None
+
+
+def _as_kwargs(cfg):
+    """Normalise a CurrTerm cfg into kwargs for the logic class.
+
+    Isaac Lab hands the term its whole ``ManagerTermBaseCfg``, so the values we
+    care about arrive **nested under ``params``** rather than flat. Getting this
+    wrong shows up as::
+
+        TypeError: VelocityRangeCurriculum.__init__() got an unexpected
+        keyword argument 'params'
+
+    which is only visible after a full Isaac boot, so it is handled explicitly
+    and covered by a test.
+    """
+    if cfg is None:
+        return {}
+    # Most common: an object (or dict) carrying a nested params mapping.
+    nested = getattr(cfg, "params", None)
+    if nested is None and isinstance(cfg, dict):
+        nested = cfg.get("params")
+    if nested is not None and hasattr(nested, "items"):
+        return {k: v for k, v in nested.items() if not str(k).startswith("_")}
+    if isinstance(cfg, dict):
+        return {k: v for k, v in cfg.items() if not str(k).startswith("_")}
+    if hasattr(cfg, "items"):
+        return {k: v for k, v in cfg.items() if not str(k).startswith("_")}
+    return {
+        k: v
+        for k, v in vars(cfg).items()
+        if not str(k).startswith("_") and not callable(v) and not isinstance(v, type)
+    }
+
+
+if ManagerTermBase is not None:  # pragma: no cover - requires Isaac Lab
+
+    class VelocityRangeCurriculumTerm(ManagerTermBase):
+        """ManagerTermBase wrapper so Isaac Lab accepts the curriculum term."""
+
+        def __init__(self, cfg, env):
+            super().__init__(cfg, env)
+            self._impl = VelocityRangeCurriculum(env, **_as_kwargs(cfg))
+
+        # Exposed so a probe or launch script can read the live range.
+        @property
+        def current_lin(self) -> float:
+            return self._impl.current_lin()
+
+        @property
+        def current_ang(self) -> float:
+            return self._impl.current_ang()
+
+        def __call__(self, env, env_ids):
+            self._impl(env, env_ids)

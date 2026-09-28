@@ -510,7 +510,7 @@ class CurriculumCfg:
     # (fitted gain ~-0.49 m/s per unit of left-Y stick). 3 m/s is a sim-only
     # stretch goal and a sim number there is not a deployable claim.
     velocity_range = CurrTerm(
-        func=velocity_curriculum.VelocityRangeCurriculum,
+        func=velocity_curriculum.VelocityRangeCurriculumTerm,
         params={
             "init_lin_vel": 0.5,
             "init_ang_vel": 1.0,

@@ -9,6 +9,7 @@ against.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import pathlib
 import sys
@@ -110,11 +111,47 @@ def run(cur, env, intervals=1):
 
 
 # --- tests -------------------------------------------------------------------
-def test_module_has_no_isaac_imports():
-    """Must stay simulator-free so this logic is testable without a GPU."""
+def test_isaac_import_is_guarded_not_absent():
+    """The logic must stay importable without Isaac Lab, so any isaac import has
+    to sit inside a try/except ImportError. An unguarded import would make this
+    file untestable on a laptop."""
     src = MODULE_PATH.read_text()
-    for bad in ("import torch", "from isaaclab", "import isaaclab", "import omni"):
-        assert bad not in src, f"{bad} would make this untestable without Isaac Sim"
+    assert "import torch" not in src, "torch is not needed and drags in a GPU dep"
+    assert "import omni" not in src
+
+    tree = ast.parse(src)
+
+    # Collect every import that appears inside a try block whose handlers catch
+    # ImportError. Those are the guarded ones.
+    guarded = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        catches_import_error = any(
+            isinstance(h.type, ast.Name) and h.type.id == "ImportError"
+            for h in node.handlers
+        )
+        if not catches_import_error:
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, (ast.Import, ast.ImportFrom)):
+                guarded.add(id(sub))
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        names = [a.name for a in node.names] + [node.module or ""]
+        if not any("isaaclab" in n for n in names):
+            continue
+        assert id(node) in guarded, (
+            f"unguarded Isaac import at line {node.lineno}. The ManagerTermBase "
+            "adapter import must sit inside try/except ImportError so the "
+            "curriculum logic stays testable without Isaac Sim."
+        )
+
+    # The real proof is that this module was imported at the top of the file in an
+    # environment with no Isaac Lab on the path: if the guard were broken the whole
+    # module would have failed to load before a single test ran.
 
 
 def test_first_call_installs_range_without_measuring():
@@ -239,3 +276,60 @@ def test_default_ceiling_matches_real_robot_evidence():
 
     sig = inspect.signature(mod.VelocityRangeCurriculum.__init__)
     assert sig.parameters["target_max_lin_vel"].default == pytest.approx(1.5)
+
+
+def test_config_points_at_the_managerterm_adapter():
+    """Isaac Lab rejects a bare class here, so the config must use the adapter."""
+    cfg = ROOT / "isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/velocity_env_cfg.py"
+    src = cfg.read_text()
+    assert "velocity_curriculum.VelocityRangeCurriculumTerm" in src, (
+        "CurrTerm func must be the ManagerTermBase adapter; a bare class raises "
+        "TypeError: not of type ManagerTermBase"
+    )
+    assert "velocity_curriculum.VelocityRangeCurriculum," not in src
+
+
+# --- cfg plumbing -----------------------------------------------------------
+class FakeCfg:
+    """Shape Isaac Lab actually hands a term: the values live under .params."""
+
+    def __init__(self, **params):
+        self.params = params
+        self.func = object()
+        self._private = 1
+
+
+def test_params_arrive_nested_under_cfg_params():
+    """Isaac passes the whole ManagerTermBaseCfg, so kwargs are nested.
+
+    Getting this wrong is only visible after a full Isaac boot:
+    TypeError: ... got an unexpected keyword argument 'params'
+    """
+    cfg = FakeCfg(init_lin_vel=0.5, target_max_lin_vel=1.5, patience=5)
+    kw = mod._as_kwargs(cfg)
+    assert kw == {"init_lin_vel": 0.5, "target_max_lin_vel": 1.5, "patience": 5}
+    # And they must be acceptable to the real constructor.
+    cur = mod.VelocityRangeCurriculum(FakeEnv(), **kw)
+    assert cur.target_max_lin == pytest.approx(1.5)
+
+
+def test_params_nested_in_a_plain_dict():
+    kw = mod._as_kwargs({"params": {"init_lin_vel": 0.75}})
+    assert kw == {"init_lin_vel": 0.75}
+
+
+def test_flat_dict_still_accepted():
+    kw = mod._as_kwargs({"init_lin_vel": 0.25, "patience": 2})
+    assert kw == {"init_lin_vel": 0.25, "patience": 2}
+
+
+def test_private_and_callable_cfg_fields_are_dropped():
+    """cfg.func and friends must not be forwarded to __init__."""
+    cfg = FakeCfg(init_lin_vel=0.5)
+    kw = mod._as_kwargs(cfg)
+    assert "func" not in kw
+    assert mod.VelocityRangeCurriculum(FakeEnv(), **kw) is not None
+
+
+def test_none_cfg_is_tolerated():
+    assert mod._as_kwargs(None) == {}
