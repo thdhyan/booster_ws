@@ -1,0 +1,11 @@
+# Recording topic list: walking session with a head/forward RGB-D camera.
+# Comments and blank lines are stripped by rosbag_record.sh.
+
+/tf
+/tf_static
+/imu/data
+/odom
+/joint_states
+/camera/color/image_raw
+/camera/color/camera_info
+/camera/depth/image_raw
