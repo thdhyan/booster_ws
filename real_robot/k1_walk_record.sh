@@ -15,6 +15,10 @@
 # Stop:   Ctrl-C  (finishes the current segment cleanly, then stops)
 set -o pipefail
 
+# Resolved so check_bag_freshness.py can be found no matter where the script is
+# invoked from.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 MINUTES="${1:-30}"
 SEGMENT="${2:-300}"
 OUTROOT="${K1_BAG_ROOT:-$HOME/k1_bags}"
@@ -83,6 +87,14 @@ summarise() {   # $1 = bag dir
     FAILED+=("seg$SEG:$missing")
   else
     echo "  [ok] all critical topics present"
+  fi
+  # Message counts are NOT enough. The first walk logged 2994 camera messages
+  # that were all the same frozen frame, so every count check passed and the
+  # vision data was worthless. This compares content, not counts.
+  if [ -f "$HERE/check_bag_freshness.py" ]; then
+    if ! python3 "$HERE/check_bag_freshness.py" "$bag"; then
+      FAILED+=("seg$SEG:STALE_TOPIC")
+    fi
   fi
   echo "  $(echo "$info" | grep -E 'Messages:|Duration:' | tr -s ' ' | tr '\n' ' ')"
   du -sh "$bag" 2>/dev/null | awk '{print "  size:",$1}'
