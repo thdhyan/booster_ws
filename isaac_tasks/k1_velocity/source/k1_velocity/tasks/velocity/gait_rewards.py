@@ -225,7 +225,7 @@ def feet_clearance(
     swing foot at all is skipped rather than punished.
     """
     feet = env.scene[asset_cfg.name].data.body_pos_w[:, asset_cfg.body_ids, 2]
-    forces = env.scene.sensors[contact_cfg.name].data.compute_contact_sensor_data().net_forces_w[
+    forces = env.scene.sensors[contact_cfg.name].data.net_forces_w[
         :, contact_cfg.body_ids
     ]
     swing = forces.norm(dim=-1) <= foot_height_threshold
@@ -249,7 +249,7 @@ def feet_alternation_penalty(
     signature of a degenerate gait, so penalise the duration of contact
     symmetry rather than trying to reconstruct a full gait clock.
     """
-    forces = env.scene.sensors[contact_cfg.name].data.compute_contact_sensor_data().net_forces_w[
+    forces = env.scene.sensors[contact_cfg.name].data.net_forces_w[
         :, contact_cfg.body_ids
     ].norm(dim=-1)
     contact = (forces > 1.0).float()

@@ -324,3 +324,28 @@ def test_default_window_matches_the_tested_value():
         "the cadence window must default to 2.5 s; 1.28 s quantises too coarsely "
         "to resolve a 2 steps/s gait"
     )
+
+
+def test_no_invented_isaac_apis_in_gait_rewards():
+    """Guard against APIs I invented rather than read.
+
+    compute_contact_sensor_data() does not exist anywhere in Isaac Lab; the
+    preflight failed with "'ContactSensorData' object has no attribute
+    'compute_contact_sensor_data'". net_forces_w is a property on the sensor's
+    .data object, so it is read directly with no call.
+    """
+    src = GAIT.read_text()
+    for invented in ("compute_contact_sensor_data", "get_contact_forces",
+                     "contact_forces_data", "is_in_contact("):
+        assert invented not in src, (
+            f"{invented!r} is not an Isaac Lab API; read the property instead "
+            "(e.g. sensor.data.net_forces_w)"
+        )
+    assert "data.net_forces_w" in src, "contact terms must read sensor.data.net_forces_w"
+
+
+def test_state_reads_go_through_dot_data():
+    """Joint/body/contact state all live under a .data accessor."""
+    src = GAIT.read_text()
+    for needed in ("data.joint_pos", "data.body_pos_w", "data.net_forces_w"):
+        assert needed in src, f"expected {needed} in the gait reward terms"
