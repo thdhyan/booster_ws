@@ -1,21 +1,16 @@
 #!/bin/bash
-# P2 gait-structure campaign: train with rewards that distinguish a walk from a
-# jitter, then require BOTH a movement gate and a gait gate before trusting the
-# checkpoint.
+# P2 gait-structure campaign, stage 2 of 2: smoke, full training, then BOTH gates.
 #
-# WHY A FRESH RUN
-# ---------------
-# The previous checkpoint is a high-frequency shuffle: 6.75 steps/s against 1.8-2.2
-# for human walking, 3-5 cm strides, 8/8 envs failing the gait gate. Resuming from
-# it would inherit that gait as the local optimum the policy sits in. Sharpening
-# the tracking reward and adding gait terms changes the objective, so the policy
-# needs to re-find its solution from a standing start.
+# Runs in its own container because AppLauncher deadlocks on a second Kit launch
+# in the same container. The preflight already ran in a separate container and
+# passed, so this container performs exactly one Kit launch sequence per process
+# it starts -- and the smoke and the full run are separate processes, which is
+# fine because Kit is torn down with each process.
 #
-# TWO GATES, BOTH REQUIRED
-# ------------------------
-# Movement is necessary but not sufficient -- the displacement gate passed the
-# shuffle at 2.664 m with zero falls. Only the gait gate (cadence, stride, jerk)
-# decides whether this walks. The run is not certified unless both pass.
+# Certification requires BOTH gates on real footage from the new checkpoint:
+# MOVEMENT_GATE (net displacement > 0.5 m) and GAIT_GATE (cadence, stride, jerk).
+# Movement alone is not sufficient -- it passed an 8 Hz chatter that covered
+# 2.66 m without taking a real step.
 set +e
 REPO=/workspace/booster_ws
 PY=/isaac-sim/python.sh
@@ -25,7 +20,6 @@ export WANDB_API_KEY="$(cat "$REPO/logs/.wandb_key" 2>/dev/null)"
 
 TASK=Isaac-Velocity-Rough-K1-Teacher-v0
 LOGDIR="$REPO/scripts"
-PREFLIGHT_LOG="$LOGDIR/p2_gaits.preflight.log"
 TRAIN_LOG="$LOGDIR/p2_gaits.teacher.train.log"
 STAMP=$(date +%Y%m%d_%H%M%S)
 
@@ -33,27 +27,6 @@ echo "=== P2_GAITS INSTALL"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train 2>&1 | tail -1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -1
 "$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -1
-
-# Pre-flight. Now doing more than standing and terminations: the five new reward
-# terms call env.action_manager.action, env.scene[...].body_pos and
-# env.scene.sensors[...].data.compute_contact_sensor_data(), and any of those
-# being wrong crashes a 3000-iteration run on its first step. The probe is
-# cheap and it exercises every reward term.
-echo "=== P2_GAITS PREFLIGHT (standing + terminations + all reward terms)"
-timeout 1800 "$PY" -u isaac_tasks/k1_velocity/scripts/probe_rewards.py \
-  --task "$TASK" --num_envs 8 --steps 200 --viz none 2>&1 | tee "$PREFLIGHT_LOG"
-grep -q "REWARD_PROBE_MARKER=OK" "$PREFLIGHT_LOG" || { echo P2_GAITS_PREFLIGHT_MARKER=FAIL; exit 30; }
-grep -q "STANDS" "$PREFLIGHT_LOG" || { echo P2_GAITS_PREFLIGHT_MARKER=FAIL_NOT_STANDING; exit 31; }
-# The new terms must appear and must be finite. A NaN or an absent term means
-# the gait shaping is silently not running, which is exactly the failure class
-# this whole campaign exists to stop.
-for t in gait_cadence feet_clearance feet_alternation stride_length action_jerk_l2; do
-  if ! grep -q "$t" "$PREFLIGHT_LOG"; then
-    echo "P2_GAITS_PREFLIGHT_MARKER=FAIL_MISSING_TERM_$t"
-    exit 32
-  fi
-done
-echo "P2_GAITS_PREFLIGHT_MARKER=OK"
 
 echo "=== P2_GAITS SMOKE 16x3"
 timeout 1800 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \
@@ -71,7 +44,7 @@ timeout 43200 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \
 rc=${PIPESTATUS[0]}
 echo "P2_GAITS_TEACHER_RC=$rc"
 
-ckpt=$(find "$REPO/logs/rsl_rl" -type f -name model_2999.pt -newermt '-4 hours' \
+ckpt=$(find "$REPO/logs/rsl_rl" -type f -name model_2999.pt -newermt '-5 hours' \
        -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
 if [ "$rc" -eq 0 ] && [ -s "$ckpt" ]; then
   echo "P2_GAITS_TEACHER_CKPT=$ckpt"

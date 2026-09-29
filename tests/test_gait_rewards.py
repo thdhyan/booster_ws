@@ -407,3 +407,33 @@ def test_p2_launchers_use_a_unique_cache_dir():
         assert "date +%Y%m%d_%H%M%S" in src, (
             f"{pathlib.Path(path).name} must build a unique cache dir per run"
         )
+
+
+def test_campaign_uses_one_kit_launch_per_container():
+    """AppLauncher deadlocks on a second Kit launch inside one container.
+
+    train.py hung at 0% CPU and 43 MiB with zero output, right after the
+    preflight probe had booted Kit successfully in that same container. Every
+    import was verified fine, so being the second Kit launch was the only
+    difference. The campaign must therefore be split into a preflight container
+    and a train container.
+    """
+    d = _ROOT / "scripts"
+    pre = (d / "spark_p2_gaitfix_preflight_container.sh")
+    trn = (d / "spark_p2_gaitfix_train_container.sh")
+    host = (d / "spark_p2_gaitfix_host.sh")
+    for f in (pre, trn, host):
+        assert f.is_file(), f"missing {f.name}"
+    # Neither stage container may both preflight and train.
+    assert "probe_rewards.py" in pre.read_text()
+    assert "probe_rewards.py" not in trn.read_text(), (
+        "the train container must not run the preflight probe: that would be a "
+        "second Kit launch and it deadlocks"
+    )
+    assert "train.py" in trn.read_text()
+    # The host must invoke the container script twice, in two stages.
+    h = host.read_text()
+    assert h.count("run_stage") >= 3, "host must run both stages via run_stage"
+    assert "preflight" in h and "train" in h
+    # And the preflight stage must exit before doing any training.
+    assert "exit 0" in pre.read_text()

@@ -1,52 +1,69 @@
 #!/bin/bash
-# Host launcher for the P2 velocity-curriculum campaign on a GB10 Spark.
-# The container script owns the preflight/smoke/full gates and the curriculum
-# marker; this only mounts the repo and runs it in tmux.
+# Host launcher for the P2 gait-structured campaign.
 #
-#   ./spark_p2_velcurriculum_host.sh          # background in tmux, returns at once
-#   tail -f scripts/p2_gaits.log                # watch it
-set -e
+# Runs TWO containers in sequence, never two Kit launches in one:
+#   1. preflight  - builds the env, checks the robot stands and every reward term
+#                   is live. Exits without training.
+#   2. train      - smoke, 3000 iterations, then the movement and gait gates.
+#
+# AppLauncher deadlocks on a second Kit launch inside one container. That cost
+# several cycles to diagnose: train.py sat at 0% CPU and 43 MiB with zero bytes
+# of output, right after the preflight had booted Kit successfully in the same
+# container. One launch per container removes the whole failure mode.
+set +e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$HOME/Projects/booster_ws"
 LOG="$HERE/p2_gaits.log"
 SESSION=k1_spark_p2_gaits
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
-  echo "TMUX_SESSION_ALREADY_EXISTS=$SESSION -- not starting a second run"
+  echo "TMUX_SESSION_ALREADY_EXISTS=$SESSION"
   exit 1
 fi
-# A previous run's container outlives its tmux session, so check the host too.
-# Two training containers on one GPU would corrupt both runs.
-# Match on the image, not the name: container names are auto-generated
-# (e.g. "vibrant_rubin"), so grepping .Names never matches anything.
 if docker ps --format '{{.Image}}' | grep -q 'isaac-lab'; then
   echo "An isaac-lab container is already running. Refusing to double-book the GPU."
-  docker ps --format '{{.Names}} {{.Image}} {{.Status}}'
+  docker ps --format '{{.Names}} {{.Image}}'
   exit 2
 fi
 
 : > "$LOG"
-# A FRESH cache directory per run, and never try to delete an old one.
-#
-# The container runs as --user 0, so everything it writes into the mounted cache
-# is root-owned and `rm -rf` as thakk100 fails silently. A stale
-# ov/_cache.lock left by the previous run then blocks the next Kit boot forever:
-# the process sits at 0% CPU and ~43 MiB with no output and no exception, which
-# cost several cycles to diagnose. A unique directory means there is never a
-# stale lock to inherit, which is more robust than trying to clean one.
-CACHE="${K1_CACHE_DIR:-$HERE/k1_isaac_cache_gaits_$(date +%Y%m%d_%H%M%S)}"
-mkdir -p "$CACHE"
-echo "cache: $CACHE"
-RUN_CMD="docker run --rm --gpus all --user 0 --entrypoint bash \
- -e ACCEPT_EULA=Y -e OMNI_KIT_ALLOW_ROOT=1 -e TERM=xterm \
- -e NVIDIA_DRIVER_CAPABILITIES=all -e K1_PHYSICS=physx \
- -v $HERE/spark_p2_gaitfix_container.sh:/p2vel.sh:ro \
- -v $CACHE:/root/.cache -v $REPO:/workspace/booster_ws \
- nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1 /p2vel.sh > $LOG 2>&1; echo DOCKER_RC=\$? >> \$LOG"
 
-tmux new-session -d -s "$SESSION" "$RUN_CMD"
-sleep 3
-tmux ls | grep "$SESSION" || { echo TMUX_SESSION_MISSING; exit 1; }
-echo "P2 velocity-curriculum log: $LOG"
-echo "watch:  tail -f $LOG"
-echo "stop:   tmux kill-session -t $SESSION   # then: docker kill \$(docker ps -q -f isaac-lab)"
+# Fresh cache per container. The container runs as --user 0 so its cache files are
+# root-owned and cannot be removed from the host, and a stale ov/_cache.lock wedges
+# the next Kit boot at 0% CPU with no output. Never deleting is the robust answer.
+CACHE_A="$HERE/k1_isaac_cache_gaits_pre_$(date +%Y%m%d_%H%M%S)"
+CACHE_B="$HERE/k1_isaac_cache_gaits_trn_$(date +%H%M%S)"
+mkdir -p "$CACHE_A" "$CACHE_B"
+echo "caches: $CACHE_A  $CACHE_B"
+
+run_stage() {   # $1 = container script, $2 = cache dir, $3 = label
+  echo "=== STAGE $3 $(date +%H:%M:%S)"
+  docker run --rm --gpus all --user 0 --entrypoint bash \
+    -e ACCEPT_EULA=Y -e OMNI_KIT_ALLOW_ROOT=1 -e TERM=xterm \
+    -e NVIDIA_DRIVER_CAPABILITIES=all -e K1_PHYSICS=physx \
+    -v "$1":/stage.sh:ro \
+    -v "$2":/root/.cache -v "$REPO":/workspace/booster_ws \
+    nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1 /stage.sh 2>&1 | tee -a "$LOG"
+  return "${PIPESTATUS[0]}"
+}
+
+run_stage "$HERE/spark_p2_gaitfix_preflight_container.sh" "$CACHE_A" preflight
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "P2_GAITS_GATE=PREFLIGHT_FAILED_RC_$rc_NO_TRAINING"
+  echo "DOCKER_RC=$rc" >> "$LOG"
+  exit 30
+fi
+# The GPU must be free between containers; the previous one is --rm so it is gone,
+# but confirm rather than assume.
+sleep 5
+if docker ps --format '{{.Image}}' | grep -q 'isaac-lab'; then
+  echo "P2_GAITS_GATE=PREVIOUS_CONTAINER_STILL_RUNNING"
+  exit 31
+fi
+
+run_stage "$HERE/spark_p2_gaitfix_train_container.sh" "$CACHE_B" train
+rc=$?
+echo "DOCKER_RC=$rc" >> "$LOG"
+echo "log: $LOG"
+exit "$rc"
