@@ -336,17 +336,22 @@ rsync'd to zz-bw, preflight PASS; Phase-1 squat teacher RUNNING on zz-bw:**
   symlink; squat export happens chain stage 3), 4 ships as chain stage 4
   (parity `--layout squat`, gate `PARITY_OK`), **5 + 6 resolved**
   (`scripts/push_preflight.sh` PASSED on the clone; `zzbw_push_{smoke,host,
-  chain_host}.sh` marker-gated), **7 OPEN** (zz-bw scratch 88 G free / 98 %
-  FS — preflight ≥60 G still passes, but hf-cache 298 G / ltx2 119 G /
-  sing-cache 49 G / old SIFs need user go-ahead to delete).
+  chain_host}.sh` marker-gated), **7 CLEARED-enough** (user approved `ltx2`
+  119 G + old SIFs `cosmos3-gen`/`so101-train` → zz-bw scratch **88 G → 228 G
+  free, 94 %**; hf-cache 298 G / sing-cache 49 G retained by choice; kept
+  `k1-train.sif` in use, `pe-isaaclab.sif`, `isaaclab23_sim51.sif`).
 - **Chain design:** `tmux new -s k1_push_chain 'scripts/zzbw_push_chain_host.sh'`
   — waits for Phase-1 `k1_squat_full`, gates its log, exports the squat base,
   parity, smokes, reach 1500 → push 3000 (warm). **Never switches the clone's
   branch** (stays `feat/velocity-squat`; v3 push files ride in via rsync;
   all gates are content markers — `python.sh` returns 0 on Traceback, so
   gates are grep-only).
-- **Next:** dl validation smokes (partial A/B mode + squat structural path w/
-  fake policy + PNG frames) → Phase-1 gate (velocity parity ±10 %, height
+- **dl validation smokes DONE, both PASS:** A = `reach` partial
+  (`mode=partial cmd=3 out=14`), B = `push` squat-structural w/ fake 236→12
+  policy (`mode=squat cmd=4 out=12`, `[frozenobs]` block sanity OK), each
+  gated on `Learning iteration 2/3` + `PUSH_SMOKE_DONE` + 0 Tracebacks, PNG
+  frames viewed (`v3_smoke_{a,b}_frame.png`).
+- **Next:** Phase-1 gate (velocity parity ±10 %, height
   MAE < 2 cm, done_rate 0.0000) → Play-task squat→rise panel video + frame
   check → start the chain → Phase 4 (A15 eval harness, report, videos,
   Drive/Slides).

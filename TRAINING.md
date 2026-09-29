@@ -590,8 +590,28 @@ enters the reward directly (design note).
   --exclude='__pycache__'`), stray `scripts/README.md` removed, marker
   verified (`goal_yaw_curriculum`), **preflight PASS** ✓; running Phase-1
   unaffected (push package imported once at process start).
-- **Remaining:** dl validation smokes (partial + squat-structural w/ fake
-  policy, PNG frames) → Phase-1 gate (velocity parity ±10 %, height MAE
+- **dl validation smokes BOTH PASS (2026-09-28 night):**
+  - A — `reach`, partial mode: `[push] frozen base loaded:
+    models/k1_partialctrl_base.pt mode=partial cmd=3 out=14`, gates
+    `Learning iteration 2/3` + `PUSH_SMOKE_DONE`, 0 Tracebacks; frame
+    `v3_smoke_a_frame.png` viewed (16 envs upright, green-box size DR, nothing
+    tipped).
+  - B — `push`, squat structural path with an untrained fake 236→12
+    TorchScript policy (`PUSH_BASE_POLICY=/tmp/fake236.pt`,
+    `PUSH_FROZEN_DEBUG=1`): `mode=squat cmd=4 out=12`, gates `2/3` +
+    `DONE`, 0 Tracebacks; `[frozenobs]` block sanity confirmed —
+    `cmd4=[-0.5, 0.105, -0.013, 0.534]` (H\\* ∈ [0.40,0.55]), gravity
+    `[0,0,-1]`, leg pos/vel 0 at spawn, `height_scan` = 0.07
+    (0.57 − 0 − 0.5 flat-ground value, matches velocity semantics);
+    frame `v3_smoke_b_frame.png` viewed (envs/boxes intact).
+  - Together these exercise both mode branches, both task cfgs, the fixed-goal
+    machinery, terminations/rewards and video capture before the chain runs.
+- **Blocker 7 cleanup executed (user-approved):** deleted `ltx2` (119 G) +
+  old SIFs `cosmos3-gen.sif` + `so101-train.sif` (22.6 G) on zz-bw —
+  scratch **88 G → 228 G free (98 % → 94 %)**; kept `k1-train.sif` (in use),
+  `pe-isaaclab.sif` (pe campaign), `isaaclab23_sim51.sif` (built today), and
+  the user-kept `hf-cache` (298 G) / `sing-cache` (49 G).
+- **Remaining:** Phase-1 gate (velocity parity ±10 %, height MAE
   < 2 cm, done 0.0000) → Play-task squat→rise panel video + frame check →
   start `k1_push_chain` → Phase 4 eval harness (A15: corner-err-<0.08-held
   metric) → report/videos/Drive/Slides.
