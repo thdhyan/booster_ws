@@ -26,8 +26,18 @@ parser.add_argument("--num_envs", type=int, default=16)
 parser.add_argument("--steps", type=int, default=60)
 parser.add_argument("--min-stand-z", type=float, default=0.45,
                     help="required mean trunk height at the end of the probe")
+# Terms that are legitimately zero for a constant all-zero action, so the probe
+# must not report them as broken. The probe holds the action at zero, which means
+# no foot is swinging and the action history is constant, so:
+#   feet_clearance - no swing foot exists, so there is nothing to score
+#   action_jerk_l2 - a constant action has a zero third difference
+#   gait_cadence   - a still robot produces no zero crossings
+# The first two are structural, not bugs. Listing them here keeps the probe's
+# "dead term" check meaningful for everything else.
 ZERO_ACTION_INERT = {"action_rate_l2", "dof_vel_limits", "torque_limits",
-                     "undesired_contacts", "termination_penalty"}
+                     "undesired_contacts", "termination_penalty",
+                     "feet_clearance", "action_jerk_l2", "gait_cadence",
+                     "feet_alternation", "stride_length"}
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 

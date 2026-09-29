@@ -349,3 +349,31 @@ def test_state_reads_go_through_dot_data():
     src = GAIT.read_text()
     for needed in ("data.joint_pos", "data.body_pos_w", "data.net_forces_w"):
         assert needed in src, f"expected {needed} in the gait reward terms"
+
+
+def test_probe_treats_new_gait_terms_as_zero_action_inert():
+    """The probe holds the action at zero, so these terms are structurally zero.
+
+    feet_clearance needs a swinging foot, action_jerk_l2 needs action history and
+    gait_cadence needs zero crossings. All are legitimately 0 for a constant
+    zero action, so without listing them the probe reports them as dead terms and
+    fails the run.
+    """
+    probe = _ROOT / "isaac_tasks/k1_velocity/scripts/probe_rewards.py"
+    src = probe.read_text()
+    tree = ast.parse(src)
+    inert = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "ZERO_ACTION_INERT":
+                    inert = {e.value for e in node.value.elts if isinstance(e, ast.Constant)}
+    assert inert is not None, "ZERO_ACTION_INERT set not found in probe_rewards.py"
+    for term in ("feet_clearance", "action_jerk_l2", "gait_cadence"):
+        assert term in inert, (
+            f"{term} is structurally zero under a constant zero action and must be "
+            "listed in ZERO_ACTION_INERT or the probe fails every run"
+        )
+    # and the pre-existing entries must not have been dropped
+    for term in ("action_rate_l2", "termination_penalty", "undesired_contacts"):
+        assert term in inert
