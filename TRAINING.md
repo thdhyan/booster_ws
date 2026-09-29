@@ -611,6 +611,16 @@ enters the reward directly (design note).
   scratch **88 G → 228 G free (98 % → 94 %)**; kept `k1-train.sif` (in use),
   `pe-isaaclab.sif` (pe campaign), `isaaclab23_sim51.sif` (built today), and
   the user-kept `hf-cache` (298 G) / `sing-cache` (49 G).
+- **Interim renders delivered to Drive (2026-09-28 night):**
+  `videos/p6v3_env_reach.mp4` (12.7 MB) + `videos/p6v3_env_push.mp4`
+  (11.5 MB) — 750-step 4-panel clips (overview/top_down/follow/side + status
+  header) of the **v3 fixed-goal env** acting with the v2 checkpoints in
+  partial mode (specs unchanged: obs 108 / act 9); frames checked
+  (`p6v3_env_*_frame.png`). Uploaded with rclone on dl (`gdrive-dhyan`,
+  folder `1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy`). `models/k1_push_base.pt` on
+  dl is now a relative symlink → `k1_partialctrl_base.pt` (the basename
+  switch, same as zz-bw). These are INTERIM (v2 policy, v3 env) — true v3
+  policy videos follow Phase 1 → chain → Phase 4.
 - **Remaining:** Phase-1 gate (velocity parity ±10 %, height MAE
   < 2 cm, done 0.0000) → Play-task squat→rise panel video + frame check →
   start `k1_push_chain` → Phase 4 eval harness (A15: corner-err-<0.08-held
