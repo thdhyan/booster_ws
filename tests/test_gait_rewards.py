@@ -194,3 +194,33 @@ def test_gate_rejects_a_non_trace_cleanly():
 def test_gate_rejects_a_missing_file():
     rc, out = _run_gate("/tmp/opencode/definitely_absent.npz")
     assert rc == 2
+
+
+def test_gait_phase_buffer_shape_is_requested_exactly():
+    """The jerk term needs (num_envs, num_actions), not a 1-D (num_envs,).
+
+    Allocating 1-D produced "size of tensor a (12) must match the size of tensor
+    b (8) at non-singleton dimension 1" and killed the preflight. The state helper
+    must therefore honour the requested shape rather than assuming 1-D.
+    """
+    src = GAIT.read_text()
+    tree = ast.parse(src)
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "get"
+    )
+    # the signature must take a shape, not a num_envs int
+    args = [a.arg for a in fn.args.args]
+    assert "shape" in args, f"_GaitPhase.get signature is {args}, expected a 'shape' arg"
+    assert "num_envs" not in args, "a num_envs int invites the 1-D bug back"
+    # ast.dump renders torch.zeros as Name(torch) + Attribute(zeros), not as a
+    # literal string, so look for the attribute node instead.
+    calls_zeros = any(
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "zeros"
+        for n in ast.walk(fn)
+    )
+    assert calls_zeros, "_GaitPhase.get must allocate with torch.zeros"
+    # the jerk term must request the full action shape
+    assert "flat.shape" in src, "action_jerk_l2 must pass flat.shape, not an int"

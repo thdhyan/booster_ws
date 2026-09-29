@@ -134,10 +134,19 @@ class _GaitPhase:
     _state: dict = {}
 
     @classmethod
-    def get(cls, key: str, num_envs: int, device) -> torch.Tensor:
+    def get(cls, key: str, shape, device) -> torch.Tensor:
+        """Fetch (or lazily create) a persistent buffer of exactly ``shape``.
+
+        The shape argument matters: per-env phase estimators need a 1-D
+        ``(num_envs,)`` scalar, while the jerk term needs the full
+        ``(num_envs, num_actions)`` action history. Getting this wrong produced
+        "size of tensor a (12) must match the size of tensor b (8)", because a
+        1-D ``(8,)`` buffer cannot broadcast against ``(8, 12)``.
+        """
+        shape = (shape,) if isinstance(shape, int) else tuple(shape)
         buf = cls._state.get(key)
-        if buf is None or buf.shape[0] != num_envs or buf.device != device:
-            buf = torch.zeros(num_envs, device=device)
+        if buf is None or tuple(buf.shape) != shape or buf.device != device:
+            buf = torch.zeros(*shape, device=device)
             cls._state[key] = buf
         return buf
 
@@ -260,10 +269,9 @@ def action_jerk_l2(env, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     rather than a difference of differences of already-differenced data.
     """
     actions = env.action_manager.action
-    flat = actions.reshape(actions.shape[0], -1)
-    n = flat.shape[0]
-    prev = _GaitPhase.get(f"jerk_prev1_{asset_cfg.name}", n, flat.device)
-    prev2 = _GaitPhase.get(f"jerk_prev2_{asset_cfg.name}", n, flat.device)
+    flat = actions.reshape(actions.shape[0], -1)          # (num_envs, num_actions)
+    prev = _GaitPhase.get(f"jerk_prev1_{asset_cfg.name}", flat.shape, flat.device)
+    prev2 = _GaitPhase.get(f"jerk_prev2_{asset_cfg.name}", flat.shape, flat.device)
     third = flat - 3.0 * prev + 3.0 * prev2
     prev2.copy_(prev)
     prev.copy_(flat)
