@@ -342,7 +342,10 @@ class RewardsCfg:
     track_lin_vel_xy_exp = RewTerm(
         func=mdp.track_lin_vel_xy_yaw_frame_exp,
         weight=10.0,
-        params={"command_name": "base_velocity", "std": 0.25},
+        # std was 0.25, which is nearly flat near the optimum: a 0.14 m/s tracking
+        # error cost almost nothing. The policy settled at 69% of commanded speed
+        # and was paid for it. Sharpened to 0.15 so the error actually hurts.
+        params={"command_name": "base_velocity", "std": 0.15},
     )
     track_ang_vel_z_exp = RewTerm(
         func=mdp.track_ang_vel_z_world_exp,
@@ -413,7 +416,16 @@ class RewardsCfg:
     # --- Regularization (AGILE) ---
     lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.5)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.5)
+    # Smoothness. action_rate_l2 only sees the first difference, which 8 Hz
+    # chatter satisfies cheaply; measured jerk was 0.10 rad/step^2 overall and
+    # 0.26 in hip-yaw. Weight raised from -0.5 and paired with an explicit
+    # third-difference (jerk) term below.
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-2.0)
+    action_jerk_l2 = RewTerm(
+        func=gait.action_jerk_l2,
+        weight=-0.02,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
+    )
     dof_acc_l2 = RewTerm(
         func=mdp.joint_acc_l2, weight=-2.5e-7,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
@@ -455,6 +467,45 @@ class RewardsCfg:
     # exactly the stand-in-place optimum that stopped the first teacher
     # walking.  Standing is now handled by the positive base_height reward.
     # Do not use hip/trunk ground contact to crawl or kneel forward.
+    # ---- gait structure ----------------------------------------------------
+    # The 3000-iteration run was stable and moved (2.66 m net, 0 falls) but did
+    # not walk: mean cadence 5.7 steps/s against 1.8-2.2 for human walking, with
+    # 5 of 8 envs chattering at 7.9-8.9 steps/s on 3-5 cm strides. Nothing in
+    # the reward distinguished a walk from a jitter, so these four terms make the
+    # difference observable to the policy. Weights are deliberately modest --
+    # this is shaping, and over-weighting it fights the tracking objective.
+    gait_cadence = RewTerm(
+        func=gait.gait_cadence_penalty,
+        weight=-1.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS),
+            "target_hz": 2.0,
+            "dt": 0.02,
+        },
+    )
+    feet_clearance = RewTerm(
+        func=gait.feet_clearance,
+        weight=-8.0,
+        params={
+            "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
+            "target_height": 0.06,
+        },
+    )
+    feet_alternation = RewTerm(
+        func=gait.feet_alternation_penalty,
+        weight=-2.0,
+        params={
+            "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
+        },
+    )
+    stride_length = RewTerm(
+        func=gait.stride_length_penalty,
+        weight=-4.0,
+        params={
+            "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
+            "target_stride": 0.35,
+        },
+    )
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-1.0,

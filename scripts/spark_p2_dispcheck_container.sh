@@ -95,5 +95,21 @@ PYEOF
 run_speed 0.5 inrange
 run_speed 0.6 aboverange
 
+# The movement gate above is necessary but NOT sufficient: it passed an 8 Hz
+# chatter that covered 2.66 m without walking a single real step. The gait gate
+# is what decides whether this is a walking policy, so it runs on the same trace.
+echo "=== GAIT GATE (cadence, stride, jerk) ==="
+GAIT_RC=0
+for trace in "$OUTDIR"/p2_disp_inrange_${STAMP}.npz "$OUTDIR"/p2_disp_aboverange_${STAMP}.npz; do
+  [ -s "$trace" ] || continue
+  "$PY" -u "$REPO/isaac_tasks/k1_velocity/scripts/gait_gate.py" "$trace" || GAIT_RC=1
+done
+if [ "$GAIT_RC" -eq 0 ]; then
+  echo "GAIT_GATE=OK"
+else
+  echo "GAIT_GATE=FAIL_NOT_A_WALK"
+  echo "DISP_GATE=WALKS_BUT_DOES_NOT_WALK_FIX_REWARD_NOT_NETWORK"
+fi
+
 echo "DISP_ALL_DONE"
 exit 0
