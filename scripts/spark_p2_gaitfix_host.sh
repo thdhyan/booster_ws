@@ -9,7 +9,6 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$HOME/Projects/booster_ws"
 LOG="$HERE/p2_gaits.log"
-CACHE="$HERE/k1_isaac_cache_p2_gaits"   # reset below before use
 SESSION=k1_spark_p2_gaits
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -27,12 +26,15 @@ if docker ps --format '{{.Image}}' | grep -q 'isaac-lab'; then
 fi
 
 : > "$LOG"
-# Run-specific cache. A cache shared with a previous run can wedge Kit at boot
-# (0% CPU, ~29 MiB, zero output) if the earlier container was SIGKILLed rather
-# than stopped, and the resulting files are root-owned from inside `--user 0` so
-# they cannot be cleaned from the host afterwards.
-CACHE="${K1_CACHE_DIR:-$HERE/k1_isaac_cache_p2_gaits}"
-rm -rf "$CACHE" 2>/dev/null || true
+# A FRESH cache directory per run, and never try to delete an old one.
+#
+# The container runs as --user 0, so everything it writes into the mounted cache
+# is root-owned and `rm -rf` as thakk100 fails silently. A stale
+# ov/_cache.lock left by the previous run then blocks the next Kit boot forever:
+# the process sits at 0% CPU and ~43 MiB with no output and no exception, which
+# cost several cycles to diagnose. A unique directory means there is never a
+# stale lock to inherit, which is more robust than trying to clean one.
+CACHE="${K1_CACHE_DIR:-$HERE/k1_isaac_cache_gaits_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$CACHE"
 echo "cache: $CACHE"
 RUN_CMD="docker run --rm --gpus all --user 0 --entrypoint bash \

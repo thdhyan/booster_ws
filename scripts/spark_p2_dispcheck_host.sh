@@ -59,8 +59,10 @@ CKPT=$(find "$REPO/logs/rsl_rl" -type f -name 'model_*.pt' -newermt '-8 hours' \
 CKPT_REL="${CKPT#$REPO/}"
 log "evaluating $CKPT_REL"
 
-CACHE="$HERE/k1_isaac_cache_p2_disp"
-rm -rf "$CACHE" 2>/dev/null
+# Fresh dir per run: the container runs as root so old cache files cannot be
+# deleted from here, and a stale ov/_cache.lock wedges the next Kit boot
+# at 0% CPU with no output.
+CACHE="$HERE/k1_isaac_cache_$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$CACHE"
 docker run --rm --gpus all --user 0 --entrypoint bash \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ALLOW_ROOT=1 -e TERM=xterm \

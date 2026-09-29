@@ -9,7 +9,6 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$HOME/Projects/booster_ws"
 LOG="$HERE/p2_vel.log"
-CACHE="$HERE/k1_isaac_cache_p2_vel"   # reset below before use
 SESSION=k1_spark_p2_vel
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -31,8 +30,7 @@ fi
 # (0% CPU, ~29 MiB, zero output) if the earlier container was SIGKILLed rather
 # than stopped, and the resulting files are root-owned from inside `--user 0` so
 # they cannot be cleaned from the host afterwards.
-CACHE="${K1_CACHE_DIR:-$HERE/k1_isaac_cache_p2_vel}"
-rm -rf "$CACHE" 2>/dev/null || true
+CACHE="${K1_CACHE_DIR:-$HERE/k1_isaac_cache_$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$CACHE"
 echo "cache: $CACHE"
 RUN_CMD="docker run --rm --gpus all --user 0 --entrypoint bash \

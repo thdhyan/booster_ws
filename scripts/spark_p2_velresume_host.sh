@@ -9,7 +9,6 @@ set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$HOME/Projects/booster_ws"
 LOG="$HERE/p2_vel_resume.log"
-CACHE="$HERE/k1_isaac_cache_p2_vel_resume"
 SESSION=k1_spark_p2_velresume
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -37,15 +36,28 @@ if [ -z "$CKPT" ] || [ ! -s "$CKPT" ]; then
 fi
 echo "checkpoint: $CKPT"
 
+# Pass the path RELATIVE to the repo. The host repo lives at
+# $HOME/Projects/booster_ws but is bind-mounted at /workspace/booster_ws inside
+# the container, so an absolute host path does not exist in there and the
+# container's own existence check rejects it.
+CKPT_REL="${CKPT#$REPO/}"
+if [ "$CKPT_REL" = "$CKPT" ]; then
+  echo "checkpoint is not under $REPO; cannot express it relative to the mount"
+  exit 4
+fi
+echo "checkpoint (container-relative): $CKPT_REL"
+
 : > "$LOG"
-rm -rf "$CACHE" 2>/dev/null || true
+CACHE="$HERE/k1_isaac_cache_$(basename "$0" .sh)_$(date +%Y%m%d_%H%M%S)"
+# Fresh dir per run: the container runs as root so old cache files cannot be
+# deleted from here, and a stale ov/_cache.lock wedges the next Kit boot.
 mkdir -p "$CACHE"
 RUN_CMD="docker run --rm --gpus all --user 0 --entrypoint bash \
  -e ACCEPT_EULA=Y -e OMNI_KIT_ALLOW_ROOT=1 -e TERM=xterm \
  -e NVIDIA_DRIVER_CAPABILITIES=all -e K1_PHYSICS=physx \
  -v $HERE/spark_p2_velresume_container.sh:/p2resume.sh:ro \
  -v $CACHE:/root/.cache -v $REPO:/workspace/booster_ws \
- nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1 /p2resume.sh '$CKPT' > $LOG 2>&1; echo DOCKER_RC=\$? >> $LOG"
+ nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1 /p2resume.sh '$CKPT_REL' > $LOG 2>&1; echo DOCKER_RC=\$? >> $LOG"
 
 tmux new-session -d -s "$SESSION" "$RUN_CMD"
 sleep 3

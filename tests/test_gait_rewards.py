@@ -377,3 +377,33 @@ def test_probe_treats_new_gait_terms_as_zero_action_inert():
     # and the pre-existing entries must not have been dropped
     for term in ("action_rate_l2", "termination_penalty", "undesired_contacts"):
         assert term in inert
+
+
+# --- launcher hygiene --------------------------------------------------------
+def test_no_launcher_deletes_a_cache_it_cannot_delete():
+    """`rm -rf $CACHE` silently fails on root-owned files and leaves a stale lock.
+
+    The container runs as --user 0, so its cache files are root-owned and cannot
+    be removed from the host. The stale ov/_cache.lock then blocks the next Kit
+    boot forever: 0% CPU, ~43 MiB, no output, no exception. Each launcher must
+    use a fresh per-run cache directory instead of trying to clean the old one.
+    """
+    import glob
+    bad = []
+    for path in sorted(glob.glob(str(_ROOT / "scripts/spark_*_host.sh"))):
+        src = pathlib.Path(path).read_text()
+        if 'rm -rf "$CACHE"' in src:
+            bad.append(pathlib.Path(path).name)
+    assert not bad, (
+        f"these launchers rm -rf a root-owned cache, which fails silently and "
+        f"leaves a stale ov/_cache.lock: {bad}. Use a per-run timestamped dir."
+    )
+
+
+def test_p2_launchers_use_a_unique_cache_dir():
+    import glob
+    for path in sorted(glob.glob(str(_ROOT / "scripts/spark_p2_*_host.sh"))):
+        src = pathlib.Path(path).read_text()
+        assert "date +%Y%m%d_%H%M%S" in src, (
+            f"{pathlib.Path(path).name} must build a unique cache dir per run"
+        )
