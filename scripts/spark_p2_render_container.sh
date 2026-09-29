@@ -13,8 +13,15 @@ cd "$REPO" || { echo RENDER_CD_FAIL; exit 1; }
 TASK=Isaac-Velocity-Rough-K1-Teacher-v0
 CKPT="$1"
 SPEED="${2:-0.5}"
+# Label comes from the caller. It was previously hardcoded to describe one
+# specific checkpoint, so re-rendering a different policy produced a video whose
+# HUD confidently stated the wrong checkpoint and the wrong measurements. The
+# label is the only thing a viewer uses to judge what they are looking at, so it
+# must never be stale.
+LABEL="${3:-K1 P2 velocity policy | cmd vx=+${SPEED} | ${CKPT##*/}}"
 [ -s "$CKPT" ] || { echo "RENDER_CKPT_MISSING=$CKPT"; exit 1; }
 echo "RENDER_CKPT=$CKPT speed=$SPEED"
+echo "RENDER_LABEL=$LABEL"
 
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train 2>&1 | tail -1
@@ -30,7 +37,7 @@ timeout 2400 "$PY" -u isaac_tasks/k1_velocity/scripts/play_record.py \
   --task "$TASK" --checkpoint "$CKPT" \
   --num_envs 8 --steps 750 --cmd "$SPEED" 0.0 0.0 \
   --panel_video --video_out "$OUT" --trace_out "$TRACE" \
-  --label "K1 P2 velocity ckpt 5998 | cmd vx=+${SPEED} | measured 2.66 m @0.5, 3.25 m @0.6, 0 falls" \
+  --label "$LABEL" \
   2>&1 | tail -25
 rc=${PIPESTATUS[0]}
 echo "RENDER_RC=$rc"
