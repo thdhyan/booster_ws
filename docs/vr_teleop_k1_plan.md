@@ -12,7 +12,7 @@ replaces the gantry later and keeps the same `/{ns}/cmd_vel` contract.
 ## 1. What runs
 
 ```text
-Quest 3 browser (nvidia.github.io/IsaacTeleop/client) ──CloudXR 48322/49100/47998──► host
+Quest 3 browser (nvidia.github.io/IsaacCapture/client) ──CloudXR 48322/49100/47998──► host
 k1_teleop/xr_teleop_node.py  (Televiz owns OpenXR; TeleopSession borrows it)
   panels, fixed in the room (X re-centres):
     front  ZED 2i pair as ONE stereo quad (left image -> left eye, right -> right eye,
@@ -129,7 +129,7 @@ dl (headset): push this branch, check it out in `~/Projects/booster_ws` there, t
 
 ```bash
 scripts/dl_k1_teleop_up.sh build && scripts/dl_k1_teleop_up.sh all
-# Quest browser: https://nvidia.github.io/IsaacTeleop/client/ -> dl IP -> Connect
+# Quest browser: https://nvidia.github.io/IsaacCapture/client/ -> dl IP -> Connect
 scripts/dl_k1_teleop_up.sh down      # shared machine: always
 ```
 

@@ -11,7 +11,7 @@
 # Containers (host network, ROS domain $K1_ROS_DOMAIN_ID, discovery localhost only):
 #   k1-teleop-sim   Isaac Lab: src/k1_sim_isaac/scripts/k1_teleop_sim.py (debug video in logs/k1_teleop_sim/videos)
 #   k1-teleop-xr    CloudXR + Televiz: stereo ZED / chase / YOLO panels, Quest controls
-#                   (ports 48322/tcp 49100/tcp 47998/udp; headset: https://nvidia.github.io/IsaacTeleop/client/)
+#                   (ports 48322/tcp 49100/tcp 47998/udp; headset: https://nvidia.github.io/IsaacCapture/client/)
 #   k1-teleop-yolo  YOLOv8n (CPU) on the left ZED eye -> /k1_0/yolo/image_raw
 # Overrides: TAG, SIM_GPU, XR_GPU, K1_ROS_DOMAIN_ID, TELEOP_ARGS (e.g. "--arm-src soma"), SIM_ARGS, REPO.
 set -euo pipefail
@@ -42,7 +42,7 @@ case "${1:-all}" in
                 exec /isaac-sim/python.sh src/k1_sim_isaac/scripts/k1_teleop_sim.py $SIM_ARGS" ;;
     teleop)
         start k1-teleop-xr --gpus "device=$XR_GPU" --network host --ipc host --user "$(id -u):$(id -g)" \
-            -e NVIDIA_DRIVER_CAPABILITIES=all -e HOME=/tmp "${ROS_ENV[@]}" \
+            -e NVIDIA_DRIVER_CAPABILITIES=all -e HOME=/tmp -e TELEOP_WEB_CLIENT_STATIC_DIR=/cloudxr/static-client "${ROS_ENV[@]}" \
             -v "$REPO:/workspace/booster_ws" -v "$HOME/.cloudxr:/cloudxr" -w /workspace/booster_ws "$XR_IMAGE" \
             bash -lc "source /opt/ros/jazzy/setup.bash && exec python3 -u -m k1_teleop.xr_teleop_node \
                 --cloudxr-install-dir /cloudxr --accept-eula $TELEOP_ARGS" ;;

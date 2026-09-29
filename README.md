@@ -140,7 +140,7 @@ the ZED pair in stereo plus chase / YOLO panels. Full notes:
 # dl (real time): sim + headset node + YOLO in Docker, ROS domain 45
 scripts/dl_k1_teleop_up.sh build            # once per host
 SIM_GPU=0 XR_GPU=1 scripts/dl_k1_teleop_up.sh all
-# Quest browser: https://nvidia.github.io/IsaacTeleop/client/ -> dl IP -> Connect
+# Quest browser: https://nvidia.github.io/IsaacCapture/client/ -> dl IP -> Connect
 TELEOP_ARGS="--arm-src soma" scripts/dl_k1_teleop_up.sh teleop   # arms from HMD-Poser + SOMA
 scripts/dl_k1_teleop_up.sh down             # shared machine: always
 
