@@ -487,7 +487,10 @@ class RewardsCfg:
         func=gait.feet_clearance,
         weight=-8.0,
         params={
+            # contact for the swing/stance test, robot for the foot heights.
+            # These are different prims: a ContactSensor has no body_pos.
             "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
+            "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
             "target_height": 0.06,
         },
     )
@@ -502,7 +505,8 @@ class RewardsCfg:
         func=gait.stride_length_penalty,
         weight=-4.0,
         params={
-            "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
+            # Foot separation comes from the articulation, not the sensor.
+            "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
             "target_stride": 0.35,
         },
     )

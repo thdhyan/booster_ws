@@ -224,3 +224,103 @@ def test_gait_phase_buffer_shape_is_requested_exactly():
     assert calls_zeros, "_GaitPhase.get must allocate with torch.zeros"
     # the jerk term must request the full action shape
     assert "flat.shape" in src, "action_jerk_l2 must pass flat.shape, not an int"
+
+
+def test_gait_rewards_use_the_data_accessor_not_the_raw_object():
+    """Isaac Lab exposes joint/body state on the articulation's .data.
+
+    env.scene[...].joint_pos and env.scene[...].body_pos do not exist and killed
+    the preflight with 'Articulation object has no attribute joint_pos'. Body
+    positions are body_pos_w, matching the working terms in this same file.
+    """
+    src = GAIT.read_text()
+    tree = ast.parse(src)
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Subscript):
+            continue
+        # env.scene[cfg.name].<attr>  ->  attribute access straight off the prim
+        v = node.value
+        if (
+            isinstance(v, ast.Attribute)
+            and v.attr in ("joint_pos", "body_pos", "body_pos_w", "joint_vel")
+            and isinstance(v.value, ast.Subscript)
+        ):
+            inner = v.value.value
+            looks_like_scene = (
+                isinstance(inner, ast.Attribute) and inner.attr == "scene"
+            )
+            if looks_like_scene and "data" not in ast.unparse(v):
+                bad.append(ast.unparse(v))
+    assert not bad, f"accessing state directly off the prim instead of .data: {bad}"
+
+
+def test_foot_terms_receive_both_sensor_and_asset_cfgs():
+    """A ContactSensor has no body_pos, so foot terms need the robot as well."""
+    cfg_src = CFG.read_text()
+    for term in ("feet_clearance", "stride_length"):
+        assert f"{term} = RewTerm(" in cfg_src
+    # feet_clearance needs both; stride_length needs the asset only.
+    assert cfg_src.count('"asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"])') >= 2
+
+
+# --- cadence estimator: the maths, verified without torch -------------------
+def _cadence_estimate(knee: np.ndarray, dt: float = 0.02, alpha: float = 0.15,
+                      window_s: float = 2.5) -> float:
+    """NumPy mirror of gait_cadence_penalty's estimator.
+
+    Kept in the test rather than only in the module because torch is not
+    installed on the laptop, and this is the term that has to actually
+    discriminate a walk from the 8 steps/s shuffle.
+    """
+    window = max(int(window_s / dt), 8)
+    h = 0.0
+    hist = np.zeros(window)          # index 0 = newest
+    vals = []
+    for k in knee:
+        h = (1.0 - alpha) * h + alpha * k
+        hist = np.roll(hist, 1)
+        hist[0] = h
+        c = hist - hist.mean()
+        s = np.sign(c)
+        frac = (s[1:] * s[:-1] < 0).mean()
+        vals.append(frac * (window - 1) / (window * dt))
+    return float(np.mean(vals[-400:]))
+
+
+@pytest.mark.parametrize("knee_hz,expected_steps", [(1.0, 2.0), (2.0, 4.0), (0.7, 1.4)])
+def test_cadence_estimator_recovers_step_rate(knee_hz, expected_steps):
+    t = np.arange(3000) * 0.02
+    knee = 0.35 * np.sin(2 * np.pi * knee_hz * t)
+    assert _cadence_estimate(knee) == pytest.approx(expected_steps, rel=0.15)
+
+
+def test_cadence_window_long_enough_to_resolve_low_rates():
+    """A 1.28 s window only fits ~2.5 crossings, so the count quantises to
+    integers and a 2 steps/s gait reads as anything from 1.5 to 2.5. 2.5 s
+    resolves it."""
+    t = np.arange(3000) * 0.02
+    knee = 0.35 * np.sin(2 * np.pi * 1.0 * t)
+    short = _cadence_estimate(knee, window_s=1.28)
+    long = _cadence_estimate(knee, window_s=2.5)
+    assert abs(long - 2.0) < abs(short - 2.0), (
+        f"2.5 s window ({long:.2f}) should be closer to 2.0 than 1.28 s ({short:.2f})"
+    )
+
+
+def test_shuffle_gets_a_strong_penalty_against_the_2hz_target():
+    """The 7.9-8.9 steps/s shuffle must feel a real gradient to slow down."""
+    t = np.arange(3000) * 0.02
+    knee = 0.35 * np.sin(2 * np.pi * 4.0 * t)   # 8 steps/s
+    est = _cadence_estimate(knee)
+    assert est > 6.0, f"estimator read the shuffle as only {est:.2f} steps/s"
+    assert abs(est - 2.0) > 3.0, "shuffle must be far from the 2.0 target to earn a penalty"
+
+
+def test_default_window_matches_the_tested_value():
+    """Guards the default from being shortened back to the quantised window."""
+    src = GAIT.read_text()
+    assert "window_s: float = 2.5" in src, (
+        "the cadence window must default to 2.5 s; 1.28 s quantises too coarsely "
+        "to resolve a 2 steps/s gait"
+    )

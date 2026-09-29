@@ -157,6 +157,8 @@ def gait_cadence_penalty(
     target_hz: float = 2.0,
     dt: float = 0.02,
     alpha: float = 0.15,
+    knee_index: int = 3,
+    window_s: float = 2.5,
 ) -> torch.Tensor:
     """Penalise step frequency far from ``target_hz``.
 
@@ -171,27 +173,47 @@ def gait_cadence_penalty(
     envs above 7.9. A penalty that is flat for small errors and grows for large
     ones lets the policy settle at the target without fighting noise.
     """
-    joints = env.scene[asset_cfg.name].joint_pos[:, asset_cfg.joint_ids]
-    # Knee flexion is the cleanest single gait signal: it swings once per step.
-    knee = joints[:, asset_cfg.joint_ids.numel() // 2]  # knee is mid-list
+    # Joint positions live on the articulation's .data, not on the Articulation
+    # itself. K1_LEG_JOINTS order is [LHipP,LHipR,LHipY,LKnee,LAnkP,LAnkR, ...],
+    # so the knees are indices 3 and 9. Do not derive this from numel(): that
+    # gives Right_Hip_Pitch, which does not oscillate once per step.
+    joints = env.scene[asset_cfg.name].data.joint_pos[:, asset_cfg.joint_ids]
+    knee = joints[:, knee_index]
+    num_envs = knee.shape[0]
+
+    # Cadence needs a history of the signal, not one scalar per env. A 1-D
+    # (num_envs,) buffer made sign[:, 1:] 1-D and mean(dim=1) raised
+    # "too many indices for tensor of dimension 1". So keep a ring buffer of the
+    # last `window` filtered samples per env: 64 samples is 1.28 s at 50 Hz,
+    # which spans ~2.5 cycles of a 2 Hz gait -- enough for a stable estimate.
+    window = max(int(window_s / dt), 8)
     key = f"cadence_{asset_cfg.name}"
-    filt = _GaitPhase.get(key, knee.shape[0], knee.device)
+    hist = _GaitPhase.get(key, (num_envs, window), knee.device)
+    filt = _GaitPhase.get(f"{key}_filt", num_envs, knee.device)
     filt.mul_(1.0 - alpha).add_(alpha * knee)
+    # Roll rather than an overlapping slice-assign, which is undefined when the
+    # source and destination overlap.
+    hist.copy_(torch.roll(hist, shifts=1, dims=1))
+    hist[:, 0] = filt
 
-    centered = filt - filt.mean()
-    # Count sign changes over a sliding window as a crossing-rate estimate.
+    centered = hist - hist.mean(dim=1, keepdim=True)
     sign = torch.sign(centered)
-    crossings = (sign[:, 1:] * sign[:, :-1] < 0).float().mean(dim=1)
-    hz = crossings / (2.0 * dt)  # two crossings per full cycle
+    # fraction of adjacent sample pairs that changed sign
+    frac = (sign[:, 1:] * sign[:, :-1] < 0).float().mean(dim=1)
+    # Two crossings per gait cycle, and the window spans window*dt seconds:
+    #   steps/s = (2 crossings/cycle) / 2 * frac * (window-1) / (window*dt)
+    steps_per_s = frac * (window - 1) / (window * dt)
 
-    # Huber-ish: flat near the target, quadratic in the error beyond it.
-    err = (hz - target_hz).abs()
-    return torch.where(err <= 0.5, 0.5 * err.pow(2), 0.5 * 0.5 + 0.5 * (err - 0.5)).mean()
+    # Huber-ish: flat near the target, quadratic in the error beyond it, so the
+    # policy can sit at 2 Hz without fighting noise.
+    err = (steps_per_s - target_hz).abs()
+    return torch.where(err <= 0.5, 0.5 * err.pow(2), 0.125 + 0.5 * (err - 0.5)).mean()
 
 
 def feet_clearance(
     env,
     contact_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
     target_height: float = 0.06,
     foot_height_threshold: float = 1.0,
 ) -> torch.Tensor:
@@ -202,7 +224,7 @@ def feet_clearance(
     policy is not penalised for the stance foot staying down, and an env with no
     swing foot at all is skipped rather than punished.
     """
-    feet = env.scene[contact_cfg.name].body_pos[:, contact_cfg.body_ids, 2]
+    feet = env.scene[asset_cfg.name].data.body_pos_w[:, asset_cfg.body_ids, 2]
     forces = env.scene.sensors[contact_cfg.name].data.compute_contact_sensor_data().net_forces_w[
         :, contact_cfg.body_ids
     ]
@@ -241,7 +263,7 @@ def feet_alternation_penalty(
 
 def stride_length_penalty(
     env,
-    contact_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
     target_stride: float = 0.35,
 ) -> torch.Tensor:
     """Penalise horizontal foot separation far below ``target_stride``.
@@ -250,8 +272,7 @@ def stride_length_penalty(
     above the target so a long lunge is not penalised -- that was a different
     observed failure and needs its own term.
     """
-    asset = env.scene[contact_cfg.name]
-    pos = asset.body_pos[:, contact_cfg.body_ids, :2]
+    pos = env.scene[asset_cfg.name].data.body_pos_w[:, asset_cfg.body_ids, :2]
     sep = (pos[:, 0, :] - pos[:, 1, :]).norm(dim=-1)
     short = (target_stride - sep).clamp(min=0.0)
     return short.pow(2).mean()
