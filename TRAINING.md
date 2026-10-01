@@ -173,9 +173,10 @@ explodes to NaN within 1 iteration** (run-1 resume attempt, 2026-09-22 09:37).
 | 7 | P4 student | `Isaac-Kick-Student-K1-v0` | `Isaac-Kick-Ball-K1-Distill-v0` `--distill` | 512 (64 YOLO+vid) | 3000 | physx | PhysX ≈ 2.5–3.5 h | #6 final | queued (Gate G5; estimator/student wiring remains) |
 | 8 | P5 teacher | `Isaac-HRL-Teacher-K1-v0` | *not yet authored* (T6.3.4) | 256 (32 YOLO+vid) | 2000 | physx | PhysX ≈ 1–1.5 h | #1–#7 | blocked: T6.3.4 |
 | 9 | P5 student | `Isaac-HRL-Student-K1-v0` | *not yet authored* (T6.3.4) | 256 | 1500 | physx | PhysX ≈ 50–70 min | #8 final | queued (Gate G6) |
-| 10 | P6 push reach | `Isaac-Push-Reach-K1-v0` | `Isaac-Push-Reach-K1-v0` | 256 | 1500 | physx (`isaac-lab:3.0.0-beta2-post1`) | ≈ 1–2 h | `models/k1_partialctrl_base.pt` (frozen) | **CRASHED spark04 2026-09-24** — CUDA `cuda-EvtHandlr` wedge at iter ~690 (container killed; logs `scripts/reach.push.crashed.log`). Not learning anyway: reward flat −3.85 → −3.60, ep_len 16–23, 99.7 % `root_height` terminations. Root cause (open): frozen Run-10 TorchScript base **falls every ~17 steps in P6 even with zero commands** (hold-mode diag stands perfectly; home partial env walks — see `scripts/diagfrozen.log`). Suspect: export-path semantics (`as_jit()`); pending offline parity test. |
-| 11 | P6 push | `Isaac-Push-K1-v0` | `Isaac-Push-K1-v0` | 256 | 3000 | physx | ≈ 3–5 h | #12 re-export (`model_2999.pt`) | queued behind **#12** — `spark_push_host.sh push` warm-starts via `--checkpoint` (auto-picked latest `p6_push_reach` model); box DR edge 0.7–1.5 m / 3–25 kg / friction 0.3–1.2, goal curriculum 0.3→1.5 m, wandb `p6_push` |
-| 12 | P6 base retrain (gait-v2) | `Isaac-Velocity-PartialCtrl-K1-v0` | `Isaac-Velocity-PartialCtrl-K1-v0` | 512 | 3000 | physx (`isaac-lab:3.0.0-beta2-post1`) | ≈ 3–6 h dedicated GB10 | → re-export `models/k1_partialctrl_base.pt` via `scripts/export_base_policy.sh` | **RUNNING spark04 2026-09-24** — tmux `k1_spark_push_base`, launcher `scripts/spark_push_base_{host,container}.sh` (smoke marker-gated → FULL), log `scripts/push_base.full.log`, wandb `k1_partialctrl_base`. Retrains the frozen base on the reviewed gait-v2 velocity cfg (`feet_air_time` +0.5, `feet_slide` −0.25, `stand_still`, `undesired_contacts`, direct Cartesian cmds ±1.5/±0.75/±1.5 — all verified firing via `scripts/reward_probe.sh` on spark04 2026-09-24). Fresh base + fresh export = Track B unblock path. |
+| 10 | P6 push reach | `Isaac-Push-Reach-K1-v0` | `Isaac-Push-Reach-K1-v0` | 256 | 1500 | physx (`isaac-lab:3.0.0-beta2-post1`) | ≈ 1–2 h | `models/k1_partialctrl_base.pt` (frozen) | **REACH DONE 2026-09-28 (dl, 71 min)** — 1500/1500 iters, `PUSH_FULL_MARKER=OK`, `PUSH_FULL_RC=0`; learning finally visible after the root-cause fix: mean reward flat −3.85 (crashed run) → **final ~24.4**; warm ckpt `logs/rsl_rl/p6_push_reach/2026-09-28_06-25-35_p6_push_reach/model_1499.pt`; tmux `k1_spark_push_reach`, wandb `p6_push_reach`. **Root cause of the long stall (RESOLVED 2026-09-28):** `FrozenBaseVelocityAction` resolved joints with `preserve_order=True` (left-then-right list order) while the training env resolves action AND obs terms at `preserve_order=False` (articulation order, interleaved L/R) → **11/12 leg dims drove wrong joints**; A/B ladder pass-B `done_rate` 0.0434 → friction parity 0.0434 ✗ → stiff-arms 0.0294 → home-reset mimic 0.0431 ✗ → **wiring fix 0.0000** (`scripts/dl_ab_push_{frict,stiff,wiring}.log`) → chain2 gate passed. History: **CRASHED spark04 2026-09-24** — CUDA `cuda-EvtHandlr` wedge at iter ~690 (logs `scripts/reach.push.crashed.log`); reward was flat −3.85 → −3.60, ep_len 16–23, 99.7 % `root_height` terminations — all caused by the same fall; **export EXONERATED** offline (`scripts/push_export_parity.py`: bit-exact). **v1 eval → ROOT CAUSE #2:** v1 hit `PUSH_FULL_MARKER=OK` (24.7 ep, base stood) yet GPU-2 eval `contact_both=0.0000`, `wrist_tgt_err=0.839 m` — `wrist_target_tracking` returns −d but its weight was −1.0 → **paid for keeping wrists away** (tb `Episode_Reward/wrist_target_tracking` +0.931 rate); weight flipped to **1.0** (sign-convention docstring). **v2 reach DONE 2026-09-28** (chain2 re-run: export + diag pass-B `0.0000` re-passed + retrain, 1500/1500, `PUSH_FULL_MARKER=OK`, 65 min): signs verified in tb — `wrist_target_tracking` **−0.681** (penalty ✓), `wrist_box_proximity` **0.066** (33× v1's 0.002 ⇒ wrists much closer), `joint_pos_limits` −0.066 (arms actively reaching vs v1 −0.004), `track_cmd_lin` +0.235; final mean **−8.45**/ep (expected negative: wrist-far penalty dominates until contact; per-step improving) with `root_height` ends 5 % (vs v1 0.4 % — reacher leans harder); warm ckpt `logs/rsl_rl/p6_push_reach/2026-09-28_10-30-25_p6_push_reach/model_1499.pt` (chain3 v2 consumed it). **v2 GPU-2 eval (8×400 / 8×1000):** wrist_tgt_err 0.839 → **0.631 / 0.621**, wrist_gap 0.499 → **0.254 / 0.269**, contact_any 0 → **5.7 % / 2.3 %** (campaign-first), contact_both still 0, box_disp 0.0007 / 0.0015 m, stand 1.000, done ≤0.001 → full table in the **P6 quality report §** at the bottom. v1 log preserved `reach.v1inverted.push.log`, v1 run dir + wandb kept. |
+| 11 | P6 push | `Isaac-Push-K1-v0` | `Isaac-Push-K1-v0` | 256 | 3000 | physx | ≈ 3–5 h | #12 re-export (`model_2999.pt`) | **v1 → REWARD-SIGN FIX (root cause #2) → v2 DONE dl 2026-09-28** (v1 tmux `k1_spark_push_push`, log `scripts/push.v1inverted.push.log`). Launched by chain3 (`scripts/dl_push_chain3_host.sh`: gates `PUSH_FULL_MARKER=OK` + newest reach ckpt → `dl_push_host.sh push`). First attempt CRASHED in smoke: `FileNotFoundError logs/rsl_rl/p6_push` — cross-experiment `--checkpoint` sets `load_run=../p6_push_reach/...` which `get_checkpoint_path` can never resolve (scandirs the not-yet-existing current-experiment dir; `../` relpath matches no direct child). Fixed in `scripts/spark_push_container.sh`: stage reach run as symlink child `logs/rsl_rl/p6_push/warm_from_reach`; smoke now runs WITHOUT `--checkpoint` (resume shifts the display to /(ITER0+iters) and would break the `Learning iteration 2/3` gate); completion gate uses `END=ITER0+ITERS` (1499+3000=**4499** displayed — same rsl_rl additional-iterations gotcha as chain2 v1). Also synced stale `train.py` + `ppo_guard.py` to dl (was missing ppo_guard/safe_resume). Gate survived the crash (`PUSH_GATE=SMOKE_FAILED_NO_FULL_RUN`, DOCKER_RC=10 — python.sh rc=0 on Traceback, markers only). **v1 → GPU-2 eval = 0 % performance** (`box_disp=0.0009 m`, `contact_both=0`, `goal_err` 0→0.300 = curriculum cap) ⇒ **root cause #2, reward sign inversion** (HANDOFF bullet): `corner/centroid/wrist_target_tracking` funcs return −error but their weights were negative → policies PAID for error (tb: `corner_goal_tracking +1.012` rate); fixed in `push_env_cfg.py` (corner **1.0**, centroid **0.5**, spin **0.1**, wrist push **0.3**, wrist reach **1.0**, sign-convention docstring). **v2 DONE (2026-09-28):** chain2 re-run → reach 1500/1500 → chain3 → push **3000/3000 iters (display 4498/4499)**, `PUSH_FULL_MARKER=OK`, `PUSH_FULL_RC=0`, 0 tracebacks, log `scripts/push.push.log`, ckpt `logs/rsl_rl/p6_push/2026-09-28_11-34-52_p6_push/model_4498.pt`, wandb `p6_push`. tb final: goal curriculum **0.3→1.5 m completed**, corner −0.93 / centroid −0.47 / wrist −0.21 (negative ✓ post-sign-fix), **`box_vel_toward_goal` +0.0025 (turned positive)**, prox +0.019, falls 0.13 %, mean −25.4/ep (dominated by unavoidable corner/centroid at d_max, not policy failure). **v2 GPU-2 eval (8×400/8×1000):** wrist_tgt 0.769/0.768, gap 0.412/0.405, contact_both 0, box_disp 0.0008/0.0011 m, stand 1.000 → **success 0 %, box static; full table in the P6 quality report § below**. Deliverable videos `videos/push_{reach,stage2}_policy.mp4` (4-panel, frames verified). v1 logs `push.v1inverted.push.log` / `reach.v1inverted.push.log`, v1 run dirs + wandb kept. Warm-starts via `--checkpoint` (auto-picked latest `p6_push_reach` model); box DR edge 0.7–1.5 m / 3–25 kg / friction 0.3–1.2, goal curriculum 0.3→1.5 m, wandb `p6_push` |
+| 12 | P6 base retrain (gait-v2) | `Isaac-Velocity-PartialCtrl-K1-v0` | `Isaac-Velocity-PartialCtrl-K1-v0` | 512 | 3000 (resume ends at **3800**) | physx (`isaac-lab:3.0.0-beta2-post1`) | ≈ 1.5 h on dl Ada (RTX 6000) | → re-export `models/k1_partialctrl_base.pt` via `scripts/export_base_policy.sh` | **DONE dl 2026-09-28** — resume finished (`…/2026-09-28_01-12-26_k1_partialctrl_base/model_3799.pt`, iter 3799/3800); chain2 re-run `GATE=RESUME_OK` → re-export fresh (`BASE_EXPORT_RC=0`) → wiring-fix diag `done_rate=0.0000` → **reach launched**. Was: RECOVERED → RUNNING dl 2026-09-27 21:14 CDT — original spark04 run DIED with the box at ~iter 840 (spark04 offline since 2026-09-24 00:32 UTC; last synced ckpt `model_800.pt` rescued on dl). Resume: tmux `k1_dl_push_base_resume`, `scripts/dl_push_base_resume_{host,container}.sh` (smoke marker-gated → FULL `--checkpoint model_800`, `--max_iterations 3000` → displays /3800 because rsl_rl adds to the ckpt iter), GPU 1 pinned, wandb `k1_partialctrl_base`. Auto-chain `scripts/dl_push_chain2_host.sh` (tmux `k1_dl_push_chain2`): `/3800`+`model≥3700` → export (RC+fresh-mtime) → `diag_frozen.sh` → pass-B `done_rate<0.02` → reach. Progress videos at iter 800: `videos/partial_gaitv2_iter800{,_walk}.mp4` (stand: 4/4 upright 6 s, ep_reward +4.90; cmd 0.8: upright stepping, translation not yet — `error_vel_xy≈0.95`). Gait-v2 terms all probe-verified (`scripts/reward_probe.sh`, 15/15). |
+| 13 | zz-bw K1 velocity teacher (side deliverable, user ask) | `Isaac-Velocity-Rough-K1-Teacher-v0` | same | 4096 | 5000 | physx (zz-bw SIF `k1-train.sif`, repo clone pinned `430190f`) | ≈ 1.7 h on 2× RTX PRO 6000 | — (teacher itself) | **DONE 2026-09-28** — `RUN_RC=0`, 5000/5000 iters, **51 ckpts** `model_0…model_4999.pt` at `/export/scratch/thakk100/k1/logs/rsl_rl/k1_velocity_teacher/2026-09-27_22-32-35/` (final `model_4999.pt` 6.88 MB; rsl_rl dir resolves via `logs → /workspace/mounts/logs` symlink); wandb run `2cpu8gg8` has `model_4999.pt` uploaded. Vulkan blocker fixed first: image's `/usr/share/glvnd/egl_vendor.d/` lacked host `10_nvidia.json` → GLVND never loaded `libEGL_nvidia`; runner `~/run_k1_train.sh` on zz-bw now binds it (+ `/usr/share/vulkan`, kit-cache/data, `VK_DRIVER_FILES`, `K1_WORKDIR` for the `%environment`-less Docker-Hub SIF) — synced into repo `docker/apptainer/zzbw_run_k1_train.sh`. |
 
   **Totals (PhysX for all runs — user decision 2026-09-22):** ≈ **15–21 h sequential**.
 Newton measured slower on this box (4.8–5.0 vs 1.6–2.1 s/iter @256) and can't resume
@@ -424,3 +425,159 @@ rclone copy ~/Projects/booster_ws/logs gdrive-dhyan:Booster/logs \
 ```
 
 Policy-recording mirrors remain the Drive folder + slide deck linked above.
+
+## TRACK B — P6 quality report (v2, 2026-09-28)
+
+Standing ask: **mean box position error / success rate / reach quality** after
+reach + push train. Evaluated on dl GPU 2 (`dl_eval_push_host.sh`, 8 envs × 400
+steps = v1-comparable, plus 8 × 1000 full-episode), v2 checkpoints: reach
+`logs/rsl_rl/p6_push_reach/2026-09-28_10-30-25_p6_push_reach/model_1499.pt`,
+push `logs/rsl_rl/p6_push/2026-09-28_11-34-52_p6_push/model_4498.pt`.
+
+| metric (eval) | reach v1 | **reach v2** | push v1 | **push v2** |
+|---|---|---|---|---|
+| wrist_tgt_err (m) | 0.839 | **0.631** / 0.621 | 0.826 | **0.769** / 0.768 |
+| wrist_gap (m) | 0.499 | **0.254** / 0.269 | 0.519 | **0.412** / 0.405 |
+| contact_both (dual, % steps) | 0.0 | **0.0** / 0.0 | 0.0 | **0.0** / 0.0 |
+| contact_any (≥1 wrist, % steps) | 0.0 | **5.7** / 2.3 | 0.0 | **0.0** / 0.0 |
+| mean box position err `goal_err_anchor` (m) | 0.198 | **0.198** / 0.254 | ~0.198 | **0.198** / 0.259 |
+| box displacement (m, mean) | 0.0003 | **0.0007** / 0.0015 | 0.0009 (peak 0.0071) | **0.0008** / 0.0011 |
+| stand_frac | 1.000 | **1.000** / 1.000 | 1.000 | **1.000** / 1.000 |
+| done_rate | 0.0000 | **0.0000** / 0.0010 | 0.0000 | **0.0000** / 0.0010 |
+
+(x / y = 8×400 / 8×1000 results; `goal_err_anchor` = ‖spawn+offset−box‖ = the
+true box-position error; plain `goal_err` is the env-driven goal offset and
+cannot shrink while the box sits still — design note in HANDOFF root cause #2.)
+
+**Verdict (honest):**
+1. **Reach quality: materially improved, not solved.** Sign-fix (root cause #2)
+   halved both wrist metrics (tgt 0.84→0.63 m, gap 0.50→0.25 m) and produced the
+   campaign's first nonzero contacts (`contact_any` 0 → 5.7 % of steps at 400;
+   dual-wrist contact still 0 %). tb confirms the fix took: reach
+   `wrist_target_tracking` **−0.681** (penalty), `wrist_box_proximity` 0.066
+   (33× v1's 0.002), `joint_pos_limits` −0.066 (arms actively reaching, v1
+   −0.004), fall ends `root_height` 5.1 % (v1 0.4 % — leans harder but base
+   stands: eval stand 1.000, done ≤0.001).
+2. **Success rate: 0 %** under every strict definition — dual contact 0 %, box
+   moved ≥1 cm 0 % (mean box displacement ≤1.5 mm). Policy has not learned to
+   push.
+3. **Mean box position error: unchanged at the initial offset** ≈0.198 m
+   (eval curriculum cap 0.3 m at iter 0; 0.254 m in the 1000-step runs where
+   goals redraw on resets). The box never moves, so the anchored error never
+   shrinks.
+4. **Push stage-2 training itself is healthy:** 3000/3000 iters (display
+   4498/4499), `PUSH_FULL_MARKER=OK`, `PUSH_FULL_RC=0`, 0 tracebacks; goal
+   curriculum completed 0.3→1.5 m; all sign-fixed terms negative as designed
+   (corner −0.93, centroid −0.47, wrist −0.21) while **`box_vel_toward_goal`
+   turned positive (+0.0025)** — the first learning signal toward actual box
+   motion — and `wrist_box_proximity` +0.019. mean −25.4/ep is dominated by the
+   *unavoidable* corner/centroid penalties at d_max 1.5 (goal glued to box
+   pose), not by policy failure.
+5. **Videos (4-panel labelled: overview/top_down/follow/side + status header):**
+   `videos/push_reach_policy.mp4` (30 s, "P6 reach v2 (panels)") and
+   `videos/push_stage2_policy.mp4` (30 s, "P6 push v2 (panels)") — frames
+   extracted and visually checked (robots upright at boxes, arms active in
+   reach, standing/static in push).
+
+**Honest gaps / next iteration options (not started):** contact threshold may be
+tighter than the wrist-finger geometry allows; `wrist_box_proximity` dead zone
+(exp(−gap/0.08), ~8 cm) may starve the final approach signal; longer push
+training (3000 iters from a reach ckpt that itself never made contact cannot
+invent contact); anchor the goal to the box spawn pose so box-position error
+enters the reward directly (design note).
+
+## TRACK B — P6 Phase-0 degenerate audit (2026-09-28)
+
+Method (the root-cause-#2 procedure, applied to every term): for each reward /
+termination / event term classify **(a) policy-controllable?** (does its value
+depend on the action, or only on env/curriculum state), **(b) sign-correct?**
+(signed func × weight), **(c) gameable?** (maximizable without task success).
+
+### Findings — v2 push env (`push_env_cfg.py` / `push_mdp.py`)
+
+| # | Term (weight) | Controllable | Sign | Gameable / issue | v3 fix |
+|---|---|---|---|---|---|
+| A1 | `corner_goal_tracking` (1.0) | **NO** — `goal_corners_base` = *current* box pose + `goal_offset` (push_mdp:221) → error ≡ ‖offset‖, box motion cancels | ok in v2 | pure-env term: heaviest weight, zero teaching signal | **fixed randomized goal pose** → corners vs goal corners becomes controllable |
+| A2 | `centroid_goal_tracking` (0.5), `box_goal_progress` (2.0) | **NO** — same anchoring; progress = Δ‖offset‖ (env integrator) | ok | as above | fixed goal; progress becomes telescoping Δ(corner err) ✓ |
+| A3 | goal orientation | n/a — goal yaw ≡ box yaw → **no orientation task exists** | — | `box_spin_penalty` penalizes ALL box rotation | goal pose has own yaw; track via corners (user decision) |
+| A4 | `box_vel_toward_goal` (0.5) | weak | ok | **frame bug**: base-frame velocity · world `push_dir`=[1,0,0]; misdirected when robot yaws; `push_dir` never updates | dir = world (goal − box), recomputed each step; world-frame box velocity |
+| A5 | `box_goal_progress` init | — | — | `prev_goal_dist` starts as spawn x-dist (world) vs corner-centroid dist (base) — first-call unit mismatch | recompute prev on reset in same frame |
+| A7 | `wrist_box_proximity` (0.5) | ✓ | ok | exp(−gap/0.08): gradient ≈0 beyond ~8 cm — no coarse approach pull | two-scale: exp(−gap/0.30) + exp(−gap/0.05) |
+| A8 | `track_cmd_lin/ang` (0.5/0.25) | ⚠ measures **frozen base** tracking the policy's own cmd | ok | **stand-at-zero optimum**: v2's largest positives (+0.457/+0.211/step); perfect reward for cmd=0 + standing → stand-in-place pull (the P2 failure mode, commit 53e40b9) | cut to 0.25/0.10; success/goal terms must dominate |
+| A9 | `termination_penalty` (−200) | ✓ | ok | verify `vmdp.is_terminated` excludes `time_out` on this IsaacLab build | check during Phase 3 smoke |
+| A10 | **success** | — | — | **does not exist**: no success reward, no success termination → success rate unmeasurable in-env | `goal_reached`: mean corner err < 0.08 m held 1.0 s → sparse bonus + termination |
+| A11 | **box out-of-bounds** | — | — | box can be parked anywhere (no bounds term) | OOB → terminate + count failure |
+| A13 | **box tip** | — | — | box on its side breaks yaw/corner goal definition | tip (‖roll/pitch‖ > 45°) → terminate + count failure |
+| A14 | idle endgame | — | — | timeout-only → push-then-idle; no incentive to finish | success termination + bonus (A10) |
+| A15 | eval `contact_both` | — | — | kinematic gap < 3 cm: a **hover** counts as "contact"; proxy only | keep as diagnostic; real success = corner goal (A10) |
+| A12/E1/E2 | terminations `root_height` 0.35, `base_height` target 0.57 (`K1_TRUNK_HEIGHT`) | — | ok | **squat conflict**: fixed floor/target vs commanded squat `H*` (Phase 1) → legitimate squat terminates / unrewarded | command-relative: floor `H*−0.05`, height reward `exp(−|z−H*|/σ)` |
+
+### Findings — velocity env (Phase 1 base, `velocity_env_cfg.py`)
+- E1 `base_height` (w 2.0, target 0.57, std 0.1): retarget to `H*`.
+- E2 terminations: `root_height` min 0.35 → `H*−0.05`; `bad_orientation` 0.8 ok.
+- E3 velocity tracking already dominant + no air-time term (prior stand-in-place
+  lesson absorbed, docstring records it); `rel_standing_envs` 0.02 ok.
+- E4 no height **command** exists — `UniformHeightCommandCfg` to be added (new term).
+
+### Verified-correct in v2 (keep)
+Sign convention docstring; wrist reach terms (`wrist_target_tracking` −0.207,
+`joint_pos_limits` −0.025 = arms actively working); box DR (geometry 0.7–1.5×,
+3–25 kg, friction 0.3–1.2); `reset_box → reset_wrist_targets` ordering;
+eval harness gap math (box frame, half-extent clamp); stand_frac 1.0 /
+done ≤0.001; marker-gated chain + warm-start symlink.
+
+### v3 design decisions (user 2026-09-28)
+1. **Training runs on zz-bw** (bare metal — NO SLURM: tmux + Singularity,
+   2× RTX PRO 6000 Blackwell — teacher proved it) for Phases 1–3; dl stays
+   eval/record fallback. (`slurm_train.sbatch` is an unused template.)
+2. **Box spawn AND goal position both randomized** (independent): spawn in
+   annulus w/ full yaw; goal sampled with d ≤ curriculum cap (0.3→1.5 m) and
+   yaw Δ curriculum (±30°→±180°, phased after distance), **fixed for the
+   episode** (delete `advance_goal`).
+3. **Corner-point tracking is the box tracker**: all box localization vs goal
+   (reward, success, eval, report) via the 8 corners — translation + rotation
+   both fall out of one scalar (mean corner error); goal carries its own quat.
+
+## TRACK B — Phase 1 squat-capable base teacher (2026-09-28)
+
+**Branch:** `feat/velocity-squat` (off `origin/feat/video-to-motion` tip, so the
+sibling session's 8 unpushed commits are NOT republished) — commit **`7e61244`**
+(+609, pushed). Worktree `~/Projects/wt-squat`; revert of the earlier
+mis-based commit on `dev/soccer-p3p4` = **`f37dfd5`** (pushed).
+
+**What it adds:** task `Isaac-Velocity-Squat-K1-v0` (+ `-Play`), observed
+command `[vx, vy, wz, H*]` (obs 235→236), `SquatHeightCommand`, height reward
+Laplacian σ=0.05 w=2.0, command-relative squat termination (floor `H*−0.05`,
+terrain-relative for squat envs), VR-parity ranges vx ±0.5 / vy ±0.3 / wz ±0.8,
+`squat_depth_curriculum` stages `(500,1100,1900,2700,3500)` rel_squat
+0.10→0.25, h-ranges (0.50,0.55)→(0.40,0.48), runner `k1_squat_teacher`.
+File map: `squat_env_cfg.py`, `squat_mdp.py`, `squat_command.py`,
+`agents/squat_ppo_cfg.py`, `velocity/__init__.py` — shared gait files untouched
+(new-files + velocity-dir only ⇒ spark02 gait campaign safe).
+
+**zz-bw smoke (2026-09-28, `squat_smoke3.log`) — PASSED all gates:**
+`import OK`; `[k1_contact] activated contact reporting on 23 rigid bodies`;
+0 `Traceback`/`ValueError`; `Learning iteration 0/2, 1/2`; ckpts
+`model_0/1.pt`; wandb `Curriculum/squat_depth/*` live.
+
+**Root cause of the contact-sensor bug (fixed):** the zz-bw clone's
+`booster_train_ref` submodule *working tree* was stale — 15 files reverted to
+pre-`bf3342e` content, including `booster.py` **without** `_spawn_k1_urdf`, so
+the URDF spawned with stock `spawn_from_urdf` → `PhysxContactReportAPI` on the
+root only → contact sensor saw `('Trunk',)` → `feet_slide` regex ValueError.
+(The parent repo status looked clean because submodule content dirt is hidden.)
+Fix = `git -C isaac_tasks/booster_train_ref checkout -- .` (restores `bf3342e`).
+No code change needed; the planned `spawn_from_urdf` wrapper was NOT required.
+
+**Debug video (standing rule):** `squat_smoke_vid.log` run recorded
+`videos/train/rl-video-step-0.mp4` (48 f, 1280×720); PNG frame extracted and
+visually compared to the accepted 2026-09-27 teacher baseline — identical
+(terrain + command marker, mean 35.8 vs 36.2) ⇒ rendering path on zz-bw OK
+(closes the "zz-bw render/record untested" risk).
+
+**Full Phase-1 training:** tmux `k1_squat_full` on zz-bw GPU1, launched
+2026-09-28 16:51 CDT — `Isaac-Velocity-Squat-K1-v0`, 4096 envs, 5000 iters,
+`run_unbuffered.py`, log `/export/scratch/thakk100/k1/squat_full.log`
+(`[k1_contact]` present, iter 8/5000 at +2 min, ETA ~18h45).
+**Gates:** velocity parity ±10% vs v2 teacher, height MAE < 2 cm,
+done_rate 0.0000 → then Play-task squat→rise panel video + frame check.
