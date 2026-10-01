@@ -80,6 +80,7 @@ class VelocityRangeCurriculum:
         target_max_ang_vel: float = 2.0,
         step_lin_vel: float = 0.25,
         step_ang_vel: float = 0.25,
+        max_lin_vel_y: float | None = None,
         success_threshold: float = 0.80,
         patience: int = 5,
         interval_steps: int = 50,
@@ -94,6 +95,16 @@ class VelocityRangeCurriculum:
         self.target_max_ang = float(target_max_ang_vel)
         self.step_lin = float(step_lin_vel)
         self.step_ang = float(step_ang_vel)
+        # Lateral is capped separately from forward. One magnitude used to drive
+        # both axes, so raising the forward ceiling to 4 m/s would also have asked
+        # for +/-4 m/s sideways, which is not a gait but a fall. None keeps the
+        # previous behaviour (lateral follows forward).
+        self._max_y = None if max_lin_vel_y is None else float(max_lin_vel_y)
+        if self._max_y is not None and self._max_y < 0.0:
+            raise ValueError(
+                f"max_lin_vel_y={self._max_y} is negative; a lateral command range "
+                "of negative magnitude is not a command range"
+            )
         # Fraction of the episode the robot must survive to count as "good".
         self.threshold = float(success_threshold)
         self.patience = int(patience)
@@ -216,13 +227,21 @@ class VelocityRangeCurriculum:
         """
         ranges = resolve_ranges(term)
         ranges.lin_vel_x = (-self._lin, self._lin)
-        ranges.lin_vel_y = (-self._lin, self._lin)
+        # Lateral lags forward once the cap bites, so widening the forward range
+        # never widens a sideways command past max_lin_vel_y.
+        lin_y = self._lin if self._max_y is None else min(self._lin, self._max_y)
+        ranges.lin_vel_y = (-lin_y, lin_y)
         ranges.ang_vel_z = (-self._ang, self._ang)
         got = ranges.lin_vel_x[1]
         if abs(got - self._lin) > 1e-6:
             raise RuntimeError(
                 f"wrote lin_vel_x=+/-{self._lin} but the command term still reports "
                 f"{got}; the range is not being applied and the curriculum is inert"
+            )
+        if abs(ranges.lin_vel_y[1] - lin_y) > 1e-6:
+            raise RuntimeError(
+                f"wrote lin_vel_y=+/-{lin_y} but the command term still reports "
+                f"{ranges.lin_vel_y[1]}; the lateral cap is not being applied"
             )
         self._applied = True
 
@@ -397,6 +416,7 @@ if ManagerTermBase is not None:  # pragma: no cover - requires Isaac Lab
             target_max_ang_vel: float = 2.0,
             step_lin_vel: float = 0.25,
             step_ang_vel: float = 0.25,
+            max_lin_vel_y: float | None = None,
             success_threshold: float = 0.80,
             patience: int = 5,
             interval_steps: int = 50,

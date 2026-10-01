@@ -472,7 +472,13 @@ class RewardsCfg:
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-2.0)
     action_jerk_l2 = RewTerm(
         func=gait.action_jerk_l2,
-        weight=-0.02,
+        # Audit 2026-10-01: at -0.02 this term contributed **-0.0028 per step** in
+        # the 3000-iteration run -- inert -- while jerk was the metric the gait
+        # gate actually failed (0.107 against a <0.06 bound). Two orders of
+        # magnitude of headroom against a +1.18 tracking term, so it never
+        # competed. -0.5 puts it at ~0.07/step for the observed jerk, enough to
+        # price the chatter the gate rejects without fighting the task.
+        weight=-0.5,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
     )
     dof_acc_l2 = RewTerm(
@@ -578,11 +584,17 @@ class RewardsCfg:
     )
     stride_length = RewTerm(
         func=gait.stride_length_penalty,
-        weight=-4.0,
+        # Audit 2026-10-01: at target 0.35 m this contributed only -0.051/step,
+        # because 0.35 m fore-aft separation is roughly twice any stride the
+        # policy actually takes, so the clamp zeroed out most of the gradient
+        # and what remained rewarded a permanent split stance instead of steps.
+        # 0.22 m sits inside the band the gate calls a stride (>=0.15) and inside
+        # what a 2 m/s gait at 2 steps/s actually needs.
+        weight=-6.0,
         params={
             # Foot separation comes from the articulation, not the sensor.
             "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
-            "target_stride": 0.35,
+            "target_stride": 0.22,
         },
     )
     undesired_contacts = RewTerm(
@@ -632,21 +644,31 @@ class CurriculumCfg:
     terrain_levels = CurrTerm(func=mdp.terrain_levels_vel,
                                params={"asset_cfg": SceneEntityCfg("robot")})
     # Widens the commanded velocity range as tracking improves, because a fixed
-    # +/-0.5 m/s range makes 0 -> 3 m/s unreachable by construction: the policy is
+    # +/-0.5 m/s range makes 0 -> 4 m/s unreachable by construction: the policy is
     # never asked to go faster, so it never learns to.
     #
-    # The ceiling is 1.5 m/s, not 3.0. Measured on K1 A2 over a 12-minute,
-    # 254 m walk, the factory walker at full remote stick peaked near 1.3 m/s
-    # (fitted gain ~-0.49 m/s per unit of left-Y stick). 3 m/s is a sim-only
-    # stretch goal and a sim number there is not a deployable claim.
+    # **Target raised to 4.0 m/s on user request (2026-10-01).** Keep the caveat
+    # attached to the number: the K1 A2 factory walker peaked near 1.3 m/s over a
+    # 12-minute, 254 m walk, and the curriculum *class* still defaults to 1.5 m/s
+    # for that reason. 4 m/s is a sim stretch goal -- a sim number there is not a
+    # deployable claim, and the gate to pass is GAIT_GATE at each speed, not
+    # "it moved".
+    #
+    # step 0.5 (was 0.25) so the ramp 0.5 -> 4.0 takes 7 expansions rather than
+    # 14; each expansion still needs the upright ratio held for `patience`
+    # consecutive checks, so this is not a free speed-up.
+    #
+    # max_lin_vel_y caps lateral separately: the term applies one magnitude to
+    # both axes, and +/-4 m/s sideways is not a gait, it is a fall.
     velocity_range = CurrTerm(
         func=velocity_curriculum.VelocityRangeCurriculumTerm,
         params={
             "init_lin_vel": 0.5,
             "init_ang_vel": 1.0,
-            "target_max_lin_vel": 1.5,
+            "target_max_lin_vel": 4.0,
             "target_max_ang_vel": 2.0,
-            "step_lin_vel": 0.25,
+            "max_lin_vel_y": 1.0,
+            "step_lin_vel": 0.5,
             "step_ang_vel": 0.25,
             "success_threshold": 0.80,
             "patience": 5,

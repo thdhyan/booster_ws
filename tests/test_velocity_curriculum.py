@@ -578,6 +578,72 @@ def _velocity_range_cfg_params():
     raise AssertionError("no velocity_range CurrTerm(params={...}) found in velocity_env_cfg.py")
 
 
+def test_lateral_is_capped_separately_from_forward():
+    """A 4 m/s forward ceiling must not become a 4 m/s sideways command.
+
+    The term applied one magnitude to both axes. With the project config now
+    asking for up to 4 m/s forward, that would request +/-4 m/s lateral, which is
+    not a gait but a fall. max_lin_vel_y clamps lateral while forward widens.
+    """
+    env = FakeEnv(upright=1.0)
+    cur = make(env, target_max_lin_vel=4.0, step_lin_vel=0.5, max_lin_vel_y=1.0)
+    prime(cur, env)
+    run(cur, env, intervals=8)
+    assert cur.current_lin() > 1.0, f"forward should widen past the cap, at {cur.current_lin()}"
+    ranges = env.term.cfg.ranges
+    assert ranges.lin_vel_y[1] == pytest.approx(1.0), (
+        f"lateral should stay at 1.0, got {ranges.lin_vel_y}"
+    )
+    assert ranges.lin_vel_x[1] == pytest.approx(cur.current_lin())
+
+
+def test_lateral_follows_forward_when_no_cap_is_given():
+    """None keeps the old single-magnitude behaviour."""
+    env = FakeEnv(upright=1.0)
+    cur = make(env, target_max_lin_vel=2.0, step_lin_vel=0.5)
+    prime(cur, env)
+    run(cur, env, intervals=8)
+    assert env.term.cfg.ranges.lin_vel_y == env.term.cfg.ranges.lin_vel_x
+
+
+def test_negative_lateral_cap_is_rejected():
+    with pytest.raises(ValueError):
+        make(FakeEnv(), max_lin_vel_y=-0.5)
+
+
+def test_config_opts_into_the_four_ms_stretch_goal():
+    """Pins the 2026-10-01 decision (target 4.0 m/s) together with its caveats.
+
+    The *class* default stays 1.5 m/s because that is the range the real K1 A2
+    has evidence for; the project config deliberately opts into a sim stretch
+    goal, so the number, the lateral cap and the caveat are all pinned here.
+    """
+    params = _velocity_range_cfg_params()
+    src = (ROOT / "isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/velocity_env_cfg.py").read_text()
+    tree = ast.parse(src)
+    values = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if name != "CurrTerm" or "velocity_curriculum" not in ast.dump(node):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "params" and isinstance(kw.value, ast.Dict):
+                for k, v in zip(kw.value.keys, kw.value.values):
+                    if isinstance(v, ast.Constant):
+                        values[k.value] = v.value
+    assert "target_max_lin_vel" in values, f"params not parsed: {sorted(values)}"
+    assert values["target_max_lin_vel"] == pytest.approx(4.0)
+    assert values["max_lin_vel_y"] == pytest.approx(1.0), (
+        "a 4 m/s forward ceiling without a lateral cap asks for +/-4 m/s sideways"
+    )
+    assert "max_lin_vel_y" in params, "the cfg must pass the cap to the term"
+    assert "deployable claim" in src, (
+        "the 4 m/s stretch goal must keep the real-robot caveat beside it"
+    )
+
+
 def test_call_signature_matches_config_params_exactly():
     """Isaac compares the __call__ signature to cfg.params by name, statically.
 
