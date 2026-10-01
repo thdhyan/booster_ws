@@ -1,6 +1,153 @@
 # Booster K1 Workspace — Handoff
 
-## 📌 SESSION HANDOFF — 2026-10-01 (gait fix: three levers landed + smoke PASSED — read this first)
+## 📌 SESSION UPDATE — 2026-10-01, later (gait REWARD repair landed; training host moved zz-bw → dl → **aim_spark02** — read this first)
+
+### Round 2: the three levers were not enough — root cause was in the reward
+
+Retrained teacher (`7ce0049`, 4096 envs × 3000 iters on zz-bw, 2.4 h) **still
+failed `gait_gate.py` 8/8**: cadence **6.68** steps/s (want 1.2–4.0), stride
+~0.07 m (want ≥0.15), jerk **0.099** (want <0.06), speed 0.23–0.53 m/s. Video
+`isaac_tasks/k1_velocity/videos/p2_gaitfix_teacher.mp4` (207 MB, 750 frames,
+8 envs) — robot upright and moving, feet shuffling.
+
+Trace diagnosis (`p2_gaitfix_teacher_trace.npz`):
+
+- **The phase clock works and is ignored.** Phase advances 0.02002/step =
+  **1.001 Hz**, full sin/cos range, last term in both groups — but
+  max |corr(action, clock)| = **0.098** over all 24 joint×channel pairs.
+  Nothing in the objective paid for reading it.
+- **`gait_cadence_penalty` was measuring the wrong signal.** It zero-crossed
+  `joint_pos`, whose slow postural drift (0.07–1.0 Hz) swamps the knee's 4–6 Hz
+  stepping oscillation, so it read ~1–3 steps/s on a 6.68 shuffle and paid only
+  **−0.394/step**. `feet_clearance` contributed −0.0002 (dead) and
+  `stride_length` measured *static* foot separation (0.21 m) against a 0.07 m
+  gate stride — it rewarded a wide stance, not steps.
+- Two failure modes in the fleet: 5/8 envs chattering at 4–6 Hz (physically
+  real: `max |qvel| 17.8 rad/s`), 3/8 barely stepping at all (cadence 0.13–1.2).
+
+**`10f7fc9` + `4e2ff82`** (both on `main`, pushed):
+
+1. `gait_cadence_penalty` reads `data.joint_vel` (drift-free) instead of
+   `joint_pos`.
+2. New `phase_synced_swing` reward (`gait_rewards.py`, wired as term #23,
+   weight −2.0): each foot owes contact over its clock half-cycle, so
+   alternating single support locked to the 1 Hz reference (2.0 steps/s) is the
+   cheap state. Contact-based, so it holds on slopes where world-z lies.
+   Reads the phase through `gait_clock.get_phase(env)` — the same state the
+   observation encodes, idempotent per control step.
+3. `stride_length_penalty` projects the foot separation onto the **body forward
+   axis** (lateral splay no longer counts as stride).
+4. **`SceneEntityCfg.preserve_order=True`** on the `phase_swing` contact cfg:
+   `preserve_order` defaults to **False**, which makes `body_ids` follow the
+   *sensor's* body order, not the requested `[left, right]` list. Index 0 was
+   only the left foot because the URDF declares `left_foot_link` (line 935)
+   before `right_foot_link` (line 1277).
+
+Tests: **108 passed** (+5 new guards: cadence must read `joint_vel`, clock
+sharing, `preserve_order`, `phase_swing` wiring/negative weight), locomotion
+`4 passed, 1 skipped`.
+
+### Gates for round 2 (all green)
+
+| gate | result |
+|---|---|
+| `probe_rewards.py` zz-bw | `REWARD_PROBE_MARKER=OK`, `STANDS` 0.553 m, `phase_swing` −1.25/step |
+| `probe_rewards.py` spark02 | `REWARD_PROBE_MARKER=OK`, `STANDS` 0.559 m, `phase_swing` **−1.00000** (= penalty 0.5: standing, both feet planted, exactly one foot always owes swing) |
+| 16-env smoke zz-bw | 0 tracebacks, `policy (50,)`/`teacher (237,)`, `phase_swing` #23 live, `model_0/1.pt` |
+| 16-env smoke dl | same |
+| 16-env smoke spark02 | same, `model_0/2.pt` |
+| smoke debug video | `gaitfix_smoke2.mp4` (200 frames × 4 envs) frame-checked: HUD `step 100/200`, 4 labelled panels render on the 50-dim obs |
+| `pytest tests/` | **108 passed** |
+
+### Host migration — the 26× slowdown was GPU contention, NOT the code
+
+Same code family, three hosts, measured `Collection time` per iteration:
+
+| run | host / GPU | co-tenant on that GPU | collection |
+|---|---|---|---|
+| first retrain (worked, 2.4 h) | zz-bw GPU1 | **exclusive** | **1.139 s** |
+| 2nd attempt | zz-bw GPU1 | `abrar008` `train_v8` moved onto GPU1 | 25.7 s |
+| 3rd attempt | dl GPU0 | ollama serving 37.5 GB on GPU0 | 17.2 → 29.4 s |
+
+`Learning time` never moved (0.075 → 0.13 s): the regression is **entirely
+rollout collection**, i.e. our kernels time-sliced behind someone else's big
+job. Ruled out: no cgroup quota (`cpu.max` n/a), no throttling
+(`nr_throttled 0`), 64 real cores on both boxes, `Environment device: cuda:0`
+identical, GPU memory fine. GPU `utilization.gpu` reads a misleading 4–19 %
+because the *neighbour's* kernels are what saturate.
+
+**A/B that exonerated the reward repair** (dl, same box, same GPU, same minute,
+4096 envs × 3 iters):
+
+| code | collection time |
+|---|---|
+| `7ce0049` three-lever (no `phase_swing`, cadence on `joint_pos`) | 13.193 s / 15.389 s |
+| `4e2ff82` round-2 rewards (current) | 12.868 s / 15.007 s |
+
+Identical → the reward changes cost nothing; the code stands as committed.
+
+### Host setups that now exist
+
+**dl** (`128.101.125.152`) — native, no container:
+
+- `~/k1_run_ws` = clone of `main` at `4e2ff82` + submodules (its
+  `~/Projects/booster_ws` is a **dirty `dev/soccer-p3p4` tree — left untouched**).
+  Gotcha: `git clone <local path>` makes `origin` the *local* repo, so
+  `origin/main` resolved to dl's stale local `main`; re-point with
+  `git remote set-url origin https://github.com/thdhyan/booster_ws.git`.
+- `~/run_k1_train_dl.sh` (sources `scripts/phase6_env.sh`, `CUDA_VISIBLE_DEVICES=$K1_GPU`,
+  `nice -n 10`, `K1_TRAIN_SCRIPT` override).
+- **dl's IsaacLab is v3: `--headless` is NOT a valid flag** — use `--viz none`
+  (what the container on zz-bw, being v2-era, accepted).
+- 4× RTX 6000 Ada but only ~11 GB free each (ollama resident on all four);
+  64 cores, load ~35. Usable, just not fast while ollama serves.
+
+**aim_spark02** (`10.131.37.135`, GB10, 20 cores, 121 GB unified) — **the
+training host**:
+
+- Idle GB10 (0 % util, load 0.52) and **`nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1`
+  already built** — the image `scripts/spark_p2_gaitfix_*.sh` was written for.
+  IsaacLab **3.0.0** in-image, `SceneEntityCfg.preserve_order` present ✓.
+- `~/k1_run_ws` = clone of `main` @ `4e2ff82`; submodules needed dl's
+  `~/.gitconfig` (`url.https://github.com/.insteadOf git@github.com:`) because
+  submodule URLs are SSH and the spark has no GitHub key. `logs/.wandb_key`
+  copied from the old `~/Projects/booster_ws`.
+- `~/k1_stages/{common,preflight,smoke,timeit,train_full,record_gate}.sh`, run
+  one per container via the proven invocation (fresh cache dir each time —
+  the container runs as `--user 0` so caches are root-owned and a stale
+  `ov/_cache.lock` wedges the next boot):
+  ```
+  docker run --rm --gpus all --user 0 --entrypoint bash \
+    -e ACCEPT_EULA=Y -e OMNI_KIT_ALLOW_ROOT=1 -e TERM=xterm \
+    -e NVIDIA_DRIVER_CAPABILITIES=all -e K1_PHYSICS=physx \
+    -v ~/k1_stages/common.sh:/stage_common.sh:ro -v ~/k1_stages/<stage>.sh:/stage.sh:ro \
+    -v ~/k1_cache_<stamp>:/root/.cache -v ~/k1_run_ws:/workspace/booster_ws \
+    nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1 /stage.sh <args>
+  ```
+- **The old campaign scripts omit `PYTHONPATH`** (our packages are not
+  pip-installed) — `common.sh` sets it explicitly; without it the run cannot
+  import `k1_velocity`.
+- Throughput on the idle GPU: **0.79 s/iter @ 16 envs, 1.19 s @ 512 envs**
+  (vs 1.14 s @ 4096 on the exclusive Blackwell).
+
+### Next steps (in order)
+
+1. **Full teacher retrain on spark02** (`~/k1_stages/train_full.sh <envs> 3000 42`),
+   tmux + fresh cache; check `Collection time` in the log before walking away.
+2. `~/k1_stages/record_gate.sh <run>/model_2999.pt p2_gaitfix_teacher` →
+   panel video + trace + `gait_gate.py` inside the container; scp both to the
+   laptop, extract a frame and **look at it**, then read MOVEMENT_GATE /
+   GAIT_GATE. The pre-repair baseline fails 8/8, so this is the comparison.
+3. **Distill** `Isaac-Velocity-Distill-K1-v0` with the fresh teacher
+   (student input **500**, teacher 237) → smoke gate, then full → export.
+4. Export `models/*.pt` (still legacy 48/480 on disk) so
+   `test_export_matches_obs_dim` flips from skip to pass.
+5. Do **not** re-run on zz-bw while `abrar008`'s jobs hold both GPUs; check
+   `nvidia-smi --query-compute-apps=pid --format=csv` + owners first.
+
+---
+
+## 📌 SESSION HANDOFF — 2026-10-01 (gait fix: three levers landed + smoke PASSED)
 
 **Goal:** kill the P2 foot-shuffle (`p2_gaitshuffle_2999.npz` fails 8/8 GAIT_GATE
 metrics: cadence 8.25, stride 0.03 m, jerk 0.10) with three cheap levers, then
