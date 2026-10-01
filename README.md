@@ -16,6 +16,7 @@ Robotics **K1** humanoid (22 DoF) — ROS 2 Jazzy + Isaac Sim 6.0.1 / Isaac Lab
 | RoboCup 3v3 field demo | MuJoCo: 6 K1s + goals + ball + scripted kick, image capture |
 | Multi-robot Isaac fleet | `fleet_sim.py` — bundled-jazzy rclpy, cross-stack DDS verified |
 | Video/text → K1 motion workflow | `k1m` — video or text in, 22-DoF joint angles + MuJoCo replay out. `csv`/`npz`/`text`/`video` paths; every path gated for physics before it is called usable. **Video output is not yet trustworthy — root frame needs normalising** (see [`docs/k1m.md`](docs/k1m.md)) |
+| Quest 3 VR teleop (Isaac Teleop) | **Headset-tested on dl**: stereo ZED view, chase + YOLO panels, head + arm follow, suspended base on sticks, two-arm box lift |
 
 ## Repo layout
 
@@ -27,6 +28,7 @@ src/
   k1_sim_gazebo     Gazebo fleet launch, MuJoCo fleet + RoboCup demo scripts
   k1_sim_isaac      Isaac fleet + ZED stereo capture scripts
   k1_locomotion     policy deployment node (Phase 4)
+k1_teleop/          Quest 3 VR teleop: XR node (Isaac Teleop), K1 arm IK, YOLO node, SOMA / HMD-Poser
 isaac_tasks/
   k1_velocity       RSL-RL task suite: velocity/basic/partial/kick families (table below)
   k1_kicking        kicking task cfg (scaffolding, unregistered)
@@ -129,6 +131,38 @@ Isaac fleet uses the **isaacsim-bundled jazzy rclpy** (env re-exec) — never
 source `/opt/ros` into that process; system nodes talk to it over DDS
 (`ROS_DOMAIN_ID=77`).
 
+### VR teleop (Meta Quest 3, Isaac Teleop)
+
+The K1 hangs on a fixed-base gantry (walking comes later); the headset shows
+the ZED pair in stereo plus chase / YOLO panels. Full notes:
+`docs/vr_teleop_k1_plan.md`.
+
+```bash
+# dl (real time): sim + headset node + YOLO in Docker, ROS domain 45
+scripts/dl_k1_teleop_up.sh build            # once per host
+SIM_GPU=0 XR_GPU=1 scripts/dl_k1_teleop_up.sh all
+# Quest browser: https://nvidia.github.io/IsaacCapture/client/ -> dl IP -> Connect
+TELEOP_ARGS="--arm-src soma" scripts/dl_k1_teleop_up.sh teleop   # arms from HMD-Poser + SOMA
+scripts/dl_k1_teleop_up.sh down             # shared machine: always
+
+# laptop smoke test (Isaac Lab venv), debug video in logs/k1_teleop_sim/videos/
+source scripts/phase6_env.sh
+$PHASE6_VENV/bin/python src/k1_sim_isaac/scripts/k1_teleop_sim.py --demo lift --duration 12
+python3 -m pytest tests/test_k1_teleop.py -q
+```
+
+Controls: left stick move base, right stick turn / up-down, headset = robot
+head, **A** arm follow, **B** pause, **X** re-centre, **Y** head follow,
+left-stick click in a T-pose = arm-scale calibration. Lift the small boxes on
+the counter by squeezing them between the forearms (the K1 has no hands).
+
+| Panels (debug video) | Two-arm lift (`--demo lift`) |
+|---|---|
+| ![panels](docs/images/k1_vr_teleop_panels.png) | ![lift](docs/images/k1_vr_teleop_lift.png) |
+
+dl (RTX 6000 Ada): RTF ~0.6 with the ZED pair + chase camera streaming
+(~16 Hz), YOLOv8n on CPU keeps up.
+
 ### Real Robot Hardware
 ```bash
 ros2 launch k1_bringup real.launch.py robot_ns:=k1_0 sdk_ip:=192.168.1.100
@@ -216,6 +250,7 @@ saturation, which a pass/fail boolean conceals.
 - `guide_real.md` — **real robot deployment guide** (network, policies, safety, troubleshooting)
 - [`docs/k1m.md`](docs/k1m.md) — **video/text → K1 motion workflow** (pipeline, install, GVHMR-on-GB10 notes, known gaps)
 - [`docs/k1_ros_deployment_plan.md`](docs/k1_ros_deployment_plan.md) — **RL policy → real robot ROS 2** plan: verified joint order, topic contract, ordered runbook with abort criteria, ranked blockers
+- `docs/vr_teleop_k1_plan.md` — **Quest 3 VR teleop** (architecture, gantry, DDS/Cyclone, RTF, next steps)
 - `docs/video_to_motion_plan.md` — **video → K1 motion plan** (GVHMR/GMR/SOMA/MotionBricks
   retargeting, replay vs. RL tracking, staged phases)
 - `docs/policy_io_reference.md` — per-policy input/output diagrams + 12-DoF rationale
