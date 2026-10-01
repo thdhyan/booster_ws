@@ -8,7 +8,7 @@ been trained):
            --task Isaac-Velocity-Rough-K1-Teacher-v0 \
            --num_envs 4096 --headless --max_iterations 5000
 
-  2. Train student (this script — distills teacher into 480-dim proprio
+  2. Train student (this script — distills teacher into 500-dim proprio
      history):
        python isaac_tasks/k1_velocity/scripts/train_student.py \
            --task Isaac-Velocity-Distill-K1-v0 \
@@ -21,9 +21,9 @@ been trained):
            --checkpoint logs/rsl_rl/p2_move_student/<run>/model_*.pt \
            --num_envs 20 --headless --export models/p2_move_student.pt
 
-The student consumes the "policy" obs group history-stacked to 480 dims
-(term-major, oldest->newest) — the same layout k1_locomotion's node produces
-with `input_mode:=stacked`.
+The student consumes the "policy" obs group history-stacked to 500 dims
+(50 obs x 10 steps, term-major, oldest->newest) — the same layout
+k1_locomotion's node produces with `input_mode:=stacked`.
 """
 
 """Launch Isaac Sim Simulator first."""

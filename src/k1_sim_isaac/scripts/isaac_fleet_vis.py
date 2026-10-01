@@ -14,6 +14,7 @@ Requires:
   - OmniGraph ROS2 bridge nodes auto-created by Isaac Sim
 """
 import argparse
+import math
 import os
 import sys
 
@@ -272,7 +273,11 @@ LEG_JOINTS = [
 
 DEFAULT_LEG_POS = np.zeros(12, dtype=np.float32)
 ACTION_SCALE = 0.25
-OBS_DIM = 48
+# 48 proprioception + 2-dim gait phase clock — same contract as
+# k1_velocity/tasks/velocity/gait_clock.py and locomotion_node.OBS_DIM.
+OBS_DIM = 50
+PHASE_FREQ_HZ = 1.0          # one gait cycle = two steps = 2.0 steps/s
+PHASE_DT = PHASE_FREQ_HZ / 50.0   # control loop runs at 50 Hz
 
 # JointState used for commands (Isaac bundled stack can't import k1_interfaces)
 CMD_TYPE_NAME = "sensor_msgs/JointState"
@@ -342,8 +347,8 @@ def load_policy(path):
 
 
 def build_obs(base_lin_vel, base_ang_vel, projected_gravity, cmd_vel,
-              joint_pos, joint_vel, last_action):
-    """48-dim observation matching training layout."""
+              joint_pos, joint_vel, last_action, phase):
+    """50-dim observation matching training layout (48 proprio + phase clock)."""
     obs = np.zeros(OBS_DIM, dtype=np.float32)
     obs[0:3] = base_lin_vel
     obs[3:6] = base_ang_vel
@@ -352,6 +357,8 @@ def build_obs(base_lin_vel, base_ang_vel, projected_gravity, cmd_vel,
     obs[12:24] = joint_pos - DEFAULT_LEG_POS
     obs[24:36] = joint_vel
     obs[36:48] = last_action
+    angle = 2.0 * math.pi * phase
+    obs[48:50] = (math.sin(angle), math.cos(angle))
     return obs
 
 
@@ -447,6 +454,8 @@ def main():
         policy_states[ns] = {
             "last_action": np.zeros(12, dtype=np.float32),
             "cmd_vel": np.array([args.cmd_vx, 0.0, 0.0], dtype=np.float32),
+            # gait phase clock origin (arbitrary: training re-seeds per episode)
+            "phase": 0.0,
         }
 
         node.get_logger().info(
@@ -493,7 +502,9 @@ def main():
                 base_ang_vel = np.zeros(3, dtype=np.float32)
 
                 obs = build_obs(base_lin_vel, base_ang_vel, projected_gravity,
-                                ps["cmd_vel"], leg_pos, leg_vel, ps["last_action"])
+                                ps["cmd_vel"], leg_pos, leg_vel,
+                                ps["last_action"], ps["phase"])
+                ps["phase"] = (ps["phase"] + PHASE_DT) % 1.0
 
                 with torch.no_grad():
                     action = policy(torch.from_numpy(obs).unsqueeze(0)).squeeze(0).numpy()

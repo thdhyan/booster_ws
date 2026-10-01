@@ -304,6 +304,8 @@ See **[docs/policy_io_reference.md](docs/policy_io_reference.md)** for complete 
 | `p1_basic_student.pt` | 42 | 12 | Legs | `latest` | Stand only |
 | `k1_partialctrl_base.pt` | 68 | 14 | Legs + Head | `latest` | Walk + head |
 
+> **Phase-clock note:** exports made after the gait-fix retrain are **50** (48 proprio + 2-dim clock) and **500** (50×10 history). The table above lists the legacy 48/480 files; `locomotion_node` (`OBS_DIM = 50`) refuses those on load — re-export from the new checkpoints. See [docs/policy_io_reference.md](docs/policy_io_reference.md).
+
 **⚠️ No policy outputs full 22 DoF** — Arms (8 DoF) are always handled separately by WBC or sim PD controllers. See `docs/policy_io_reference.md#policy-output-dof-summary` for details.
 
 ---

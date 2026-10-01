@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """6-robot K1 fleet with trained velocity policy — MuJoCo, video recording.
 
-Loads the trained RSL-RL velocity policy (48-dim obs → 12 leg joint actions)
+Loads the trained RSL-RL velocity policy (50-dim obs → 12 leg joint actions)
 and has all 6 robots walk forward on a green field with realistic lighting.
 
 Usage:
@@ -9,6 +9,7 @@ Usage:
   python3 mujoco_fleet_policy.py --duration 15 --video docs/videos/fleet_policy_walk.mp4
 """
 import argparse
+import math
 import os
 import sys
 import time
@@ -41,7 +42,11 @@ LEG_JOINTS = [
 
 DEFAULT_LEG_POS = np.zeros(12, dtype=np.float32)
 ACTION_SCALE = 0.25
-OBS_DIM = 48
+# 48 proprioception + 2-dim gait phase clock — same contract as
+# k1_velocity/tasks/velocity/gait_clock.py and locomotion_node.OBS_DIM.
+OBS_DIM = 50
+PHASE_FREQ_HZ = 1.0              # one gait cycle = two steps = 2.0 steps/s
+PHASE_DT = PHASE_FREQ_HZ / 50.0  # control loop runs at 50 Hz
 
 STAND_Q = {**{j: 0.0 for j in JOINT_ORDER},
            "Left_Hip_Pitch": -0.15, "Right_Hip_Pitch": -0.15,
@@ -72,12 +77,12 @@ def load_policy(path):
     # Verify
     out = policy(torch.zeros(1, OBS_DIM))
     assert out.numel() == 12, f"Expected 12 outputs, got {out.numel()}"
-    print(f"Policy loaded: {path} (48-dim obs → 12 actions)")
+    print(f"Policy loaded: {path} ({OBS_DIM}-dim obs → 12 actions)")
     return policy
 
 
-def build_obs(policy_state, joint_pos, joint_vel, cmd_vel, last_action):
-    """Build 48-dim observation matching training layout."""
+def build_obs(policy_state, joint_pos, joint_vel, cmd_vel, last_action, phase):
+    """Build 50-dim observation matching training layout (48 proprio + clock)."""
     obs = np.zeros(OBS_DIM, dtype=np.float32)
     obs[0:3] = policy_state["base_lin_vel"]
     obs[3:6] = policy_state["base_ang_vel"]
@@ -86,6 +91,8 @@ def build_obs(policy_state, joint_pos, joint_vel, cmd_vel, last_action):
     obs[12:24] = joint_pos - DEFAULT_LEG_POS
     obs[24:36] = joint_vel
     obs[36:48] = last_action
+    angle = 2.0 * math.pi * phase
+    obs[48:50] = (math.sin(angle), math.cos(angle))
     return obs
 
 
@@ -226,6 +233,8 @@ def main():
             "last_action": np.zeros(12, dtype=np.float32),
             "q_des": np.zeros(len(nsprefix[ns]["names"]), dtype=np.float64),
             "cmd_vel": np.array([args.cmd_vx, 0.0, 0.0], dtype=np.float32),
+            # gait phase clock origin (arbitrary: training re-seeds per episode)
+            "phase": 0.0,
         }
         # Initialize q_des from stand pose
         for i, name in enumerate(nsprefix[ns]["names"]):
@@ -306,7 +315,9 @@ def main():
                     st["base_lin_vel"] = data.qvel[base_v_adr:base_v_adr+3].astype(np.float32)
                     st["base_ang_vel"] = data.qvel[base_v_adr+3:base_v_adr+6].astype(np.float32)
 
-                obs = build_obs(st, leg_pos, leg_vel, st["cmd_vel"], st["last_action"])
+                obs = build_obs(st, leg_pos, leg_vel, st["cmd_vel"],
+                                st["last_action"], st["phase"])
+                st["phase"] = (st["phase"] + PHASE_DT) % 1.0
 
                 with torch.no_grad():
                     action = policy(torch.from_numpy(obs).unsqueeze(0)).squeeze(0).numpy()

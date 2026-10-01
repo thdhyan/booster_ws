@@ -14,6 +14,9 @@ Layouts (blocker: the frozen base changed in Phase 1):
   --layout squat    236-dim obs -> 12 targets  (Phase-1 squat teacher; obs
                      order = lin 3 | ang 3 | grav 3 | cmd 4 | leg_pos 12 |
                      leg_vel 12 | last action 12 | height_scan 187)
+                     PRE-phase-clock: a squat checkpoint retrained after the
+                     gait fix is 238 (2-dim clock appended last) and needs
+                     both --obs_dim and the make_obs index ranges updated.
   --obs_dim/--act_dim override the per-layout defaults.
 
 Gates for automation: prints PARITY_TEST_DONE always, then

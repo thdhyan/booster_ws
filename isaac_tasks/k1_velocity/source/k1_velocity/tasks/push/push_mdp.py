@@ -10,6 +10,9 @@ Architecture (v3 / blocker 2a - push freezes the NEW squat base teacher):
     the EXACT squat TeacherCfg term order, noise-free (236 dims):
         lin_vel 3 | ang_vel 3 | gravity 3 | cmd 4 | leg_pos 12 |
         leg_vel 12 | last action 12 | height_scan 187 (clip +-1)
+    PRE-phase-clock: this is the frozen legacy export's layout. A squat
+    teacher retrained after the gait fix appends the 2-dim gait clock
+    (238 dims) — re-check this assembly if the base is ever re-exported.
     and its 12 leg joint targets are written as default + clip(out, +-1)
     (scale 1.0 - identical to the velocity ActionsCfg the teacher trained
     in). H* (slice index 3) maps [-1,1] -> [0.40, 0.55] m into `st.h_cmd`,
@@ -741,7 +744,8 @@ class FrozenBaseVelocityAction(ActionTerm):
       action slice = 4 [vx, vy, wz, H*]; obs assembled in the EXACT squat
       TeacherCfg order, noise-free (236 dims): lin 3 | ang 3 | grav 3 |
       cmd 4 | leg_pos rel 12 | leg_vel 12 | last action 12 | height_scan 187
-      (clip +-1). Output = 12 leg targets, target = default + clip(out, +-1)
+      (clip +-1). PRE-phase-clock — matches the frozen legacy export; a
+      post-gait-fix squat export is 238 (2-dim clock appended last). Output = 12 leg targets, target = default + clip(out, +-1)
       (velocity ActionsCfg: scale 1.0, clip +-1). vx/vy/wz clamp to the
       VR-parity training ranges +-0.5/+-0.3/+-0.8; H* maps [-1,1] ->
       [0.40, 0.55] m into st.h_cmd. Arms/head untouched (IK terms own the

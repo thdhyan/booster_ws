@@ -28,7 +28,7 @@ def generate_launch_description():
         description='Policy inference / command rate in Hz')
     input_mode_arg = DeclareLaunchArgument(
         'input_mode', default_value='latest',
-        description="'latest' (48-dim blind policy) or 'stacked' (48x10 "
+        description="'latest' (50-dim blind policy) or 'stacked' (50x10 "
                     "history, distilled student policy)")
 
     robot_ns = LaunchConfiguration('robot_ns')

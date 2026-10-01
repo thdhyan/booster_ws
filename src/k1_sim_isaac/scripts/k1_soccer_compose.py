@@ -54,7 +54,7 @@ LEG_JOINTS = [
 LEG_IDX = [ALL_JOINTS.index(j) for j in LEG_JOINTS]
 
 # Policy dimensions
-VEL_OBS_DIM = 48   # velocity policy
+VEL_OBS_DIM = 50   # velocity policy: 48 proprio + 2-dim phase clock (gait_clock)
 HEAD_OBS_DIM = 12  # head tracking: detection(3) + head(2+2) + ang_vel(3) + action(2)
 KICK_OBS_DIM = 48  # kicking policy
 
@@ -103,6 +103,7 @@ class PolicyComposer:
         self.state = SoccerState.WALK
         self.last_leg_action = np.zeros(12, dtype=np.float32)
         self.last_head_action = np.zeros(2, dtype=np.float32)
+        self.vel_phase = 0.0   # gait phase clock (see build_obs_vel)
         self.kick_timer = 0  # frames since kick started
         # CCW search state
         self.lost_frames = 0
@@ -191,8 +192,15 @@ class PolicyComposer:
 
     def build_obs_vel(self, base_lin_vel, base_ang_vel, projected_gravity,
                       cmd_vel, joint_pos, joint_vel):
-        """Build velocity policy observation (48-dim)."""
-        return np.concatenate([
+        """Build velocity policy observation (50-dim = 48 proprio + clock).
+
+        Reads the gait phase clock at the current phase, then advances it one
+        control period, exactly like locomotion_node._build_obs — the phase
+        origin is arbitrary (training re-seeds it every episode), only the
+        1.0 Hz rate has to match.
+        """
+        angle = 2.0 * math.pi * self.vel_phase
+        obs = np.concatenate([
             base_lin_vel,      # 3
             base_ang_vel,      # 3
             projected_gravity, # 3
@@ -200,7 +208,10 @@ class PolicyComposer:
             joint_pos,         # 12
             joint_vel,         # 12
             self.last_leg_action,  # 12
+            np.array([math.sin(angle), math.cos(angle)], dtype=np.float32),  # 2
         ]).astype(np.float32)
+        self.vel_phase = (self.vel_phase + 1.0 / 50.0) % 1.0   # 50 Hz control
+        return obs
 
     def build_obs_head(self, detection, head_pos, head_vel,
                        base_ang_vel):
