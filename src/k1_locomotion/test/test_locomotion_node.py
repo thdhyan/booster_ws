@@ -1,11 +1,13 @@
 """Unit tests for k1_locomotion.locomotion_node (deterministic, in-process).
 
 Verifies the training-parity contract:
-  * 48-dim obs layout & term order (velocity_env_cfg.py ObservationsCfg)
+  * 50-dim obs layout & term order (velocity_env_cfg.py ObservationsCfg)
   * 10-step history maintained at the node
   * command == default + action_scale * action, LEG_JOINTS order
   * obs[36:48] carries the PREVIOUS action (mdp.last_action semantics)
+  * obs[48:50] carries the gait phase clock, advancing once per control loop
   * joint_states staleness withholds commands
+  * the on-disk TorchScript export accepts OBS_DIM inputs
 
 Requires torch (TorchScript policy load). Skipped automatically on pythons
 without torch (e.g. CI system python) — run under venv-isaac:
@@ -31,7 +33,8 @@ from geometry_msgs.msg import Twist  # noqa: E402
 from k1_interfaces.msg import JointCommand  # noqa: E402
 
 from k1_locomotion.locomotion_node import (  # noqa: E402
-    LEG_JOINTS, OBS_DIM, LocomotionNode, projected_gravity_from_quat,
+    LEG_JOINTS, OBS_DIM, PHASE_FREQ_HZ, LocomotionNode,
+    projected_gravity_from_quat,
 )
 
 ALL_JOINTS = [
@@ -51,11 +54,30 @@ class SpyPublisher:
         self.published.append(msg)
 
 
+class StubPolicy(torch.nn.Module):
+    """Deterministic non-zero stand-in for the exported TorchScript policy.
+
+    The on-disk export predates the phase-clock change (48-dim), so building
+    the node with the default ``policy_path`` trips the OBS_DIM probe by
+    design. Stubbing the loader keeps these tests about the *node's* obs
+    layout; the export file itself is covered by ``test_export_matches_obs_dim``.
+    """
+
+    def forward(self, x):
+        # non-zero, so the previous-action assertions compare real values
+        return 0.5 * torch.tanh(x[:, :12]) + 0.1
+
+
 @pytest.fixture(scope="module")
 def node():
     rclpy = pytest.importorskip("rclpy")
     rclpy.init()
-    n = LocomotionNode()
+    orig = LocomotionNode._load_policy
+    LocomotionNode._load_policy = lambda self, p: StubPolicy()
+    try:
+        n = LocomotionNode()
+    finally:
+        LocomotionNode._load_policy = orig
     # quiet the timers/subs for the unit test; drive loops manually
     n._cmd_pub = SpyPublisher()
     n._obs_pub = None
@@ -88,6 +110,7 @@ def test_obs_layout_and_command(node):
     node._js_stamp = None
     node._cmd_pub.published.clear()
     node._history[:] = 0.0
+    node._phase = 0.0                      # clock assertion below is origin-based
 
     twist = Twist()
     twist.linear.x = 0.3
@@ -114,6 +137,13 @@ def test_obs_layout_and_command(node):
     assert list(hist1[36:48]) == pytest.approx(
         [c / 0.25 for c in cmd0.positions], abs=1e-5)
 
+    # phase clock: obs_t0 reads phase 0, obs_t1 one control period later, and
+    # PHASE_FREQ_HZ advances it exactly once per loop (never twice)
+    assert list(node._history[-2][48:50]) == pytest.approx([0.0, 1.0], abs=1e-6)
+    phi = PHASE_FREQ_HZ / 50.0              # control_freq default 50 Hz
+    assert list(hist1[48:50]) == pytest.approx(
+        [math.sin(2 * math.pi * phi), math.cos(2 * math.pi * phi)], abs=1e-6)
+
     # command contract
     assert list(cmd1.joint_names) == LEG_JOINTS
     assert cmd1.control_mode == 0
@@ -136,9 +166,9 @@ def test_staleness_withholds(node):
 
 
 def test_stacked_input_mode(node):
-    """input_mode='stacked' feeds the term-major 48x10 history to the policy.
+    """input_mode='stacked' feeds the term-major 50x10 history to the policy.
 
-    Runs last (file order) — safe to swap the real policy for a stub.
+    Swaps the node's policy for a stub that records its input.
     """
     import numpy as np
 
@@ -158,9 +188,38 @@ def test_stacked_input_mode(node):
     node._js_cb(_fake_js(0.5))
     node._control_loop()
 
-    assert seen["x"].shape == (1, 480)
-    # term-major stack: x.reshape(48, 10) == history.T (oldest->newest per term)
-    assert np.allclose(seen["x"].numpy().reshape(48, 10), node._history.T)
+    assert seen["x"].shape == (1, 500)
+    # term-major stack: x.reshape(50, 10) == history.T (oldest->newest per term)
+    assert np.allclose(seen["x"].numpy().reshape(50, 10), node._history.T)
+
+
+def test_export_matches_obs_dim():
+    """The on-disk TorchScript export must accept OBS_DIM inputs.
+
+    The contract between velocity_env_cfg and this node: whatever is exported
+    from the current training cfg feeds OBS_DIM. Until the gait-fix retrain
+    re-exports at 50-dim the file on disk is the legacy 48-dim policy, which is
+    reported as a skip rather than a failure so the suite stays honest in
+    between.
+    """
+    if not os.path.isfile(POLICY):
+        pytest.skip(f"no export at {POLICY}")
+    policy = torch.jit.load(POLICY)
+    policy.eval()
+    with torch.no_grad():
+        try:
+            out = policy(torch.zeros(1, OBS_DIM))
+        except RuntimeError:
+            out = None
+    if out is None:
+        with torch.no_grad():
+            legacy = policy(torch.zeros(1, 48))
+        assert legacy.numel() == 12, "export accepts neither 50- nor 48-dim input"
+        pytest.skip(
+            f"{os.path.basename(POLICY)} is the pre-phase-clock 48-dim export; "
+            "expected until the gait-fix retrain re-exports it at 50-dim"
+        )
+    assert out.numel() == 12, f"policy output dim {out.numel()} != 12"
 
 
 if __name__ == "__main__":

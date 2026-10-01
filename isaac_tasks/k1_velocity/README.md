@@ -8,8 +8,8 @@ head) in Isaac Lab 3.0. Four task families live under
 |---|---|---|---|---|
 | [**P1 basic**](#p1-basic-standbalance) | stand/balance base layer | `Isaac-Basic-Teacher-K1-v0` → `Isaac-Basic-Student-K1-v0` | 42 blind | 12 legs |
 | [**P1f**](#p1f--p1--force-torque-shoves) | P1 + native force/torque shoves | `Isaac-Basic-Teacher-K1-F-v0` → `Isaac-Basic-Student-K1-F-v0` | 42 blind | 12 legs |
-| [**P2 velocity**](#p2-velocity-rough-terrain) | velocity tracking on rough terrain | `Isaac-Velocity-Rough-K1-Teacher-v0` → `Isaac-Velocity-Distill-K1-Play-v0` | 48 blind | 12 legs |
-| [**P2f**](#p2f--p2--force-torque-shoves) | P2 + native force/torque shoves | `Isaac-Velocity-Rough-K1-Teacher-F-v0` → `Isaac-Velocity-Distill-K1-F-v0` | 48 blind | 12 legs |
+| [**P2 velocity**](#p2-velocity-rough-terrain) | velocity tracking on rough terrain | `Isaac-Velocity-Rough-K1-Teacher-v0` → `Isaac-Velocity-Distill-K1-Play-v0` | 50 blind | 12 legs |
+| [**P2f**](#p2f--p2--force-torque-shoves) | P2 + native force/torque shoves | `Isaac-Velocity-Rough-K1-Teacher-F-v0` → `Isaac-Velocity-Distill-K1-F-v0` | 50 blind | 12 legs |
 | [**Partial control**](#partial-control-leghead-randomized-arms) | legs+head policy, arms randomized outside the action space | `Isaac-Velocity-PartialCtrl-K1-v0` → `…-Play-v0` | 68 blind | 14 (12 legs + 2 head) |
 | [**Kick ball**](#kick-ball) | locomotion + ball manipulation (gated) | `Isaac-Kick-Ball-K1-Teacher-v0` → `Isaac-Kick-Ball-K1-Distill-v0` | 45 blind | 12 legs |
 | [**P6 push**](#p6-push-box-pushing) | box pushing, frozen squat base + wrist IK (teacher-only) | `Isaac-Push-Reach-K1-v0` → `Isaac-Push-K1-v0` | 109 privileged | 10 (4 cmd + 6 wrist) |
@@ -130,9 +130,9 @@ terrain with a terrain-level curriculum.
 
 ### Observations
 
-`policy` group — **48-dim, blind, noise on** (distillation env stacks 10 steps
-→ **480** inputs; the cfg docstring's "72-dim" predates the blind-policy
-change — actual = 48):
+`policy` group — **50-dim, blind, noise on** (distillation env stacks 10 steps
+→ **500** inputs; the old "72-dim" cfg docstring predates the blind-policy
+change and the phase clock — actual = 50):
 
 | Term | Function | Dim | Uniform noise |
 |---|---|---|---|
@@ -143,10 +143,18 @@ change — actual = 48):
 | `joint_pos` (12 legs) | `mdp.joint_pos_rel` | 12 | ±0.01 rad |
 | `joint_vel` (12 legs) | `mdp.joint_vel_rel` | 12 | ±1.5 rad/s |
 | `actions` | `mdp.last_action` | 12 | — |
-| **Total** | | **48** | |
+| `phase_clock` | `gait_clock.phase_clock` | 2 | none (self-timing signal) |
+| **Total** | | **50** | |
 
-`teacher` group — **235-dim, privileged, noise off**: same 7 terms noise-free +
+`teacher` group — **237-dim, privileged, noise off**: same 8 terms noise-free +
 `height_scan` 187.
+
+**Phase clock** (gait lever 3, `tasks/velocity/gait_clock.py`): `[sin(2πφ),
+cos(2πφ)]`, φ advancing at 1.0 Hz so one cycle = one gait cycle = two steps =
+2.0 steps/s — the middle of `scripts/gait_gate.py`'s cadence band. It is what
+lets the policy time its steps instead of shuffling; it rides into *both* groups
+so the teacher PPO trains on and the student distils from carry the same clock.
+The node-side copy lives in `k1_locomotion/locomotion_node.py` (`OBS_DIM = 50`).
 
 ### Actions
 
@@ -217,8 +225,8 @@ PLAN §3.2 gap (P2 shipped only velocity impulses + mass randomization).
 | Gym ids | `Isaac-Velocity-Rough-K1-Teacher-F-v0` → `Isaac-Velocity-Distill-K1-F-v0` |
 | Experiments | `p2f_move_teacher` → `p2f_move_student` |
 | Event `shove_force_torque` | interval 4–8 s/env, force ±30 N, torque ±10 N·m, body `Trunk` |
-| Teacher obs | 235 + `shove_wrench` 6 = **241** |
-| Student obs | unchanged **48** (blind) |
+| Teacher obs | 237 + `shove_wrench` 6 = **243** |
+| Student obs | unchanged **50** (blind) |
 
 `ForceEventCfg` / `ForceTeacherCfg` live in `tasks/velocity/velocity_force_cfg.py`.
 

@@ -11,7 +11,7 @@ class K1SquatPPOTeacherRunnerCfg(K1VelocityPPOTeacherRunnerCfg):
 
     Teacher obs group (noise-free proprio + height scan), 512-256-128 nets and
     all PPO hparams are inherited unchanged so the Phase-1 velocity-parity
-    gate compares like with like. The obs dim grows 235 -> 236 by itself: the
+    gate compares like with like. The obs dim grows 237 -> 238 by itself: the
     H* column rides into the ``velocity_commands`` term of both obs groups.
     Log dir becomes ``logs/rsl_rl/k1_squat_teacher/{time-stamp}_{run_name}``
     and the wandb run is named accordingly.

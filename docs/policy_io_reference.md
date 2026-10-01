@@ -74,11 +74,17 @@ Only for manipulation-locomotion tasks (carry, push, open door) where arms **mus
 
 | Policy File | Task Family | Gym ID (Deployable) | Obs Dim | Act Dim | Input Mode |
 |-------------|-------------|---------------------|---------|---------|------------|
-| `k1_velocity_policy.pt` | P2 Velocity | `Isaac-Velocity-Distill-K1-Play-v0` | 48 | 12 | `latest` |
-| `k1_velocity_student.pt` | P2 Velocity Distilled | `Isaac-Velocity-Distill-K1-v0` | 480 (48×10) | 12 | `stacked` |
-| `p2_move_student.pt` | P2 Move Distilled | `Isaac-Velocity-Distill-K1-v0` | 480 (48×10) | 12 | `stacked` |
+| `k1_velocity_policy.pt` | P2 Velocity | `Isaac-Velocity-Distill-K1-Play-v0` | 50 | 12 | `latest` |
+| `k1_velocity_student.pt` | P2 Velocity Distilled | `Isaac-Velocity-Distill-K1-v0` | 500 (50×10) | 12 | `stacked` |
+| `p2_move_student.pt` | P2 Move Distilled | `Isaac-Velocity-Distill-K1-v0` | 500 (50×10) | 12 | `stacked` |
 | `p1_basic_student.pt` | P1 Basic Stand | `Isaac-Basic-Student-K1-v0` | 42 | 12 | `latest` |
 | `k1_partialctrl_base.pt` | Partial Control | `Isaac-Velocity-PartialCtrl-K1-Play-v0` | 68 | 14 | `latest` |
+
+> **P2 obs dim is 50** since the gait-fix change: 48 proprioception + the 2-dim
+> gait phase clock (`k1_velocity/tasks/velocity/gait_clock.py`, `OBS_DIM = 50`
+> in `locomotion_node.py`). Exports made before that change are 48/480 and are
+> refused on load — the numbers above are the contract the current code expects,
+> not the size of every file currently in `models/`.
 
 ---
 
@@ -89,10 +95,10 @@ Only for manipulation-locomotion tasks (carry, push, open door) where arms **mus
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        P2 VELOCITY POLICY (k1_velocity_policy.pt)           │
-│                              TorchScript • 48→12                            │
+│                              TorchScript • 50→12                            │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-INPUT (48-dim, single step, "latest" mode)
+INPUT (50-dim, single step, "latest" mode)
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Index │  Dim │  Name                  │ Source                    │ Unit  │
 ├────────┼──────┼────────────────────────┼───────────────────────────┼───────┤
@@ -103,7 +109,13 @@ INPUT (48-dim, single step, "latest" mode)
 │ 12:24  │ 12   │ joint_pos_rel          │ JointState - default_pos  │ rad   │
 │ 24:36  │ 12   │ joint_vel              │ JointState velocity       │ rad/s │
 │ 36:48  │ 12   │ last_action            │ Previous policy output    │  -    │
+│ 48:50  │  2   │ phase_clock            │ node phase accumulator    │  -    │
 └────────┴──────┴────────────────────────┴───────────────────────────┴───────┘
+
+phase_clock = [sin(2πφ), cos(2πφ)], φ advancing 1.0 Hz at the node's 50 Hz
+control rate — one cycle = one gait cycle = two steps = 2.0 steps/s. The node
+starts φ at 0 and advances it once per control loop; training re-seeds φ per
+episode, so the origin itself carries no meaning, only the rate.
 
 JOINT ORDER (12 leg joints — MUST match training exactly):
   0: Left_Hip_Pitch    3: Left_Knee_Pitch     6: Right_Hip_Pitch    9: Right_Knee_Pitch
@@ -141,15 +153,15 @@ LAUNCH PARAMS:
 
 ## 2. P2 Velocity Distilled (History) — `k1_velocity_student.pt` / `p2_move_student.pt`
 
-**Smoother gait — uses 10-step observation history (480-dim).**
+**Smoother gait — uses 10-step observation history (500-dim).**
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │              P2 VELOCITY DISTILLED POLICY (k1_velocity_student.pt)          │
-│                         TorchScript • 480→12  (history-stacked)             │
+│                         TorchScript • 500→12  (history-stacked)             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-INPUT (480-dim = 48 terms × 10 history steps, "stacked" mode)
+INPUT (500-dim = 50 obs × 10 history steps, "stacked" mode)
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layout: Term-major, oldest→newest per term                                 │
 │                                                                             │
@@ -160,13 +172,14 @@ INPUT (480-dim = 48 terms × 10 history steps, "stacked" mode)
 │  [ joint_pos_rel_t-9 ... joint_pos_rel_t ]    → 12×10 = 120                 │
 │  [ joint_vel_t-9 ... joint_vel_t ]            → 12×10 = 120                 │
 │  [ last_action_t-9 ... last_action_t ]        → 12×10 = 120                 │
+│  [ phase_clock_t-9 ... phase_clock_t ]        →  2×10 = 20                  │
 │                                                                             │
-│  TOTAL: 30+30+30+30+120+120+120 = 480                                       │
+│  TOTAL: 30+30+30+30+120+120+120+20 = 500                                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 NOTE: The locomotion_node maintains a 10-step rolling buffer internally.
       Each control cycle (50 Hz), it shifts history and appends latest obs.
-      Policy sees the FLATTENED 480-dim vector (term-major order).
+      Policy sees the FLATTENED 500-dim vector (term-major order).
 
 OUTPUT (12-dim) — SAME as P2 Velocity
   q_des = DEFAULT_LEG_POS + 0.25 * action
@@ -303,7 +316,7 @@ STATE MACHINE:
 └─────────────────────────────────────────────────────────────────────────────┘
 
 POLICIES REQUIRED:
-  1. Velocity:      models/k1_velocity_policy.pt     (legs, 48→12)
+  1. Velocity:      models/k1_velocity_policy.pt     (legs, 50→12)
   2. Head Track:    models/k1_head_tracking_policy.pt (head, 12→2)
   3. Kicking:       models/k1_kicking_policy.pt      (legs, 48→12)
 
@@ -347,7 +360,7 @@ BALL DETECTION INPUT (for head tracking):
                      │  ┌───────────┐   │     │  ┌──────────────────┐   │
                      │  │ POLICY    │   │     │  │ LowCmd Publisher │   │
                      │  │ (TorchScript)   │     │  │ rt/joint_ctrl    │   │
-                     │  │ 48→12     │   │     │  └────────┬─────────┘   │
+                     │  │ 50→12     │   │     │  └────────┬─────────┘   │
                      │  └─────┬─────┘   │     └───────────┼─────────────┘
                      │        │         │                 │
                      │  ┌─────┴─────┐   │                 ▼
@@ -421,20 +434,23 @@ Right_Elbow_Yaw                     kRightElbowYaw          9
 
 ## Quick Validation Commands
 
+P2 dimensions below are the post-phase-clock contract (50 / 500). Exports made
+before the gait-fix retrain are 48 / 480 and fail these until re-exported.
+
 ```bash
 # Check policy input/output dimensions
 python3 -c "
 import torch
 p = torch.jit.load('models/k1_velocity_policy.pt')
-print('Input:', p(torch.zeros(1,48)).shape)   # should be [1, 12]
-print('Output dim:', p(torch.zeros(1,48)).numel())  # should be 12
+print('Input:', p(torch.zeros(1,50)).shape)   # should be [1, 12]
+print('Output dim:', p(torch.zeros(1,50)).numel())  # should be 12
 "
 
 # For history-stacked policies
 python3 -c "
 import torch
 p = torch.jit.load('models/k1_velocity_student.pt')
-print('Input:', p(torch.zeros(1,480)).shape)  # should be [1, 12]
+print('Input:', p(torch.zeros(1,500)).shape)  # should be [1, 12]
 "
 
 # Verify joint order matches

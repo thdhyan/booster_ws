@@ -6,10 +6,12 @@
 
 Identical to the rough training env except the student "policy" obs group is
 wrapped with a 10-step history buffer (ObservationManager group-level
-history_length): the group becomes 48 x 10 = 480-dim, laid out term-major
-([lin_vel x10, ang_vel x10, ..., last_action x10], oldest -> newest).
+history_length): the group becomes 50 x 10 = 500-dim, laid out term-major
+([lin_vel x10, ang_vel x10, ..., last_action x10, phase_clock x10], oldest ->
+newest).
 
-The teacher group (privileged, 235-dim) is unchanged.
+The teacher group (privileged, 237-dim: P2's 235 plus the 2-dim phase clock)
+is otherwise unchanged.
 """
 
 from isaaclab.utils.configclass import configclass
@@ -21,7 +23,7 @@ STUDENT_HISTORY_LEN = 10  # 0.2 s at 50 Hz — matches deployment node buffer
 
 @configclass
 class K1VelocityDistillEnvCfg(K1VelocityRoughEnvCfg):
-    """Rough env with history-stacked student observations (480-dim)."""
+    """Rough env with history-stacked student observations (500-dim)."""
 
     def __post_init__(self):
         super().__post_init__()

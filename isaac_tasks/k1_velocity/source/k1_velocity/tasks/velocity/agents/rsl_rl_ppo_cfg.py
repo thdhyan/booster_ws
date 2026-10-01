@@ -54,7 +54,8 @@ class K1VelocityPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 class K1VelocityPPOTeacherRunnerCfg(K1VelocityPPORunnerCfg):
     """PPO runner for the PRIVILEGED teacher (height-scan + noise-free obs).
 
-    Trains on the "teacher" obs group (235-dim: 48 proprio + 187 height scan).
+    Trains on the "teacher" obs group (237-dim: 48 proprio + 187 height scan +
+    2 phase clock).
     The checkpoint this produces is consumed by the distillation runner as the
     frozen teacher. Everything else (rewards, terrain, PPO hyperparams) is
     identical to the blind-policy run for comparability.
@@ -74,7 +75,7 @@ class K1VelocityPPOTeacherRunnerCfg(K1VelocityPPORunnerCfg):
 
 @configclass
 class K1VelocityPPOTeacherForceRunnerCfg(K1VelocityPPOTeacherRunnerCfg):
-    """PPO runner for the **P2f** teacher: P2 hyperparams + shove-aware teacher obs (241-dim)."""
+    """PPO runner for the **P2f** teacher: P2 hyperparams + shove-aware teacher obs (243-dim)."""
 
     experiment_name = "p2f_move_teacher"
     run_name = "p2f_move_teacher"

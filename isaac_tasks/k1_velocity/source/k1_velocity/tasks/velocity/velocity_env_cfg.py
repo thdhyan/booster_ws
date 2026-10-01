@@ -41,6 +41,7 @@ import isaaclab.terrains as terrain_gen
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
+from . import gait_clock
 from . import gait_rewards as gait
 from . import velocity_curriculum
 
@@ -101,9 +102,38 @@ K1_P2_LEG_DAMPING = {
     ".*_Hip_Yaw": 3.0,
     ".*_Knee_Pitch": 5.0,
 }
+# Ankle gains (gait lever 1 of 3) -- same argument as the leg override above,
+# applied one group further down. The stock ``feet`` group is two
+# ``BoosterK1AnkleParaWrapperCfg`` around the E4310 (the hip-yaw motor), solved
+# at natural_freq 4 Hz / damping_ratio 1.5 and then divided by the 4-bar
+# armature ratio squared, which lands on 35.7 Nm/rad -- a third of the 100
+# Nm/rad the hip pitch and knee run at. Measured consequence (GAIT_GATE on
+# p2_gaitshuffle_2999: stride 0.03 m, cadence 8.25 steps/s, 8/8 fail): the foot
+# twists under the stance moment instead of holding a rigid lever, the sole
+# slides, and the policy answers with shuffling.
+#
+#   .*_Ankle_Pitch -> 100.0: the sagittal push-off axis, raised to the same
+#       authority as hip pitch / knee. damping 5.0 matches the leg override
+#       (~1.05x critical for the wrapper's 0.0565 kg.m^2 armature).
+#   .*_Ankle_Roll  -> held at the wrapper-derived 35.69 (damping 4.26). It is a
+#       small-range lateral axis under a 38.3 Nm limit, roll deviation is ~0 on
+#       flat ground anyway, and stiffening it only risks contact chatter. Keep
+#       the change to the sagittal axis so a gait-gate pass or fail means one
+#       thing. Both keys must be listed: an actuator pattern that matches no
+#       joint errors out, a joint matched by no pattern silently gets 0.0 gain.
+K1_P2_FOOT_STIFFNESS = {
+    ".*_Ankle_Pitch": 100.0,
+    ".*_Ankle_Roll": 35.69,
+}
+K1_P2_FOOT_DAMPING = {
+    ".*_Ankle_Pitch": 5.0,
+    ".*_Ankle_Roll": 4.26,
+}
 K1_ARTICULATION_CFG = copy.deepcopy(BOOSTER_K1_CFG)
 K1_ARTICULATION_CFG.actuators["legs"].stiffness = dict(K1_P2_LEG_STIFFNESS)
 K1_ARTICULATION_CFG.actuators["legs"].damping = dict(K1_P2_LEG_DAMPING)
+K1_ARTICULATION_CFG.actuators["feet"].stiffness = dict(K1_P2_FOOT_STIFFNESS)
+K1_ARTICULATION_CFG.actuators["feet"].damping = dict(K1_P2_FOOT_DAMPING)
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +230,12 @@ class K1RoughSceneCfg(InteractiveSceneCfg):
 class ObservationsCfg:
     @configclass
     class PolicyCfg(ObsGroup):
-        """Observations for locomotion policy (72-dim per step)."""
+        """Observations for the blind locomotion policy (50-dim per step).
+
+        48 dims of proprioception + command (see terms below) and the 2-dim
+        phase clock. No height scan: the student is blind on purpose, it has to
+        recover terrain from what the teacher felt.
+        """
         # Base state
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, noise=Unoise(n_min=-0.1, n_max=0.1))
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
@@ -221,6 +256,11 @@ class ObservationsCfg:
         # No height scan — blind policy, proprioception only
         # Last action
         actions = ObsTerm(func=mdp.last_action)
+        # Gait lever 3: time base for stepping. LAST term, so it lands at
+        # obs[48:50] and the existing 48 dims keep their indices. noise=None --
+        # a signal the policy times itself from, not a sensor reading, so
+        # corrupting it would desynchronise the clock from the body.
+        phase_clock = ObsTerm(func=gait_clock.phase_clock, noise=None)
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -235,6 +275,11 @@ class ObservationsCfg:
         Noise-free proprioception + terrain height scan. Foot contact forces are now
         available via scripts/flatten_k1_usd.py which applies PhysxContactReportAPI to
         all rigid bodies, enabling contact sensors to see nested feet.
+
+        237 dims: the same 48 + 2 as the policy group, with a 187-point height
+        scan in between. The phase clock lives here too -- PPO trains actor and
+        critic on this group, and a teacher that never saw the clock could not
+        produce a gait for the student to distil.
         """
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
@@ -254,6 +299,10 @@ class ObservationsCfg:
             params={"sensor_cfg": SceneEntityCfg("height_scanner")},
             clip=(-1.0, 1.0),
         )
+        # LAST term -> teacher obs[235:237]. Same clock, same phase, same step
+        # as the policy group (see gait_clock.phase_clock on how the two reads
+        # stay in sync), so PPO's actor and the student see identical timing.
+        phase_clock = ObsTerm(func=gait_clock.phase_clock, noise=None)
 
         def __post_init__(self):
             self.enable_corruption = False  # privileged: no sensor noise
@@ -603,6 +652,35 @@ class EventCfg:
         params={"asset_cfg": SceneEntityCfg("robot", body_names="Trunk"),
                 "mass_distribution_params": (-2.0, 2.0),
                 "operation": "add"},
+    )
+    # Gait lever 2 of 3: friction domain randomisation. The scene pins the
+    # terrain material at mu=1.0 (see K1RoughSceneCfg.terrain), so a policy
+    # trained only there learns one sole/ground pair and its feet slide the
+    # moment the floor is anything else -- one of the two halves of the
+    # measured shuffle (stride 0.03 m). Randomising the robot's own material
+    # over [0.4, 1.2] makes slip something the policy has seen and can push
+    # against. Pre-allocated at startup, not per episode: PhysX buckets
+    # materials, so re-rolling every reset would re-upload them 4096 * 64
+    # times a run for no extra robustness.
+    #
+    # NOT "prestartup": the material impl needs asset.root_view, which only
+    # exists after sim play; "startup" fires right after play. Same wiring as
+    # push's K1PushEventCfg.randomize_friction.
+    #
+    # Fires in play runs too, so a gait-gate recording inherits whatever mu was
+    # rolled. Pin it with env.events.randomize_friction.mode=none when the gate
+    # needs the nominal mu=1.0 floor rather than a random point in [0.4, 1.2].
+    randomize_friction = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "static_friction_range": (0.4, 1.2),
+            "dynamic_friction_range": (0.4, 1.2),
+            "restitution_range": (0.0, 0.05),
+            "num_buckets": 64,
+            "make_consistent": True,
+        },
     )
 
 

@@ -81,9 +81,9 @@ export ROS_DOMAIN_ID=0
 
 | Policy File | Description | Obs Dim | Action Scale | Input Mode | Use Case |
 |-------------|-------------|---------|--------------|------------|----------|
-| `models/k1_velocity_policy.pt` | P2 velocity student (blind, 48-dim, latest step) | 48 | 0.25 | `latest` | **Default walking** — rough terrain, up to 1.5 m/s |
-| `models/k1_velocity_student.pt` | P2 velocity distilled student (history-stacked, 480-dim) | 48×10 | 0.25 | `stacked` | **Smoother gait** — uses 10-step history buffer |
-| `models/p2_move_student.pt` | P2 move student (same as above, different checkpoint) | 48×10 | 0.25 | `stacked` | Alternative distilled checkpoint |
+| `models/k1_velocity_policy.pt` | P2 velocity student (blind, 50-dim, latest step) | 50 | 0.25 | `latest` | **Default walking** — rough terrain, up to 1.5 m/s |
+| `models/k1_velocity_student.pt` | P2 velocity distilled student (history-stacked, 500-dim) | 50×10 | 0.25 | `stacked` | **Smoother gait** — uses 10-step history buffer |
+| `models/p2_move_student.pt` | P2 move student (same as above, different checkpoint) | 50×10 | 0.25 | `stacked` | Alternative distilled checkpoint |
 | `models/p1_basic_student.pt` | P1 basic stand/balance (42-dim) | 42 | 0.25 | `latest` | Standing only, no walking |
 | `models/k1_partialctrl_base.pt` | Partial control (legs + head, 14 DoF) | 68 | 0.25 | `latest` | Head-tracking + walking (needs head policy) |
 
@@ -134,7 +134,7 @@ ros2 run k1_locomotion locomotion_node \
 | `command_type` | `k1_interfaces/JointCommand` | Real robot + Gazebo use this; Isaac Sim uses `sensor_msgs/JointState` |
 | `imu_topic` | `imu` | Enables projected gravity + base ang vel from robot IMU |
 | `odom_topic` | `odom` | Enables base lin vel from robot odometry |
-| `input_mode` | `latest` | Use single-step obs (48-dim); use `stacked` for history policies |
+| `input_mode` | `latest` | Use single-step obs (50-dim); use `stacked` for history policies |
 | `publish_obs_debug` | `true` | Publishes `/k1_0/policy_obs` for debugging |
 
 ### 3. Send velocity commands
@@ -275,8 +275,8 @@ Reference SDK example: `sdk/booster_robotics_sdk/example/low_level/b1_low_sdk_ex
 | Task Family | Gym ID (Deployable) | Policy File | Notes |
 |-------------|---------------------|-------------|-------|
 | P1 Basic Stand | `Isaac-Basic-Student-K1-v0` | `p1_basic_student.pt` | 42-dim obs, stand only |
-| P2 Velocity | `Isaac-Velocity-Distill-K1-Play-v0` | `k1_velocity_policy.pt` | 48-dim, **latest** mode |
-| P2 Velocity Distilled | `Isaac-Velocity-Distill-K1-v0` | `k1_velocity_student.pt` / `p2_move_student.pt` | 480-dim, **stacked** mode |
+| P2 Velocity | `Isaac-Velocity-Distill-K1-Play-v0` | `k1_velocity_policy.pt` | 50-dim, **latest** mode |
+| P2 Velocity Distilled | `Isaac-Velocity-Distill-K1-v0` | `k1_velocity_student.pt` / `p2_move_student.pt` | 500-dim, **stacked** mode |
 | Partial Ctrl | `Isaac-Velocity-PartialCtrl-K1-Play-v0` | `k1_partialctrl_base.pt` | 68-dim, 14 DoF (legs+head) |
 
 ---

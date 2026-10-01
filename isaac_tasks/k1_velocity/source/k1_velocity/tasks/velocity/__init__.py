@@ -73,7 +73,7 @@ gym.register(
     },
 )
 
-# P2f student: distillation from the shove-aware teacher (blind 480-dim policy obs)
+# P2f student: distillation from the shove-aware teacher (blind 500-dim policy obs)
 gym.register(
     id="Isaac-Velocity-Distill-K1-F-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

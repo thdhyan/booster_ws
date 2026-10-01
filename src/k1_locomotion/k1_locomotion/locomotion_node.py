@@ -16,8 +16,7 @@ sim backend (Gazebo Harmonic, MuJoCo, Isaac Sim) and the real robot stack.
 
 Observation layout — MUST match training exactly
 (isaac_tasks/k1_velocity/.../velocity_env_cfg.py :: ObservationsCfg.PolicyCfg,
-concatenate_terms=True, declaration order; verified 48-dim against the
-exported TorchScript input):
+concatenate_terms=True, declaration order):
 
     [ 0: 3]  base_lin_vel        (base frame; odom or zeros)
     [ 3: 6]  base_ang_vel        (base frame; IMU or zeros)
@@ -26,12 +25,18 @@ exported TorchScript input):
     [12:24]  leg joint pos       (pos - default, LEG_JOINTS order)
     [24:36]  leg joint vel
     [36:48]  last raw action
+    [48:50]  phase clock         [sin(2*pi*phase), cos(2*pi*phase)]
+
+OBS_DIM is 50 = 48 proprioception + the 2-dim gait phase clock (gait lever 3,
+k1_velocity/tasks/velocity/gait_clock.py). Exports made before that change are
+48-dim and are REFUSED on load — a clock-less policy fed a clock is a layout
+lie, and the retrained export is the only policy that belongs here.
 
 The 10-step observation HISTORY is maintained HERE in the node (rolling
 buffer, latest step last) — sim backends send single frames only. The current
-policy consumes the latest 48-dim step (verified: TorchScript input is 48);
-the full 480-dim flattened history is published on `policy_obs` for
-debugging and for future history-stacked / recurrent policies.
+policy consumes the latest 50-dim step; the full 500-dim flattened history is
+published on `policy_obs` for debugging and for future history-stacked /
+recurrent policies.
 
 Action: 12 leg joint position targets = default(0) + action_scale * action.
 Upper body (head/arms) is NOT commanded here — regulated separately per
@@ -48,8 +53,8 @@ Params:
   imu_topic:      '' (disabled) | e.g. 'imu' -> /{ns}/imu
   odom_topic:     '' (disabled) | e.g. 'odom' -> /{ns}/odom
   history_len:    10
-  input_mode:     'latest'  -> policy(x) with the newest 48-dim step
-                  'stacked' -> policy(x) with 48x10 term-major history stack
+  input_mode:     'latest'  -> policy(x) with the newest 50-dim step
+                  'stacked' -> policy(x) with 50x10 term-major history stack
                   (oldest->newest per term), matching IsaacLab
                   ObservationManager group-level history_length=10 — use with
                   the distilled student policy (Isaac-Velocity-Distill-K1-v0)
@@ -64,6 +69,7 @@ path (both are Python 3.12):
       /home/thakk100/Projects/IsaacLab/.venv-isaac/bin/python3.12 \
       -m k1_locomotion.locomotion_node --ros-args -p robot_ns:=k1_0
 """
+import math
 import threading
 
 import numpy as np
@@ -86,7 +92,12 @@ LEG_JOINTS = [
 # Default leg joint positions at training (BOOSTER_K1_CFG init_state: legs all 0)
 DEFAULT_LEG_POS = np.zeros(12, dtype=np.float32)
 
-OBS_DIM = 48  # verified against models/k1_velocity_policy.pt TorchScript input
+# Gait phase clock: one gait cycle == two steps, so 1.0 Hz == 2.0 steps/s.
+# Must match gait_clock.PHASE_FREQUENCY_HZ in velocity_env_cfg's obs group.
+PHASE_FREQ_HZ = 1.0
+
+# 48 proprioception + 2 phase clock; matches ObservationsCfg.PolicyCfg.
+OBS_DIM = 50
 
 
 def projected_gravity_from_quat(w, x, y, z) -> np.ndarray:
@@ -141,6 +152,10 @@ class LocomotionNode(Node):
         self._projected_gravity = np.array([0.0, 0.0, -1.0], dtype=np.float32)
         self._last_action = np.zeros(12, dtype=np.float32)
         self._history = np.zeros((history_len, OBS_DIM), dtype=np.float32)
+        # gait phase clock: starts at an arbitrary origin (training re-seeds it
+        # every episode), advances once per control loop at PHASE_FREQ_HZ
+        self._phase = 0.0
+        self._phase_dt = PHASE_FREQ_HZ / freq
         self._warned = {}
 
         # --- policy ---
@@ -208,7 +223,15 @@ class LocomotionNode(Node):
         policy.eval()
         # Fail fast on layout drift: probe input dim with a dummy forward.
         with torch.no_grad():
-            out = policy(torch.zeros(1, OBS_DIM))
+            try:
+                out = policy(torch.zeros(1, OBS_DIM))
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f'policy input layout mismatch: {path} does not accept '
+                    f'OBS_DIM={OBS_DIM}. Exports made before the phase-clock '
+                    f'change are 48-dim — retrain and re-export the gait-fix '
+                    f'policy before deploying it here.'
+                ) from exc
         if out.numel() != 12:
             raise RuntimeError(f'policy output dim {out.numel()} != 12')
         self.get_logger().info(f'policy loaded: {path} (in={OBS_DIM}, out=12)')
@@ -260,7 +283,7 @@ class LocomotionNode(Node):
 
     # ------------------------------------------------------------------ #
     def _build_obs(self) -> np.ndarray:
-        """48-dim observation, EXACT training term order (see module docstring)."""
+        """50-dim observation, EXACT training term order (see module docstring)."""
         obs = np.zeros(OBS_DIM, dtype=np.float32)
         obs[0:3] = self._base_lin_vel
         obs[3:6] = self._base_ang_vel
@@ -269,6 +292,12 @@ class LocomotionNode(Node):
         obs[12:24] = self._joint_pos - DEFAULT_LEG_POS
         obs[24:36] = self._joint_vel
         obs[36:48] = self._last_action
+        # [48:50] phase clock — the policy's time base for stepping. Read at
+        # the current phase, then advanced, so obs_t carries t * PHASE_FREQ_HZ
+        # of elapsed phase (one full wrap every 1/f PHASE_FREQ_HZ seconds).
+        angle = 2.0 * math.pi * self._phase
+        obs[48:50] = (math.sin(angle), math.cos(angle))
+        self._phase = (self._phase + self._phase_dt) % 1.0
         return obs
 
     def _control_loop(self):
@@ -292,7 +321,7 @@ class LocomotionNode(Node):
         import torch
         with torch.no_grad():
             if self._input_mode == 'stacked':
-                # term-major 48x10 stack, oldest->newest per term — matches
+                # term-major 50x10 stack, oldest->newest per term — matches
                 # ObservationManager group history_length layout
                 x = torch.from_numpy(self._history.T.flatten()).unsqueeze(0)
             else:

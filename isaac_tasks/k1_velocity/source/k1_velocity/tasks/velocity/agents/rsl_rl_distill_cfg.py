@@ -2,10 +2,10 @@
 
 Teacher-student scheme:
   TEACHER (frozen): PPO policy trained on privileged "teacher" obs
-    (48 noise-free proprio + 187 height scan = 235-dim) — see
+    (48 noise-free proprio + 187 height scan + 2 phase clock = 237-dim) — see
     K1VelocityPPOTeacherRunnerCfg.
   STUDENT: MLP distilled to proprioceptive "policy" obs with a 10-step
-    history stack (48 x 10 = 480-dim, term-major oldest->newest).
+    history stack (50 x 10 = 500-dim, term-major oldest->newest).
 
 The student checkpoint is the deployment artifact: it runs on the robot with
 only joint encoders + IMU, matching k1_locomotion's node-side history buffer
@@ -36,13 +36,13 @@ class K1VelocityDistillRunnerCfg(RslRlDistillationRunnerCfg):
     obs_groups = {"student": ["policy"], "teacher": ["teacher"]}
 
     student = RslRlMLPModelCfg(
-        # input: 48-dim obs x 10-step history = 480
+        # input: 50-dim obs x 10-step history = 500
         hidden_dims=[512, 256, 128],
         activation="elu",
         obs_normalization=False,
     )
     teacher = RslRlMLPModelCfg(
-        # input: 48 proprio + 187 height scan = 235 (must equal teacher env)
+        # input: 48 proprio + 187 height scan + 2 phase clock = 237 (must equal teacher env)
         hidden_dims=[512, 256, 128],
         activation="elu",
         obs_normalization=False,
@@ -59,9 +59,10 @@ class K1VelocityDistillRunnerCfg(RslRlDistillationRunnerCfg):
 class K1VelocityDistillForceRunnerCfg(K1VelocityDistillRunnerCfg):
     """Distillation runner for the **P2f** student.
 
-    Teacher input = P2f teacher env obs: 48 clean + 187 scan + 6 shove wrench
-    = 241 (net input sizes are inferred from the env, so the MLP fields stay
-    inherited). Student stays blind 48x10 = 480 — no shove knowledge.
+    Teacher input = P2f teacher env obs: 50 clean (48 proprio + 2 clock) +
+    187 scan + 6 shove wrench = 243 (net input sizes are inferred from the
+    env, so the MLP fields stay inherited). Student stays blind 50x10 = 500 —
+    no shove knowledge.
     Launch: ``--task Isaac-Velocity-Distill-K1-F-v0 --checkpoint <p2f teacher model.pt>``.
     """
 

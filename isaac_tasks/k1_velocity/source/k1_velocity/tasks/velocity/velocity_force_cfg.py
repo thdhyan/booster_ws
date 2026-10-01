@@ -44,7 +44,7 @@ K1_SHOVE_BODIES = ["Trunk"]
 # ---------------------------------------------------------------------------
 @configclass
 class ForceTeacherCfg(VelocityObsCfg.TeacherCfg):
-    """P2 teacher obs (235) + applied shove wrench (6) = 241."""
+    """P2 teacher obs (237) + applied shove wrench (6) = 243."""
 
     shove_wrench = ObsTerm(
         func=applied_shove_wrench,
