@@ -383,6 +383,28 @@ def test_cadence_reads_velocity_not_position():
     )
 
 
+def test_phase_swing_pins_foot_order():
+    """preserve_order must be explicit, or body_ids follows the sensor, not us.
+
+    SceneEntityCfg.preserve_order defaults to False, and with it False
+    resolve_matching_names() returns matches in the *sensor's* body order. The
+    contact sensor is prim_path="Robot/.*", i.e. every body, so [left, right]
+    only lands index 0 on the left foot because the URDF happens to declare
+    left_foot_link (line 935) before right_foot_link (line 1277). phase_swing
+    is the only term here that reads a specific foot at a specific index, so it
+    pins the order instead of inheriting it.
+    """
+    terms = _terms(_rewards_cfg(CFG))
+    phase = terms["phase_swing"]
+    params = _kw(phase, "params")
+    assert params is not None, "phase_swing has no params"
+    un = ast.unparse(params)
+    assert "preserve_order=True" in un, (
+        "phase_swing's contact_cfg must set preserve_order=True; otherwise its "
+        "left/right windows are defined by the sensor's body order"
+    )
+
+
 def test_phase_swing_consumes_the_same_clock_as_the_observation():
     """The reward must read the clock through gait_clock, not a private copy.
 

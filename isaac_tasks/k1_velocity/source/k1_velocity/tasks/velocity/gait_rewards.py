@@ -180,8 +180,10 @@ def gait_cadence_penalty(
     estimator still shuffled 8/8 (cadence 6.68, jerk 0.099).
 
     A penalty that is flat for small errors and grows for large ones lets the
-    policy settle at the 2.0 target without fighting noise; standing still
-    reads ~0 crossings and is priced 0.875, so "stop stepping" is not an exit.
+    policy settle at the 2.0 target without fighting noise; a standing robot
+    flickers across zero velocity and reads ~4 steps/s of noise floor rather
+    than 0, so standing prices ~0.90, still well under the shuffle's ~2.47 --
+    "stop stepping" is not an exit, but it is cheaper than chattering.
     """
     # Joint state lives on the articulation's .data, not on the Articulation
     # itself. K1_LEG_JOINTS order is [LHipP,LHipR,LHipY,LKnee,LAnkP,LAnkR, ...],

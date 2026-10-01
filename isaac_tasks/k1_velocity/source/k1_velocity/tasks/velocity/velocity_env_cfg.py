@@ -547,7 +547,15 @@ class RewardsCfg:
         params={
             # contact for the swing/stance test; the phase comes from
             # gait_clock.get_phase(env), the same state the observation sees.
-            "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
+            # preserve_order=True pins body_ids to [left, right]: it defaults
+            # to False, which silently follows the sensor's body order instead
+            # of this list, and this term is the only one here that reads a
+            # specific foot at a specific index.
+            "contact_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=["left_foot_link", "right_foot_link"],
+                preserve_order=True,
+            ),
         },
     )
     feet_clearance = RewTerm(
