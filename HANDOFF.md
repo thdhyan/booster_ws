@@ -89,22 +89,73 @@ scripts/train_guard.sh --name gaitfix_smoke -- isaaclab train --rl_library rsl_r
   `(512, 237)` → **teacher input 237 verified** ✓ (wandb `thakk100-dhyan-home` /
   `booster_k1_soccer_hrl`).
 
+### zz-bw (cs-zhang-net-01) — chosen target; teacher retrain RUNNING 2026-10-01
+
+User picked zz-bw over local/Sparks. Box: 2× RTX PRO 6000 Blackwell (98 GB
+each), `k1-train.sif` present, `~/run_k1_train.sh` runner, home 3 T free,
+`/export/scratch` 198 G free.
+
+- **Clone switched to `main`** (`/export/scratch/thakk100/k1/tmp/booster_ws`).
+  It was on `feat/velocity-squat` with a fetch refspec pinned to `dev/phase-0`
+  only (that is why `origin/main` was invisible) → refspec fixed to
+  `+refs/heads/*:refs/remotes/origin/*`, fetched, 7 dirty rsync'd files
+  **backed up to `/export/scratch/thakk100/k1/dirty_backup_20261001/`** then
+  hard-reset — all 7 were verified *older* than `origin/main` (4 identical, 3
+  only missing today's phase-clock notes), so nothing unique was lost.
+  Submodule `booster_train_ref` clean at the recorded pointer (the historical
+  reverted-files root cause), untracked `run_unbuffered.py` kept.
+- **zz-bw 16-env smoke PASSED** (`k1_gaitfix_smoke`, GPU1, 16×2, seed 42):
+  0 Tracebacks, `policy (50,)` / `teacher (237,)` with `phase_clock` last,
+  `randomize_friction` in the startup Event table, `model_0/1.pt` saved to
+  `/export/scratch/thakk100/k1/logs/rsl_rl/p2_move_teacher/2026-10-01_01-09-27/`.
+- **Debug video recorded + frame checked**: `play_record.py --panel_video`,
+  session `k1_gaitfix_smokevid` → `isaac_tasks/k1_velocity/videos/gaitfix_smoke.mp4`
+  (200 frames × 4 envs) + `gaitfix_smoke_trace.npz`; frame pulled to
+  `/tmp/opencode/gait_smoke/frame_02.png` — 4 labelled panels + HUD render fine
+  on the new obs (robot collapses: it is a 2-iteration checkpoint).
+- **FULL RETRAIN RUNNING**: tmux `k1_gaitfix_teacher`, GPU1,
+  `Isaac-Velocity-Rough-K1-Teacher-v0` **4096 envs × 3000 iters, seed 42,
+  `--headless`**, log `/export/scratch/thakk100/k1/gaitfix_teacher.log`,
+  checkpoints → `/export/scratch/thakk100/k1/logs/rsl_rl/p2_move_teacher/<run>/`.
+  GPU0 is another user's job (15 GB resident) — **never co-locate on GPU0**.
+
 ### Next steps (in order)
 
-1. **Push `main`** (`7ce0049`, `98f3be3`).
-2. **Full teacher PPO retrain** through `scripts/train_guard.sh` (laptop RTX 4060
-   8 GB → ≤512 envs, `--viz none`, PhysX backend). Long run: checkpoints only is
-   acceptable, but a debug video is compulsory for any smoke/eval/play run.
-3. **Distill smoke** with the fresh teacher (student input **500**), then the
-   full distill run.
-4. **Export** `models/*.pt` (the shipped `k1_velocity_policy.pt` etc. are still
-   the legacy **48/480** exports — `locomotion_node` refuses them until this),
-   then re-run `test_export_matches_obs_dim` (currently skipped).
-5. **`scripts/gait_gate.py`** — MOVEMENT_GATE + GAIT_GATE must pass.
-6. `scripts/spark_p2_gaitfix_host.sh` / `spark_p2_gaitfix_train_container.sh`
+1. ✅ **Push `main`** — done (`7ce0049`, `98f3be3`, `91859dd`; origin in sync).
+2. ⏳ **Teacher retrain on zz-bw** — running (`k1_gaitfix_teacher`). When it
+   ends: gate the log for `Learning iteration 2999/3000`, **0 Tracebacks**,
+   and a fresh `model_2999.pt`.
+3. **Record + gate the teacher** (GPU1, never GPU0 — debug video is compulsory
+   for play/eval runs, and `gait_gate.py` consumes the trace):
+   ```
+   tmux new -d -s k1_gaitfix_record \
+    "K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/play_record.py K1_GPU=1 \
+     $HOME/run_k1_train.sh --task Isaac-Velocity-Rough-K1-Teacher-v0 \
+     --checkpoint /workspace/mounts/logs/rsl_rl/p2_move_teacher/<RUN>/model_2999.pt \
+     --num_envs 8 --steps 750 --headless --panel_video --cmd 0.5 0 0 \
+     --video_out isaac_tasks/k1_velocity/videos/p2_gaitfix_teacher.mp4 \
+     --trace_out isaac_tasks/k1_velocity/videos/p2_gaitfix_teacher_trace.npz \
+     >> /export/scratch/thakk100/k1/gaitfix_record.log 2>&1"
+   scp zz-bw:.../videos/p2_gaitfix_teacher_trace.npz /tmp/opencode/
+   python isaac_tasks/k1_velocity/scripts/gait_gate.py /tmp/opencode/p2_gaitfix_teacher_trace.npz
+   ```
+   Pull a frame of the mp4 and **look at it** before calling anything done.
+4. **Distill smoke** with the fresh teacher (student input **500**, teacher
+   237): `K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/train_student.py
+   ~/run_k1_train.sh --task Isaac-Velocity-Distill-K1-v0 --teacher_checkpoint
+   /workspace/mounts/logs/rsl_rl/p2_move_teacher/<RUN>/model_2999.pt
+   --num_envs 16 --max_iterations 2 --headless` → gate `500`/`237` tables +
+   0 Tracebacks, then the full distill run.
+5. **Export** `models/*.pt` (`play_student.py` / `play_record.py --export`) —
+   the shipped `k1_velocity_policy.pt` etc. are still the legacy **48/480**
+   exports and `locomotion_node` refuses them until this — then re-run
+   `src/k1_locomotion/test/test_locomotion_node.py` (the
+   `test_export_matches_obs_dim` skip must turn into a pass).
+6. **`isaac_tasks/k1_velocity/scripts/gait_gate.py`** on the exported student —
+   MOVEMENT_GATE + GAIT_GATE must pass (baseline shuffle fails 8/8).
+7. `scripts/spark_p2_gaitfix_host.sh` / `spark_p2_gaitfix_train_container.sh`
    **do not exist** (planned names only) — smoke/retrain go through
-   `scripts/train_guard.sh`. `zz-bw` remains available if local GPU time is the
-   bottleneck (per user, 2026-10-01).
+   `scripts/train_guard.sh` (local) or `~/run_k1_train.sh` (zz-bw).
 
 ### Still open / gotchas
 
@@ -117,6 +168,14 @@ scripts/train_guard.sh --name gaitfix_smoke -- isaaclab train --rl_library rsl_r
   `push_mdp.py` + `scripts/push_export_parity.py`.
 - `logs/rsl_rl/p2_move_teacher/2026-10-01_00-33-26/` is a **2-iteration smoke**
   run — never use it as a checkpoint.
+- **zz-bw clone gotcha:** its `remote.origin.fetch` was pinned to a single
+  branch, so `origin/main` never appeared (looked like "no main on origin").
+  Fixed to `+refs/heads/*:refs/remotes/origin/*`. The zz-bw scratch disk was at
+  **95 % / 198 G free** — checkpoints are tiny, but purge old SIFs before any
+  model install.
+- **`/tmp` does not survive a reboot** — `/tmp/opencode` (pytest_pkgs,
+  local dirty backups) was wiped on 2026-10-01; anything durable must live in
+  the project dir or on scratch.
 
 ---
 
