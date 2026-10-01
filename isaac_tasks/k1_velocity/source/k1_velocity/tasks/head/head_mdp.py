@@ -22,7 +22,14 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from ..kick.mdp import BALL_RADIUS, ball_pos_in_robot_frame
+from ..kick.mdp import (
+    BALL_RADIUS,
+    ball_pos_in_robot_frame,
+    # re-exported for head_env_cfg, which does `from . import head_mdp as mdp`
+    # and calls mdp.<name> for these Isaac Lab terms:
+    bad_orientation,
+    root_height_below_minimum,
+)
 try:  # Isaac Lab 3.0-EA layout; image renamed this package
     import isaaclab_tasks.core.velocity.mdp as vmdp
 except (ImportError, ModuleNotFoundError):
