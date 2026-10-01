@@ -1,5 +1,125 @@
 # Booster K1 Workspace — Handoff
 
+## 📌 SESSION HANDOFF — 2026-10-01 (gait fix: three levers landed + smoke PASSED — read this first)
+
+**Goal:** kill the P2 foot-shuffle (`p2_gaitshuffle_2999.npz` fails 8/8 GAIT_GATE
+metrics: cadence 8.25, stride 0.03 m, jerk 0.10) with three cheap levers, then
+retrain → distill → export → `isaac_tasks/k1_velocity/scripts/gait_gate.py`.
+
+### Landed on `main` (worktree merges done earlier this session)
+
+- All 5 worktrees merged into `main`, pushed; 3 unique commits + 15 superseded
+  duplicates dropped (backup `/tmp/opencode/dirty_backup/` — **wiped by the
+  2026-10-01 reboot**, `/tmp` is gone).
+- **`7ce0049` feat(p2): ankle-gain override, friction DR, phase clock** — the
+  three levers, exactly 14 files.
+- **`98f3be3` fix(p2): last obs-layout consumers move to 50-dim + phase clock** —
+  `isaac_fleet_vis.py`, `mujoco_fleet_policy.py`, `k1_soccer_compose.py`,
+  `locomotion.launch.py`, plus doc notes (`guide_real.md`, `train_student.py`,
+  `push_mdp.py`, `push_export_parity.py`).
+- `main` is **ahead of origin by 2** (`7ce0049`, `98f3be3`) — push when ready.
+
+### The three levers (all in `isaac_tasks/k1_velocity/.../velocity/`)
+
+1. **Ankle pitch gain override** (`velocity_env_cfg.py`): `.*_Ankle_Pitch`
+   100.0 / 5.0 applied to `K1_ARTICULATION_CFG.actuators["feet"]` (a deepcopy of
+   `BOOSTER_K1_CFG` — **stock verified untouched**: 35.69/4.26 both ankles).
+   `.*_Ankle_Roll` explicitly re-listed at wrapper values 35.69/4.26 (an
+   actuator pattern matching nothing errors; a joint matched by nothing gets
+   0.0). Verified live: velocity `feet = {Ankle_Pitch: 100.0, Ankle_Roll: 35.69}`.
+2. **Friction DR** (`EventCfg.randomize_friction`): `mdp.randomize_rigid_body_material`,
+   `mode="startup"`, `body_names=".*"`, static/dynamic (0.4, 1.2),
+   restitution (0.0, 0.05), `num_buckets=64`, `make_consistent=True`.
+   Confirmed in the smoke run's Event Manager table.
+3. **Phase clock** (`gait_clock.py`, new): `phase_clock(env, frequency_hz=1.0)` →
+   `[sin, cos]`, state keyed `id(env)`, advanced on `episode_length_buf` change
+   (two group reads in one step count once), `noise=None`, **last** ObsTerm in
+   both `PolicyCfg` and `TeacherCfg`.
+
+### Obs layout (post-change, everywhere)
+
+| Group / file | Dim | Clock slot |
+|---|---|---|
+| `policy` | **50** (48 proprio + 2) | `obs[48:50]` |
+| `teacher` | **237** (48 + 187 height scan + 2) | `obs[235:237]` |
+| distill stack | **500** (50 × 10) | per-step last 2 |
+| squat teacher (inherits) | **238** (237 + H*) | last |
+| push / kick / P1 / partial-ctrl | unchanged (own `ObservationsCfg`) | — |
+
+Consumers updated: `locomotion_node.py` (`OBS_DIM=50`, phase accumulator in
+`_build_obs`, fail-fast on layout mismatch), `test_locomotion_node.py`,
+`isaac_fleet_vis.py`, `mujoco_fleet_policy.py`, `k1_soccer_compose.py`
+(`VEL_OBS_DIM=50`; `KICK_OBS_DIM` still 48 — different obs group),
+`locomotion.launch.py`. **`colcon build --packages-select k1_locomotion` after
+any node/launch edit** — `install/` holds a copy.
+
+### Gates run (all green, after the reboot)
+
+- `PYTHONPATH=/tmp/opencode/pytest_pkgs:$PYTHONPATH python -m pytest tests/ -q`
+  → **103 passed**.
+- `src/k1_locomotion/test/test_locomotion_node.py` → **4 passed, 1 skipped**
+  (the skip is `test_export_matches_obs_dim`: on-disk export is still 48-dim).
+
+  > **The 2026-10-01 reboot wiped `/tmp/opencode`** → `pytest_pkgs` had to be
+  > reinstalled: `pip install --target /tmp/opencode/pytest_pkgs "pytest==8.3.5" lark`
+  > (**must be pytest < 9** — pytest 9 breaks the ROS `launch_testing` plugin
+  > hook) and `lark` for the `launch` import. The locomotion test also needs
+  > `source /opt/ros/jazzy/setup.bash && source install/setup.bash`.
+
+### 16-env smoke gate — PASSED (this is the gate that was blocked on the driver)
+
+Driver mismatch (`580.173.02` module vs `580.178` NVML) blocked it yesterday;
+**user rebooted, `nvidia-smi` 580.178.04 + torch CUDA now healthy.**
+
+```
+source scripts/phase6_env.sh
+scripts/train_guard.sh --name gaitfix_smoke -- isaaclab train --rl_library rsl_rl \
+  --task Isaac-Velocity-Rough-K1-Teacher-v0 \
+  --external_callback k1_velocity.register_tasks.register_tasks \
+  --num_envs 16 --max_iterations 2 --seed 42 --viz none
+```
+
+→ `rc=0`, log `logs/guard_gaitfix_smoke.log`, run
+`logs/rsl_rl/p2_move_teacher/2026-10-01_00-33-26/`:
+
+- Observation tables: `policy (50,)` terms 0–7 with `phase_clock` **last**;
+  `teacher (237,)` terms 0–8 with `height_scan` then `phase_clock` last.
+- Event Manager `startup`: `add_base_mass`, `randomize_friction` ✓.
+- `model_0.pt` / `model_1.pt` saved; actor **and** critic first layer
+  `(512, 237)` → **teacher input 237 verified** ✓ (wandb `thakk100-dhyan-home` /
+  `booster_k1_soccer_hrl`).
+
+### Next steps (in order)
+
+1. **Push `main`** (`7ce0049`, `98f3be3`).
+2. **Full teacher PPO retrain** through `scripts/train_guard.sh` (laptop RTX 4060
+   8 GB → ≤512 envs, `--viz none`, PhysX backend). Long run: checkpoints only is
+   acceptable, but a debug video is compulsory for any smoke/eval/play run.
+3. **Distill smoke** with the fresh teacher (student input **500**), then the
+   full distill run.
+4. **Export** `models/*.pt` (the shipped `k1_velocity_policy.pt` etc. are still
+   the legacy **48/480** exports — `locomotion_node` refuses them until this),
+   then re-run `test_export_matches_obs_dim` (currently skipped).
+5. **`scripts/gait_gate.py`** — MOVEMENT_GATE + GAIT_GATE must pass.
+6. `scripts/spark_p2_gaitfix_host.sh` / `spark_p2_gaitfix_train_container.sh`
+   **do not exist** (planned names only) — smoke/retrain go through
+   `scripts/train_guard.sh`. `zz-bw` remains available if local GPU time is the
+   bottleneck (per user, 2026-10-01).
+
+### Still open / gotchas
+
+- **G4 (action_scale)** — node default `0.25` vs training `scale=1.0`
+  (landed `5d5af78`, after the deployed models): safety-relevant, out of
+  three-lever scope, tracked in `docs/k1_ros_deployment_plan.md:200`.
+- **Push frozen base is PRE-phase-clock** — `FrozenBaseVelocityAction` assembles
+  the 236-dim legacy squat layout to match the shipped export; a retrained squat
+  teacher is **238** (needs code change if re-exported). Documented in
+  `push_mdp.py` + `scripts/push_export_parity.py`.
+- `logs/rsl_rl/p2_move_teacher/2026-10-01_00-33-26/` is a **2-iteration smoke**
+  run — never use it as a checkpoint.
+
+---
+
 ## 📌 HARDWARE / CAMERA FINDINGS — 2026-09-29 (unit A2, `10.37.11.3`)
 
 Full writeup: **[`docs/k1_hardware_camera_findings.md`](docs/k1_hardware_camera_findings.md)**
