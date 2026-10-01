@@ -63,7 +63,8 @@ def main() -> int:
             box = base.scene["box"].data.root_pos_w.torch
             print(f"[zero]   push: box_z mean={box[:, 2].mean().item():.3f} "
                   f"half_z mean={st.half_extents[:, 2].mean().item():.3f} "
-                  f"mass mean={st.mass.mean().item():.1f}kg goal_off mean={st.goal_offset.norm(dim=-1).mean().item():.3f}m")
+                  f"mass mean={st.mass.mean().item():.1f}kg "
+                  f"goal_err mean={(st.goal_pos - box).norm(dim=-1).mean().item():.3f}m")
         ht = getattr(base, "head_track", None)
         if ht is not None:
             print(f"[zero]   head: yolo_active={ht.yolo_active} visible={int(ht.yolo[:, 0].sum())}"

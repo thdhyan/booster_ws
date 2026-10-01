@@ -142,10 +142,14 @@ def main(env_cfg, agent_cfg):
             st = pm._state(base)
             gap = wrist_gaps()                               # (n,2)
             tgt_err = -pm.wrist_target_tracking(base)        # (n,)
-            goal_err = st.goal_offset.norm(dim=-1)           # (n,)
             bpos = base.scene["box"].data.root_pos_w.torch
+            # v3: the goal is a FIXED world pose (st.goal_pos); v2's
+            # st.goal_offset integrator no longer exists. goal_err IS the
+            # box->goal error by construction; "anchor" keeps its metric name
+            # for series continuity with v2 runs.
+            goal_err = (st.goal_pos - bpos).norm(dim=-1)     # (n,)
             disp = (bpos[:, :2] - spawn[:, :2]).norm(dim=-1)
-            anchor = (spawn[:, :2] + st.goal_offset[:, :2] - bpos[:, :2]).norm(dim=-1)
+            anchor = goal_err
             contact_both = (gap < thr).all(-1).float().mean()
             contact_any = (gap < thr).any(-1).float().mean()
             root_z = base.scene["robot"].data.root_pos_w.torch[:, 2]
@@ -186,7 +190,7 @@ def main(env_cfg, agent_cfg):
     print(f"[eval] wrist_gap      mean={m['wrist_gap']:.4f} m")
     print(f"[eval] contact_both   rate={m['contact_both']:.4f}  (BOTH wrists < {thr} m = success)")
     print(f"[eval] contact_any    rate={m['contact_any']:.4f}")
-    print(f"[eval] goal_err       mean={m['goal_err']:.4f} m (env: ||goal_offset||) "
+    print(f"[eval] goal_err       mean={m['goal_err']:.4f} m (env: ||goal_pos - box||) "
           f"peak={peak.get('goal_err', float('nan')):.4f} m")
     print(f"[eval] goal_err_anchor mean={m['goal_err_anchor']:.4f} m (spawn+offset-box)")
     print(f"[eval] box_disp       mean={m['box_disp']:.4f} m peak={peak.get('box_disp', float('nan')):.4f} m")
