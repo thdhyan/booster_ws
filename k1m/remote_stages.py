@@ -63,10 +63,36 @@ class StageUnavailable(RuntimeError):
 
 
 def _venv_py(host: str, venv: str, setup_hint: str) -> str:
+    """Resolve a remote venv interpreter, with an honest failure message.
+
+    Three cases look identical from outside, so distinguish them: the host is
+    unreachable, the venv directory is absent, or the venv exists but
+    bin/python is missing or a dangling symlink (its base uv python was removed
+    -- `ls` still shows the entry, while `test -e` correctly reports it gone).
+    """
+    if not remote.have(host, remote.expand(host, venv)):
+        # remote.run() always appends stderr to its output, so a bare
+        # `.strip()` is never empty. Probe with an explicit marker instead.
+        probe = remote.run(host, f"ls -d {shlex.quote(remote.expand(host, venv))} "
+                                f">/dev/null 2>&1 && echo K1M_DIR_OK || echo K1M_DIR_MISSING",
+                          check=False, quiet=True)
+        if "K1M_DIR_OK" not in probe:
+            raise StageUnavailable(
+                f"{host}: no venv directory at {venv} (it does not exist).\n"
+                f"  fix: {setup_hint}")
+        link = remote.expand(host, venv) + "/bin/python"
+        dangling = remote.run(host, f"test -L {shlex.quote(link)} && echo K1M_LNK || echo K1M_REG",
+                              check=False, quiet=True)
+        why = ("bin/python is a dangling symlink -- the base uv python it pointed "
+               "at is gone; recreate the venv" if "K1M_LNK" in dangling
+               else "bin/python is missing")
+        raise StageUnavailable(
+            f"{host}: venv {venv} exists but {why}.\n  fix: {setup_hint}")
+
     py = remote.which_python(host, venv)
     if py is None:
         raise StageUnavailable(
-            f"{host}: no interpreter at {venv}/bin/python\n  fix: {setup_hint}")
+            f"{host}: {venv}/bin/python is not usable.\n  fix: {setup_hint}")
     return py
 
 

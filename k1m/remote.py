@@ -83,19 +83,35 @@ def get(host: str, remote: str, local: str) -> str:
 _HOME_CACHE: dict[str, str] = {}
 
 
-def home(host: str) -> str:
+def home(host: str, retries: int = 2) -> str:
     """Remote $HOME, cached.
 
     Stage paths are written as `~/Projects/...` for readability, but `shlex.quote`
     single-quotes them, which stops the remote shell expanding `~`. Resolving
     `~` here means the paths can stay readable and still work.
+
+    A failed lookup is never cached. Caching the "~" fallback would poison the
+    process: every later `expand()` would return an unexpanded path, and
+    shlex.quote would then hand `test -e '~/...'` to the remote shell, where the
+    quotes suppress tilde expansion, so every existence check would fail with a
+    misleading "no interpreter" / "file not found" for a file that exists.
     """
-    if host not in _HOME_CACHE:
+    if host in _HOME_CACHE:
+        return _HOME_CACHE[host]
+    last = ""
+    for attempt in range(retries):
         p = subprocess.run(" ".join(_base(host)) + " 'echo $HOME'",
                            shell=True, capture_output=True, text=True,
                            timeout=30)
-        _HOME_CACHE[host] = (p.stdout or "").strip() or "~"
-    return _HOME_CACHE[host]
+        cand = (p.stdout or "").strip()
+        if p.returncode == 0 and cand.startswith("/"):
+            _HOME_CACHE[host] = cand
+            return cand
+        last = f"exit {p.returncode}: {(p.stderr or '').strip()[:120]}"
+    raise RemoteError(
+        f"cannot resolve $HOME on {host} after {retries} attempts ({last}). "
+        f"The host may be down, or the key refused. This is a connectivity "
+        f"problem, not a missing file.")
 
 
 def expand(host: str, path: str) -> str:
@@ -106,16 +122,25 @@ def expand(host: str, path: str) -> str:
 
 
 def have(host: str, path: str) -> bool:
-    """True if `path` exists on `host`."""
+    """True if `path` exists on `host`.
+
+    Distinguishes "host unreachable" from "file absent" so a connectivity blip
+    is not reported as a missing environment.
+    """
     try:
         run(host, f"test -e {shlex.quote(expand(host, path))}",
             check=True, quiet=True)
         return True
-    except (RemoteError, subprocess.TimeoutExpired):
+    except RemoteError as e:
+        msg = str(e)
+        if "Cannot reach" in msg or "resolve $HOME" in msg:
+            raise
+        return False
+    except subprocess.TimeoutExpired:
         return False
 
 
 def which_python(host: str, venv: str) -> str | None:
-    """Path to a venv interpreter on `host`, or None if absent."""
+    """Path to a venv interpreter on `host`, or None if genuinely absent."""
     p = posixpath.join(expand(host, venv), "bin", "python")
     return p if have(host, p) else None
