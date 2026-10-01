@@ -130,10 +130,67 @@ training host**:
 - Throughput on the idle GPU: **0.79 s/iter @ 16 envs, 1.19 s @ 512 envs**
   (vs 1.14 s @ 4096 on the exclusive Blackwell).
 
+### Mid-run check: the shuffle is gone (model_1100, iteration 1100/3000)
+
+Recorded with `~/k1_stages/record_gate.sh <run>/model_1100.pt p2_gaitfix_it800`
+(fresh container; artifacts pulled to
+`isaac_tasks/k1_velocity/videos/p2_gaitfix_it800.{mp4,trace.npz}`, frame-checked —
+robot upright and stepping in all four panels).
+
+`gait_gate.py`, 8 envs, 750 steps, cmd 0.5 m/s — **before → after**:
+
+| metric | pre-repair (`p2_gaitfix_teacher`) | now (model_1100) | target |
+|---|---|---|---|
+| cadence | 6.68 steps/s | **1.02** | 1.2–4.0 |
+| jerk | 0.099 | **0.0478** | < 0.06 ✅ |
+| stride | ~0.07 m | 0.045–0.50 (env0 0.197) | ≥ 0.15 |
+| speed | 0.23–0.53 | 0.09–0.31 | cmd 0.5 |
+| verdict | 8/8 fail | 7/8 fail (env0 `walk-like`) | — |
+
+So the failure **inverted**: the 4–6 Hz chatter is gone (cadence 6.68 → 1.02,
+jerk now inside spec) and the policy steps, but at this checkpoint it
+**under-steps** (cadence just below the 1.2 floor) and **under-tracks speed**
+(0.09–0.31 m/s against 0.5 commanded). Training was still improving when
+recorded — at iteration 1597 mean reward −2.21 (from −28.5), `track_lin_vel`
+term 0.153 → **0.769**, `gait_cadence` −0.061 → −0.288 (cadence error ~0.85 steps/s
+off the 2.0 target). Gate the **final** `model_2999.pt` before judging.
+
+### Google Slides deck — decoded, and where it is blocked
+
+Deck: **"K1 RL Policy Play Videos — booster_ws (2026-09-24)"**, id
+`1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI`, 33 slides, 9144000×5143500 EMU
+(10×5.625 in), revision `E2JzzunzZdGe-w`, all slides on layout `p12`. Slides 4–15
+hold videos; each is **Drive-hosted**, e.g. slide 5:
+
+```json
+"video": { "id": "1dz4TZMtXCOfk4kQ6a6U14e4IJkj40UzW", "source": "DRIVE",
+           "url": "https://docs.google.com/file/d/1dz4TZ…/preview" }
+```
+
+Reachable through Composio (toolkits `googledrive` + `googleslides` are connected
+for thakk100@umn.edu): `GOOGLESLIDES_PRESENTATIONS_GET` (accepts a `fields`
+mask), `GOOGLESLIDES_PRESENTATIONS_BATCH_UPDATE` for the insert. Note
+`COMPOSIO_MULTI_EXECUTE_TOOL` needs `sync_response_to_workbench` at the **top
+level**, not per item.
+
+**Blocked on the upload, not the insert:** every upload tool
+(`GOOGLEDRIVE_UPLOAD_FILE` 5 MB, `GOOGLEDRIVE_RESUMABLE_UPLOAD`,
+`YOUTUBE_UPLOAD_VIDEO`) takes `file_to_upload.s3key` — a staged reference
+returned by some *other* app's download action — not local bytes; the only
+content-taking tool is `GOOGLEDRIVE_CREATE_FILE_FROM_TEXT`. `createImage` also
+needs a publicly fetchable URL. So the mp4 has to reach Drive by hand (user
+drag-drop into folder `1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy`) or via a temporary
+public host; **then** the deck insert is one guarded batch
+(`createSlide` on `p12` + `createVideo` with the Drive file id, guarded by a
+fresh `revisionId`).
+
 ### Next steps (in order)
 
-1. **Full teacher retrain on spark02** (`~/k1_stages/train_full.sh <envs> 3000 42`),
-   tmux + fresh cache; check `Collection time` in the log before walking away.
+1. **Gate the final checkpoint** on spark02 when the run exits (~1597/3000 at the
+   time of writing, ETA ~32 min): `~/k1_stages/record_gate.sh <run>/model_2999.pt
+   p2_gaitfix_teacher`, then compare against the table above. If cadence is still
+   under 1.2, the next lever is the speed/stride side (the gait terms are now
+   doing their job — the policy trades steps for staying planted).
 2. `~/k1_stages/record_gate.sh <run>/model_2999.pt p2_gaitfix_teacher` →
    panel video + trace + `gait_gate.py` inside the container; scp both to the
    laptop, extract a frame and **look at it**, then read MOVEMENT_GATE /
