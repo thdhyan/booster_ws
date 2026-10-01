@@ -75,7 +75,8 @@ def _const(node) -> float | None:
 
 
 # --- the new terms exist and are penalties -----------------------------------
-NEW_TERMS = ["gait_cadence", "feet_clearance", "feet_alternation", "stride_length", "action_jerk_l2"]
+NEW_TERMS = ["gait_cadence", "feet_clearance", "feet_alternation", "stride_length",
+             "action_jerk_l2", "phase_swing"]
 
 
 @pytest.mark.parametrize("term", NEW_TERMS)
@@ -86,7 +87,7 @@ def test_gait_term_is_declared_in_rewards_cfg(term: str):
 
 @pytest.mark.parametrize("term", NEW_TERMS)
 def test_gait_term_has_a_negative_weight(term: str):
-    """All five are penalties. A positive weight would reward chattering."""
+    """All six are penalties. A positive weight would reward chattering."""
     terms = _terms(_rewards_cfg(CFG))
     w = _const(_kw(terms[term], "weight"))
     assert w is not None, f"{term} has no literal weight"
@@ -126,7 +127,7 @@ def test_gait_functions_defined_in_module():
     tree = ast.parse(src)
     defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
     for fn in ("gait_cadence_penalty", "feet_clearance", "feet_alternation_penalty",
-               "stride_length_penalty", "action_jerk_l2"):
+               "stride_length_penalty", "action_jerk_l2", "phase_synced_swing"):
         assert fn in defined, f"{fn} is not defined in gait_rewards.py"
 
 
@@ -258,9 +259,9 @@ def test_gait_rewards_use_the_data_accessor_not_the_raw_object():
 def test_foot_terms_receive_both_sensor_and_asset_cfgs():
     """A ContactSensor has no body_pos, so foot terms need the robot as well."""
     cfg_src = CFG.read_text()
-    for term in ("feet_clearance", "stride_length"):
+    for term in ("feet_clearance", "stride_length", "phase_swing"):
         assert f"{term} = RewTerm(" in cfg_src
-    # feet_clearance needs both; stride_length needs the asset only.
+    # feet_clearance and stride_length need both; phase_swing the sensor only.
     assert cfg_src.count('"asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"])') >= 2
 
 
@@ -347,8 +348,64 @@ def test_no_invented_isaac_apis_in_gait_rewards():
 def test_state_reads_go_through_dot_data():
     """Joint/body/contact state all live under a .data accessor."""
     src = GAIT.read_text()
-    for needed in ("data.joint_pos", "data.body_pos_w", "data.net_forces_w"):
+    for needed in ("data.joint_vel", "data.body_pos_w", "data.net_forces_w"):
         assert needed in src, f"expected {needed} in the gait reward terms"
+
+
+def test_cadence_reads_velocity_not_position():
+    """Regression: the cadence estimator must not read joint_pos.
+
+    Measured failure of the joint_pos version: the knee position's slow
+    postural drift (0.07-1.0 Hz) dominates its 4-6 Hz stepping oscillation, so
+    the estimator read ~1-3 steps/s while gait_gate measured 6.68 -- the one
+    term priced against the shuffle paid only -0.394/step and the retrain
+    shuffled 8/8 again. Velocity oscillates about zero at the step frequency
+    and has no drift to hide it behind.
+    """
+    src = GAIT.read_text()
+    tree = ast.parse(src)
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "gait_cadence_penalty"
+    )
+    # Drop the docstring: it names joint_pos when explaining why it is wrong.
+    stmts = [
+        s for s in fn.body
+        if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)
+                and isinstance(s.value.value, str))
+    ]
+    body = "\n".join(ast.unparse(s) for s in stmts)
+    assert "data.joint_vel" in body, "gait_cadence_penalty must measure joint velocity"
+    assert "joint_pos" not in body, (
+        "gait_cadence_penalty reads joint_pos, whose postural drift hides the "
+        "chatter -- that estimator blindness is what let the shuffle survive a "
+        "3000-iteration retrain"
+    )
+
+
+def test_phase_swing_consumes_the_same_clock_as_the_observation():
+    """The reward must read the clock through gait_clock, not a private copy.
+
+    Two phase sources would drift: the observation advances on
+    episode_length_buf changing, and a reward that advanced on call order would
+    be one group-read out of phase with what the policy sees.
+    """
+    src = GAIT.read_text()
+    assert "gait_clock.get_phase(" in src, (
+        "phase_synced_swing must read the shared phase from gait_clock"
+    )
+    clock_src = (CFG.parent / "gait_clock.py").read_text()
+    tree = ast.parse(clock_src)
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert "get_phase" in defined, "gait_clock.py must expose get_phase"
+    # phase_clock must delegate to it rather than duplicating the advance logic.
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "phase_clock"
+    )
+    assert "get_phase(" in ast.unparse(fn), (
+        "phase_clock must encode get_phase's output, not re-advance its own copy"
+    )
 
 
 def test_probe_treats_new_gait_terms_as_zero_action_inert():

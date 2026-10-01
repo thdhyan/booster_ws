@@ -27,8 +27,10 @@ module-level dict keyed by ``id(env)``. The manager calls each term once per
 control step for the group that contains it (twice: the policy and the teacher
 both carry this term), and both groups must observe the *same* phase. That is
 why the state carries ``prev_len``: advancing on ``episode_length_buf``
-changing, rather than on being called, makes exactly one of the two calls
-advance the clock and the other a no-op.
+changing, rather than on being called, makes exactly one of the calls advance
+the clock and the others no-ops. ``get_phase()`` exposes the raw phase to
+consumers outside this module -- the phase-synced swing reward needs the same
+reference the policy observes, and the idempotent read guarantees they agree.
 """
 from __future__ import annotations
 
@@ -49,20 +51,22 @@ PHASE_FREQUENCY_HZ = 1.0
 _CLOCK_STATE: dict[int, dict] = {}
 
 
-def phase_clock(env, frequency_hz: float = PHASE_FREQUENCY_HZ) -> torch.Tensor:
-    """Return ``[sin(2*pi*phase), cos(2*pi*phase)]`` for every env.
+def get_phase(env, frequency_hz: float = PHASE_FREQUENCY_HZ) -> torch.Tensor:
+    """Return the raw phase (``[0, 1)``) for every env, advancing the clock.
 
-    The phase advances ``frequency_hz * env.step_dt`` per control step and is
-    resampled uniformly for any env whose episode reset since the last read, so
-    a policy cannot lean on a phase the previous episode happened to leave
-    behind.
+    This is the same state ``phase_clock`` encodes; the sin/cos observation and
+    any consumer that needs the linear phase (the phase-synced swing reward)
+    therefore can never drift apart. The advance-on-``episode_length_buf``
+    scheme makes the read idempotent within a control step, so it is safe to
+    call from both the observation and the reward manager regardless of which
+    runs first.
 
     Args:
-        env: The manager-based env (policy or teacher group's env instance).
+        env: The manager-based env (observation or reward manager's env instance).
         frequency_hz: Gait cycles per second. 1.0 Hz = 2 steps/s.
 
     Returns:
-        A ``(num_envs, 2)`` float32 tensor, concatenated into the group.
+        A ``(num_envs,)`` float32 tensor in ``[0, 1)``.
     """
     device = env.episode_length_buf.device
     num_envs = env.num_envs
@@ -83,14 +87,32 @@ def phase_clock(env, frequency_hz: float = PHASE_FREQUENCY_HZ) -> torch.Tensor:
 
     cur = env.episode_length_buf
     # "<" means this env was reset this step (episode_length_buf drops to 0),
-    # ">" a normal step, "=" a second group reading the same step.
+    # ">" a normal step, "=" a second caller reading the same step (the policy
+    # and teacher groups both carry the observation, and the reward reads it too).
     just_reset = cur < state["prev_len"]
     if bool(just_reset.any()):
         state["phase"][just_reset] = torch.rand(int(just_reset.sum()), device=device)
     stepped = (cur > state["prev_len"]).to(state["phase"].dtype)
-    # In-place: called every step for two groups, must not allocate or grow.
+    # In-place: called every step for several consumers, must not allocate or grow.
     state["phase"].add_(stepped * (frequency_hz * env.step_dt)).remainder_(1.0)
     state["prev_len"].copy_(cur)
+    return state["phase"]
 
-    angle = state["phase"] * (2.0 * math.pi)
+
+def phase_clock(env, frequency_hz: float = PHASE_FREQUENCY_HZ) -> torch.Tensor:
+    """Return ``[sin(2*pi*phase), cos(2*pi*phase)]`` for every env.
+
+    The phase advances ``frequency_hz * env.step_dt`` per control step and is
+    resampled uniformly for any env whose episode reset since the last read, so
+    a policy cannot lean on a phase the previous episode happened to leave
+    behind.
+
+    Args:
+        env: The manager-based env (policy or teacher group's env instance).
+        frequency_hz: Gait cycles per second. 1.0 Hz = 2 steps/s.
+
+    Returns:
+        A ``(num_envs, 2)`` float32 tensor, concatenated into the group.
+    """
+    angle = get_phase(env, frequency_hz) * (2.0 * math.pi)
     return torch.stack((angle.sin(), angle.cos()), dim=-1)

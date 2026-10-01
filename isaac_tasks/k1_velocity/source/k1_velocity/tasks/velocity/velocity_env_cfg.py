@@ -520,9 +520,18 @@ class RewardsCfg:
     # The 3000-iteration run was stable and moved (2.66 m net, 0 falls) but did
     # not walk: mean cadence 5.7 steps/s against 1.8-2.2 for human walking, with
     # 5 of 8 envs chattering at 7.9-8.9 steps/s on 3-5 cm strides. Nothing in
-    # the reward distinguished a walk from a jitter, so these four terms make the
+    # the reward distinguished a walk from a jitter, so these terms make the
     # difference observable to the policy. Weights are deliberately modest --
     # this is shaping, and over-weighting it fights the tracking objective.
+    #
+    # The retrain with those terms still shuffled 8/8 (cadence 6.68, jerk
+    # 0.099), for two measured reasons: gait_cadence read joint_pos, whose
+    # postural drift hid the 4-6 Hz chatter and paid only -0.394/step, and the
+    # phase clock sat unused at |corr(action, clock)| = 0.098. The estimator
+    # now reads joint_vel, and phase_swing is the term that pays for using the
+    # clock. Update both together if the gait moves again -- they are the two
+    # numbers gait_gate.py actually measures (cadence from joint actions,
+    # stride from speed/cadence).
     gait_cadence = RewTerm(
         func=gait.gait_cadence_penalty,
         weight=-1.0,
@@ -530,6 +539,15 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS),
             "target_hz": 2.0,
             "dt": 0.02,
+        },
+    )
+    phase_swing = RewTerm(
+        func=gait.phase_synced_swing,
+        weight=-2.0,
+        params={
+            # contact for the swing/stance test; the phase comes from
+            # gait_clock.get_phase(env), the same state the observation sees.
+            "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
         },
     )
     feet_clearance = RewTerm(

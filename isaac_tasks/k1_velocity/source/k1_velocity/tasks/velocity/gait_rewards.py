@@ -16,6 +16,8 @@ import torch
 
 from isaaclab.managers import SceneEntityCfg
 
+from . import gait_clock
+
 
 def _yaw_from_quat(quat: torch.Tensor) -> torch.Tensor:
     """Planar yaw (rotation about world +z) of a wxyz quaternion."""
@@ -162,22 +164,33 @@ def gait_cadence_penalty(
 ) -> torch.Tensor:
     """Penalise step frequency far from ``target_hz``.
 
-    Cadence is estimated from the dominant frequency of a low-pass filtered
-    signal, tracked with a one-pole filter and a running zero-crossing rate. This
-    is a cheap proxy rather than a true phase-based gait clock: it is stable
-    enough to gate on and needs no contact-timing machinery, which is what
-    actually went wrong (the policy exploited "roughly forward" instead of
-    stepping).
+    Cadence is estimated from zero crossings of a low-pass filtered signal,
+    tracked with a one-pole filter and a running crossing rate. This is a cheap
+    proxy rather than a true phase-based gait clock: it is stable enough to gate
+    on and needs no contact-timing machinery, which is what actually went wrong
+    (the policy exploited "roughly forward" instead of stepping).
 
-    The measured failure was ~5.7 steps/s mean against a 2.0 target, with 5 of 8
-    envs above 7.9. A penalty that is flat for small errors and grows for large
-    ones lets the policy settle at the target without fighting noise.
+    The signal is **joint velocity**, and that choice is the whole point. The
+    first version read ``joint_pos``, whose slow postural drift (0.07-1.0 Hz in
+    the measured trace) dominates the knee's 4-6 Hz stepping oscillation, so the
+    estimator read ~1-3 steps/s on a policy gait_gate measured at 6.68: the one
+    term meant to price the shuffle was blind to it and paid only -0.394 per
+    step. Velocity has no drift -- it oscillates about zero at exactly the step
+    frequency -- so its crossings are the cadence. A retrain with the blind
+    estimator still shuffled 8/8 (cadence 6.68, jerk 0.099).
+
+    A penalty that is flat for small errors and grows for large ones lets the
+    policy settle at the 2.0 target without fighting noise; standing still
+    reads ~0 crossings and is priced 0.875, so "stop stepping" is not an exit.
     """
-    # Joint positions live on the articulation's .data, not on the Articulation
+    # Joint state lives on the articulation's .data, not on the Articulation
     # itself. K1_LEG_JOINTS order is [LHipP,LHipR,LHipY,LKnee,LAnkP,LAnkR, ...],
     # so the knees are indices 3 and 9. Do not derive this from numel(): that
     # gives Right_Hip_Pitch, which does not oscillate once per step.
-    joints = env.scene[asset_cfg.name].data.joint_pos[:, asset_cfg.joint_ids]
+    # joint_vel, not joint_pos: position carries a slow postural drift that
+    # swamps the stepping oscillation and made the estimator read ~1-3 steps/s
+    # on a 6.68-steps/s shuffle (see the docstring).
+    joints = env.scene[asset_cfg.name].data.joint_vel[:, asset_cfg.joint_ids]
     knee = joints[:, knee_index]
     num_envs = knee.shape[0]
 
@@ -266,16 +279,60 @@ def stride_length_penalty(
     asset_cfg: SceneEntityCfg,
     target_stride: float = 0.35,
 ) -> torch.Tensor:
-    """Penalise horizontal foot separation far below ``target_stride``.
+    """Penalise fore-aft foot separation far below ``target_stride``.
 
-    Directly targets the 3-5 cm strides measured in the chatter mode. Capped
-    above the target so a long lunge is not penalised -- that was a different
-    observed failure and needs its own term.
+    Directly targets the 3-5 cm strides measured in the chatter mode. The
+    separation is projected onto the body's forward axis, because plain
+    horizontal distance counts lateral splay: after the gait-v2 run the reward
+    saw 0.21 m of foot separation while the gate measured a 0.07 m stride, so
+    the policy had widened its stance instead of stepping. Only the fore-aft
+    component is a stride. Capped above the target so a long lunge is not
+    penalised -- that was a different observed failure and needs its own term.
     """
-    pos = env.scene[asset_cfg.name].data.body_pos_w[:, asset_cfg.body_ids, :2]
-    sep = (pos[:, 0, :] - pos[:, 1, :]).norm(dim=-1)
-    short = (target_stride - sep).clamp(min=0.0)
+    robot = env.scene[asset_cfg.name]
+    pos = robot.data.body_pos_w[:, asset_cfg.body_ids, :2]
+    # Unit forward vector from the root yaw, so the projection follows the body
+    # frame as the robot turns instead of the world axes.
+    yaw = _yaw_from_quat(robot.data.root_quat_w)
+    fwd = torch.stack((yaw.cos(), yaw.sin()), dim=-1)
+    along = ((pos[:, 0, :] - pos[:, 1, :]) * fwd).sum(dim=-1).abs()
+    short = (target_stride - along).clamp(min=0.0)
     return short.pow(2).mean()
+
+
+def phase_synced_swing(
+    env,
+    contact_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Penalise each foot being grounded during its swing window and vice versa.
+
+    The phase clock was added as gait lever 3 so the policy would have a time
+    base to step on, and it works -- the recorded retrain shows an exact 1.001
+    Hz ramp -- but nothing in the objective consumed it: max |corr(action,
+    clock)| was 0.098 over every joint, so PPO read the clock and ignored it.
+    This term is that consumer, and it is the reason to read it.
+
+    The left foot owes contact over phase [0, 0.5) and freedom over [0.5, 1),
+    the right the reverse (``body_names`` order is [left, right]). That
+    partition makes double support and double flight both expensive and leaves
+    alternating single support as the cheap state -- a gait locked to the
+    1 Hz reference, i.e. 2.0 steps/s, in the middle of the gate's [1.2, 4.0]
+    band by construction. Contact is measured rather than foot height so the
+    term holds on slopes, where world z lies about clearance.
+
+    Returns the per-env fraction of feet out of step with their window, in
+    [0, 1]: 0 = fully in sync with the clock.
+    """
+    phase = gait_clock.get_phase(env)
+    forces = env.scene.sensors[contact_cfg.name].data.net_forces_w[
+        :, contact_cfg.body_ids
+    ]
+    contact = forces.norm(dim=-1) > 1.0
+    # left foot (index 0) swings on the second half-cycle, right on the first.
+    left_swing = phase >= 0.5
+    swing = torch.stack((left_swing, ~left_swing), dim=1)
+    # In contact while owing swing, or airborne while owing stance, is the error.
+    return (swing == contact).float().mean(dim=1)
 
 
 def action_jerk_l2(env, asset_cfg: SceneEntityCfg) -> torch.Tensor:
