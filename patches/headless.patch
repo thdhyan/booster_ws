@@ -1,0 +1,87 @@
+--- /tmp/rmv.bak	2026-09-28 00:17:11.216333642 -0500
++++ general_motion_retargeting/robot_motion_viewer.py	2026-09-28 00:17:56.806207729 -0500
+@@ -54,6 +54,7 @@
+                 video_width=640,
+                 video_height=480,
+                 keyboard_callback=None,
++                headless=False,
+                 ):
+         
+         self.robot_type = robot_type
+@@ -70,15 +71,23 @@
+         self.record_video = record_video
+ 
+ 
+-        self.viewer = mjv.launch_passive(
+-            model=self.model,
+-            data=self.data,
+-            show_left_ui=False,
+-            show_right_ui=False, 
+-            key_callback=keyboard_callback
+-            )      
+-
+-        self.viewer.opt.flags[mj.mjtVisFlag.mjVIS_TRANSPARENT] = transparent_robot
++        # Headless mode skips the interactive GL window so the retargeter can
++        # run on a server / in CI with no DISPLAY. MjModel and MjData are still
++        # created and stepped, so the kinematics that drive the retargeting are
++        # identical; only the on-screen window is absent. Offscreen
++        # --record_video still works.
++        self.headless = headless
++        if headless:
++            self.viewer = None
++        else:
++            self.viewer = mjv.launch_passive(
++                model=self.model,
++                data=self.data,
++                show_left_ui=False,
++                show_right_ui=False,
++                key_callback=keyboard_callback,
++            )
++            self.viewer.opt.flags[mj.mjtVisFlag.mjVIS_TRANSPARENT] = transparent_robot
+         
+         if self.record_video:
+             assert video_path is not None, "Please provide video path for recording"
+@@ -123,13 +132,13 @@
+         
+         mj.mj_forward(self.model, self.data)
+         
+-        if follow_camera:
++        if follow_camera and not self.headless:
+             self.viewer.cam.lookat = self.data.xpos[self.model.body(self.robot_base).id]
+             self.viewer.cam.distance = self.viewer_cam_distance
+             self.viewer.cam.elevation = -10  # 正面视角，轻微向下看
+             # self.viewer.cam.azimuth = 180    # 正面朝向机器人
+         
+-        if human_motion_data is not None:
++        if human_motion_data is not None and not self.headless:
+             # Clean custom geometry
+             self.viewer.user_scn.ngeom = 0
+             # Draw the task targets for reference
+@@ -143,19 +152,23 @@
+                     joint_name=human_body_name if show_human_body_name else None
+                     )
+ 
+-        self.viewer.sync()
++        if not self.headless:
++            self.viewer.sync()
+         if rate_limit is True:
+             self.rate_limiter.sleep()
+ 
+         if self.record_video:
+             # Use renderer for proper offscreen rendering
+-            self.renderer.update_scene(self.data, camera=self.viewer.cam)
++            self.renderer.update_scene(
++                self.data, camera=None if self.headless else self.viewer.cam
++            )
+             img = self.renderer.render()
+             self.mp4_writer.append_data(img)
+     
+     def close(self):
+-        self.viewer.close()
+-        time.sleep(0.5)
++        if not self.headless:
++            self.viewer.close()
++            time.sleep(0.5)
+         if self.record_video:
+             self.mp4_writer.close()
+             print(f"Video saved to {self.video_path}")
