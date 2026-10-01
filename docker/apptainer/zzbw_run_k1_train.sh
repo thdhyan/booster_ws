@@ -33,7 +33,7 @@ SIF=$SCRATCH/k1-train.sif
 RUN=$SCRATCH/k1                 # local NVMe ext4: clone(/tmp) + home + outputs
 GPU=${K1_GPU:-1}                # GPU1 shared w/ own cosmos3 kernel (decision 2026-08-25)
 
-mkdir -p "$RUN/tmp" "$RUN/home" "$RUN/logs" "$RUN/models"
+mkdir -p "$RUN/tmp" "$RUN/home" "$RUN/logs" "$RUN/models" "$RUN/kit-cache" "$RUN/kit-data"
 
 # singularity build-time dirs must be local ext4 (NFS xattr failure mode)
 export SINGULARITY_TMPDIR=$SCRATCH/sing-tmp
@@ -47,12 +47,21 @@ mkdir -p "$SINGULARITY_TMPDIR" "$SINGULARITY_CACHEDIR"
 # explicitly (--env beats %environment)
 SCRIPT_ENV=()
 [ -n "${K1_TRAIN_SCRIPT:-}" ] && SCRIPT_ENV+=(--env "K1_TRAIN_SCRIPT=$K1_TRAIN_SCRIPT")
+[ -n "${K1_GIT_BRANCH:-}" ] && SCRIPT_ENV+=(--env "K1_GIT_BRANCH=$K1_GIT_BRANCH")
+# docker-hub SIF (k1-isaac-train:3.0.0b2) has no %environment -> re-pass the
+# clone workdir explicitly, else the entrypoint defaults to the RO /workspace
+SCRIPT_ENV+=(--env "K1_WORKDIR=/tmp/booster_ws")
 
 exec singularity run --nv --containall \
   --bind "$RUN/tmp:/tmp" \
   --bind "$RUN/home:/k1home" \
   --bind "$RUN/logs:/workspace/mounts/logs" \
   --bind "$RUN/models:/workspace/mounts/models" \
+  --bind /usr/share/vulkan:/usr/share/vulkan:ro \
+  --bind /usr/share/glvnd/egl_vendor.d/10_nvidia.json:/usr/share/glvnd/egl_vendor.d/10_nvidia.json:ro \
+  --bind "$RUN/kit-cache:/usr/local/lib/python3.12/dist-packages/isaacsim/kit/cache" \
+  --bind "$RUN/kit-data:/usr/local/lib/python3.12/dist-packages/isaacsim/kit/data" \
+  --env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json \
   --env HOME=/k1home \
   --env CUDA_VISIBLE_DEVICES="$GPU" \
   --env DISPLAY= \
