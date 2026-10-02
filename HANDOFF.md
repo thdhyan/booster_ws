@@ -1230,3 +1230,144 @@ standing, not walking.
 Opt-in behind `--video_during_training` since `f941d15`. And `python.sh` returns
 **rc=0 on crash** — a run that died at the first reward step still exited clean.
 Gate on log markers, never rc.
+
+---
+
+## 📌 SESSION UPDATE — 2026-10-02, later: model_6321 is ungated and ungateable; student inherits the shuffle
+
+### The gate that had never run, now run
+
+`model_6321` came off zz-bw as the newest policy. Two things were wrong with the
+assumption that it was deployable:
+
+1. **Its gait gate had never actually executed.** `gate_6321.log` ends in an
+   `AssertionError` (host path passed where the container path was needed) and
+   `gait_gate.py: error: unrecognized arguments: --checkpoint` (the script takes
+   a trace `.npz`, not a checkpoint). So no cadence/stride/jerk number had ever
+   been computed for it. A trace existed at `logs/gate_6321_trace.npz`; scoring it
+   locally took seconds.
+2. **It is a *teacher* checkpoint**: `actor_state_dict`, first layer `(512, 237)`
+   → 237-dim input with the terrain height scan. `locomotion_node.py` calls
+   `torch.jit.load()` on a dict, and probes `torch.zeros(1, 50)`. It cannot load
+   at all. `k1_teacher_6321_gains.pt` is the same 6,906,869 bytes — a copy, not a
+   conversion.
+
+### Scored it, then swept it — it shuffles at every speed (`GAIT_GATE=FAIL` 8/8)
+
+| cmd | cadence | stride | jerk | speed tracking | verdict |
+|---|---|---|---|---|---|
+| 0.1 | **8.48/s** | 0.011 m | 0.064 | 0.087–0.108 | 8/8 FAIL |
+| 0.2 | 7.83/s | 0.022 m | 0.074 | 0.116–0.191 | 8/8 FAIL |
+| 0.3 | 7.57/s | 0.037 m | 0.086 | 0.268–0.285 | 8/8 FAIL |
+| 0.5 | 5.43/s | 0.096 m | 0.112 | 0.485–0.502 | 8/8 FAIL |
+
+**Cadence rises as the command falls, and stride collapses to 11 mm — smaller
+than the foot.** Speed tracking is near-perfect at every speed, which is exactly
+why it reads as walking: the base translates at the commanded rate while the feet
+buzz. The user's hypothesis (a shorter robot needs more steps, so try slower) was
+reasonable and the data says the opposite — slower is *worse*.
+
+This is the same bistability `f941d15` diagnosed, now measured on a second policy
+and across a speed sweep. It is the strongest argument yet for the command-coupled
+clock: a fixed-rate reference cannot ask for 11 cm of travel at 0.1 m/s without
+fighting velocity tracking.
+
+### Student: distilled from model_6321, 1500 iters, 0 tracebacks — inherits the shuffle
+
+zz-bw GPU1, `Isaac-Velocity-Distill-K1-v0`, `policy (500,)` / `teacher (237,)`,
+0.96 s/iter at the end. Student `model_1499.pt`, mean reward ~270.
+
+| cmd | teacher cad. | student cad. | teacher stride | student stride | teacher jerk | student jerk |
+|---|---|---|---|---|---|---|
+| 0.1 | 8.48 | 8.07 | 0.011 | 0.021 | 0.064 | **0.063** |
+| 0.2 | 7.83 | 7.40 | 0.022 | 0.030 | 0.074 | **0.064** |
+| 0.3 | 7.57 | 6.82 | 0.037 | 0.046 | 0.086 | **0.077** |
+| 0.5 | 5.43 | 6.32 | 0.096 | 0.079 | 0.112 | **0.087** |
+
+8/8 fail at all four speeds. The student is a slightly *smoother* copy of the
+same shuffle (jerk ~20% better at 0.5 m/s) and it **overshoots at low speed**
+(0.150–0.201 against a 0.1 command). Distillation cannot manufacture a gait the
+teacher does not have — it is a lossy copy, and the loss is not in the copy.
+Videos: `videos/student1499_v05_panels.mp4` + `_trace.npz` (frame checked: robot
+upright and translating, HUD `vx=+0.50`, consistent with the ~0.49 m/s tracking).
+
+**So there is still no certified policy, and the robot stays disconnected.**
+
+### Bug found and fixed: a fixed command killed every play run (`da10d61`)
+
+All four student recordings died on the first reward step:
+
+```
+ValueError: weighted tracking needs hi > lo, got lo=0.1, hi=0.0
+```
+
+`track_ang_vel_z_world_exp_weighted` sets `hi = abs(ranges.ang_vel_z[1])`, and both
+play cfgs pin the axes they do not use to zero (`--cmd 0.5 0 0` → `ang_vel_z =
+(0, 0)`), so `hi > lo` is false. This blocked straight-line gait recordings *and*
+the keyboard forward-walk session. It hid because the teacher play cfg replaces
+RewardsCfg wholesale and never evaluated a tracking term.
+
+A zero-width range has two causes that are not the same bug, so the guard now
+distinguishes them rather than being deleted: during training the velocity
+curriculum rewrites `cfg.ranges` and a collapse means tracking weights stopped
+ramping silently (still a hard error, still the default); in play the collapse is
+the intent, and the floor weight is correct. `require_span` carries that.
+
+The Rough play cfg needed it as much as the Distill one — it also keeps the
+training rewards, and a spin-only recording collapses the *linear* term the same way.
+
+### Trap: importing the task package breaks the test suite (`3e9e3e4`)
+
+The first version of the new tests did `from k1_velocity.tasks.velocity import
+agile_rewards`, which runs that package's `__init__.py` and **registers every gym
+task**. `tests/test_deployability.py` then failed *later in the run* on
+`ImportError: cannot import name 'AdditiveUniformNoiseCfg'` — a symbol this
+IsaacLab no longer exports, i.e. a pre-existing break in the `booster_train_ref`
+submodule that the error message pointed straight past. Tests here load the module
+by file path and check the play cfgs with `ast`, so nothing global is touched.
+204 passed.
+
+### Duplicate-work reconciliation (reverted my own `79b76ff`)
+
+I implemented a phase-locked stride term (`phase_synced_stride`) from the
+`model_6321` evidence before noticing `f941d15` had already added
+`phase_locked_stride` for the same reason. Mine was worse: a fixed 0.25 m demand
+at every commanded speed is precisely what the command-coupled clock exists to
+avoid. Reverted mine, kept theirs, and moved my sweep table into their docstring
+as the supporting evidence rather than discarding it. **Check for an existing
+implementation before adding a reward term.**
+
+### spark02: transient Kit startup stall, and the watchdog for it
+
+The first 512-env launch hung **60 minutes**: `python3` at 0.0% CPU, 2 threads,
+blocked in `futex_do_wait` on `/dev/shm/carb-RStringInternals-58`, never printing
+one Isaac line. A 16-env smoke in a fresh container minutes later was clean
+(1741 lines, 0 tracebacks, rc=0), so it is a transient Kit stall, not the code.
+Because a stall is indistinguishable from a slow boot by log content alone,
+`teacher_supervised.sh` watches for the first `Learning iteration` and restarts
+after 20 min, up to 3 tries. Containers are `--name`d so cleanup can never match
+another tenant's by image ancestor — spark02 is shared and currently has 4 other
+compute apps on the GPU.
+
+Note `python.sh` returns **rc=0 on crash** (already noted below); the watchdog
+greps log markers, never rc.
+
+### Running now
+
+`aim_spark02`, tmux `k1_phasestride`, `p2_move_teacher/2026-10-02_19-14-19`,
+512 envs × 5000 iters at **1.14 s/iter**, 0 tracebacks. Gait terms confirmed
+*live and biting* at iteration 1109 — `gait_cadence -0.0879`, `phase_swing
+-0.0445`, **`phase_locked_stride -0.0409`** (the new position channel),
+`action_jerk_l2 -0.0457`, `feet_alternation -0.0153`, `stride_length -0.0056`,
+`feet_clearance -0.0000` (hinge; the foot still never lifts).
+
+### Next
+
+1. Gate `p2_move_teacher/2026-10-02_19-14-19/model_*.pt` at 0.1–0.5 m/s **and** at
+   the top of the curriculum — the gate has only ever been run at 0.5, and a
+   command-coupled clock needs checking at both ends of its range.
+2. Distil **only** from a gate-passing checkpoint.
+3. Still open: velocity-curriculum gating fired 0 times in 5000 iters, so the
+   4 m/s goal may not actually be exercised.
+4. Still blocked: Drive/Slides upload needs the user to drag the mp4s into the
+   Drive folder and send the file ids.
