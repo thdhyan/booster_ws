@@ -1,6 +1,7 @@
 """K1 velocity play (eval) config — inherits rough env, disables curriculum/noise."""
 from isaaclab.utils.configclass import configclass
 from .velocity_env_cfg import K1VelocityRoughEnvCfg
+from .velocity_env_cfg import ObservationsCfg as ObsCfg
 
 @configclass
 class K1VelocityRoughPlayEnvCfg(K1VelocityRoughEnvCfg):
@@ -27,6 +28,33 @@ class K1VelocityRoughPlayEnvCfg(K1VelocityRoughEnvCfg):
 
 
 @configclass
+class K1VelocityTeacherOnlyObsCfg:
+    """Observation cfg exposing ONLY the privileged teacher group, as ``policy``.
+
+    Deliberately a single group rather than an alias
+    (``self.observations.policy = self.observations.teacher``). Aliasing the same
+    config object into two group slots makes Isaac Lab resolve it twice, and the
+    second pass sees a ``SceneEntityCfg`` that already carries ``joint_ids`` from
+    the first, so it raises::
+
+        ValueError: Both 'joint_names' and 'joint_ids' are specified, and are
+        not consistent.
+
+    Building a fresh group from the teacher's own terms avoids that entirely.
+    """
+
+    @configclass
+    class PolicyCfg(ObsCfg.TeacherCfg):
+        def __post_init__(self):
+            super().__post_init__()
+            # Play config: no sensor noise on the privileged group either.
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
 class K1VelocityRoughTeacherPlayEnvCfg(K1VelocityRoughPlayEnvCfg):
     """Play config for a TEACHER checkpoint (the 237-dim privileged policy).
 
@@ -40,21 +68,17 @@ class K1VelocityRoughTeacherPlayEnvCfg(K1VelocityRoughPlayEnvCfg):
 
     The teacher consumes the privileged group (proprioception + a 187-point
     height scan), so the network width differs and the two are not
-    interchangeable. This config promotes ``teacher`` to the ``policy`` group so
-    the actor width matches a teacher checkpoint, and disables the training-only
-    noise the same way the student play config does.
+    interchangeable.
 
-    The height scan is privileged, so this is an EVALUATION harness only -- it is
-    not deployable, because no real robot carries a 187-ray terrain scan. A
-    deployable policy still has to come from the distilled 50-dim student.
+    EVALUATION ONLY. The height scan is privileged, so this policy is not
+    deployable: no real robot carries a 187-ray terrain scan. A deployable policy
+    has to come from the distilled 50-dim student.
     """
 
     def __post_init__(self):
         super().__post_init__()
-        # Promote the privileged group into the observation the actor reads.
-        self.observations.policy = self.observations.teacher
-        self.observations.teacher.enable_corruption = False
-        # Rewards and curriculum are training-only; a play cfg should not carry
-        # them, and the reward ramps would otherwise write weights on every step.
+        self.observations = K1VelocityTeacherOnlyObsCfg()
+        # Rewards and curriculum are training-only, and the reward ramps would
+        # otherwise rewrite weights on every step of a play run.
         self.rewards = None
         self.curriculum = None
