@@ -304,69 +304,6 @@ def stride_length_penalty(
     return short.pow(2).mean()
 
 
-def phase_synced_stride(
-    env,
-    contact_cfg: SceneEntityCfg,
-    asset_cfg: SceneEntityCfg,
-    target_stride: float = 0.25,
-) -> torch.Tensor:
-    """Penalise fore-aft foot placement that disagrees with the phase clock.
-
-    WHY THIS EXISTS
-    ---------------
-    Every gait term so far prices *rate* (how many steps per second, how much
-    jerk, how wide the stance is). The measured failure is that rate is the wrong
-    knob. Sweeping ``model_6321`` over commanded speed:
-
-    ====== =========== ============ ==========
-    cmd     cadence     stride       jerk
-    ====== =========== ============ ==========
-    0.1     8.48/s     0.011 m      0.064
-    0.2     7.83/s     0.022 m      0.074
-    0.3     7.57/s     0.037 m      0.086
-    0.5     5.43/s     0.096 m      0.112
-    ====== =========== ============ ==========
-
-    Cadence goes *up* as the command goes down, and stride collapses to 11 mm --
-    smaller than the foot. The policy found a jitter that satisfies a rate
-    penalty at any speed while stepping nowhere. ``gait_cadence`` cannot fix
-    this: both 0.4 steps/s (standing) and 11 steps/s (buzzing) are "far from 2.0",
-    so the cheaper one always wins, and tracking at +1.28/step outbids the gait
-    penalties (~0.7 combined).
-
-    So this term prices *placement* instead. The phase clock says which foot
-    should be swinging; during that foot's half-cycle its fore-aft offset from
-    the other foot should sweep out to about ``target_stride``, and during stance
-    it should sit near zero. Both directions are penalised, so neither standing
-    still nor buzzing in place is cheap -- only actually stepping is.
-
-    Measured on the body frame (heading from the root quaternion), because a
-    world-frame projection would charge the robot for walking in a different
-    direction than it faces.
-
-    Returns the per-env mean penalty in m^2.
-    """
-    robot = env.scene[asset_cfg.name]
-    phase = gait_clock.get_phase(env)
-    pos = robot.data.body_pos_w[:, asset_cfg.body_ids, :2]
-    yaw = _yaw_from_quat(robot.data.root_quat_w)
-    fwd = torch.stack((yaw.cos(), yaw.sin()), dim=-1)
-    # Signed fore-aft offset of foot 0 relative to foot 1, along the heading.
-    along = ((pos[:, 0, :] - pos[:, 1, :]) * fwd).sum(dim=-1)
-
-    # Left foot swings over phase [0, 0.5); body_names order is [left, right],
-    # matching phase_synced_swing. Whichever foot is in swing is the one that
-    # should be out in front; the stance foot should be under the hip.
-    left_swing = phase >= 0.5
-    swing_sign = torch.where(left_swing, torch.ones_like(along), -torch.ones_like(along))
-    # Signed offset in the direction the swinging foot is expected to reach.
-    signed = along * swing_sign
-    # Desired |offset|: out to target_stride mid-swing, back to ~0 at stance.
-    window = torch.where(left_swing, phase - 0.5, 1.0 - phase) * 2.0  # 0..1 within the half-cycle
-    target = target_stride * torch.sin(torch.pi * window.clamp(0.0, 1.0))
-    return torch.square(signed.abs() - target).mean(dim=1)
-
-
 def phase_synced_swing(
     env,
     contact_cfg: SceneEntityCfg,
@@ -419,6 +356,25 @@ def phase_locked_stride(
     picks whichever is cheaper given that tracking pays +1.28/step against ~0.7
     of combined gait penalty. No weight fixes an objective with no preferred
     basin.
+
+    Sweeping an independent policy (``model_6321``, gated 8/8 at four speeds)
+    reproduces the same bistability and adds the sign that fixes the clock:
+
+    ====== =========== =========== =========
+    cmd     cadence      stride      jerk
+    ====== =========== =========== =========
+    0.1      8.48/s     0.011 m    0.064
+    0.2      7.83/s     0.022 m    0.074
+    0.3      7.57/s     0.037 m    0.086
+    0.5      5.43/s     0.096 m    0.112
+    ====== =========== =========== =========
+
+    Cadence *rises* as the command falls, and the stride collapses to 11 mm --
+    smaller than the foot -- while speed tracking stays within 0.01 m/s. That is
+    a buzz that steps nowhere, and it is why the clock is command-coupled: a
+    fixed-rate reference cannot ask for 11 cm of travel at 0.1 m/s without
+    fighting the tracking term, which is the failure mode
+    ``UniformVelocityGaitBaseHeightCommand`` exists to avoid.
 
     ``phase_synced_swing`` already locks *contact* to the clock and also failed,
     which is the evidence that contact is too weak a channel: contact is a

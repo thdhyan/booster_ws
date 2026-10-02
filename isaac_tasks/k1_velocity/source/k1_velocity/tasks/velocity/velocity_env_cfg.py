@@ -651,30 +651,6 @@ class RewardsCfg:
             "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
         },
     )
-    phase_stride = RewTerm(
-        func=gait.phase_synced_stride,
-        # Audit follow-up (2026-10-02): every other gait term prices a *rate*
-        # (steps/s, jerk, stance width) and model_6321 beat them all -- cadence
-        # 8.48/s on 0.011 m strides at a 0.1 m/s command, i.e. a buzz that steps
-        # nowhere while tracking speed perfectly. A rate penalty cannot price that
-        # because standing still and buzzing are equally "wrong" and tracking pays
-        # more than either. This term prices where the swinging foot *is*: it must
-        # reach ~0.25 m forward mid-swing and return under the hip, so both
-        # standing and buzzing stay expensive and only stepping is cheap.
-        weight=-8.0,
-        params={
-            "contact_cfg": SceneEntityCfg(
-                "contact_forces",
-                body_names=["left_foot_link", "right_foot_link"],
-                preserve_order=True,
-            ),
-            "asset_cfg": SceneEntityCfg(
-                "robot", body_names=["left_foot_link", "right_foot_link"],
-                preserve_order=True,
-            ),
-            "target_stride": 0.25,
-        },
-    )
     stride_length = RewTerm(
         func=gait.stride_length_penalty,
         # Audit 2026-10-01: at target 0.35 m this contributed only -0.051/step,
