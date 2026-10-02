@@ -80,8 +80,14 @@ COMMAND_SMOOTHING = 0.15    # EMA coefficient on the commanded magnitude
 _CLOCK_STATE: dict[int, dict] = {}
 
 
-def _command_magnitude(env) -> torch.Tensor:
+def command_magnitude(env, command_name: str = "base_velocity") -> torch.Tensor:
     """Per-env magnitude of the planar velocity command, or None if unavailable.
+
+    Public because it is the physical scale a gait reference needs: the stride a
+    command implies is ``v / steps_per_second``, so any reward that asks "where
+    should this foot be" has to know ``v`` in m/s. Deriving that from the clock
+    frequency alone is what produced the inverted amplitude in
+    ``phase_locked_stride`` (see the note there).
 
     Read from the command *term* rather than the manager's tensor because the
     term is what carries the ranges the frequency clamp is expressed against.
@@ -118,7 +124,7 @@ def get_frequency(env, command_name: str = "base_velocity") -> torch.Tensor:
         else:
             return torch.full((num_envs,), PHASE_FREQUENCY_HZ, device=device)
 
-    mag = _command_magnitude(env)
+    mag = command_magnitude(env, command_name)
     if mag is None:
         return state["freq_hz"]
 

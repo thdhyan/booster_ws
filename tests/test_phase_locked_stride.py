@@ -113,6 +113,62 @@ def test_stride_term_takes_a_reference_amplitude():
     )
 
 
+def test_reference_amplitude_is_a_length_and_grows_with_speed():
+    """The amplitude must be the command's own stride, ``v / (2 * hz)``.
+
+    Regression. The amplitude used to be ``target_stride / hz``, which is wrong
+    twice over:
+
+    * it is a dimensional error -- ``m / (1/s) = m*s``, not a length -- that looks
+      correct at exactly 1 Hz (``0.22/1 = 0.22``) and is wrong everywhere else;
+    * it inverts the physics, demanding a *bigger* step when the clock is slower,
+      while a real gait's stride grows with speed.
+
+    Measured cost of the old law, 5000 iterations, gated at 0.1 m/s: mean cadence
+    10.65 steps/s against a *demanded* 1.2, stride 8-16 mm, mean jerk 0.102 --
+    worse than the 8.48 / 0.064 of the model the term was added to fix. The clock
+    clamps to MIN_HZ=0.6 for every command in 0.1-0.3 m/s, so the old law asked
+    for a 0.367 m excursion there: ~0.88 m/s of foot speed while the base moved at
+    0.1 m/s. The policy sped up chasing a reference it could not reach.
+
+    So the invariant is arithmetic, not stylistic: dividing the commanded speed
+    (m/s) by the step rate (1/s) must give a length that increases with speed.
+    """
+    src = GAIT.read_text()
+    tree = ast.parse(src)
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "phase_locked_stride"
+    )
+    body = ast.unparse(fn)
+    assert "command_magnitude(" in body, (
+        "the amplitude must come from the commanded speed; deriving it from the "
+        "clock frequency alone is what inverts it"
+    )
+    assert "target_stride / hz" not in body, (
+        "target_stride / hz is m*s, not a length, and it demands bigger steps at "
+        "lower cadence -- the exact defect measured at cadence 10.65 steps/s"
+    )
+
+    # The real numbers, from the clock's own law: hz = clamp(2.0 * v, 0.6, 2.0)
+    # and steps/s = 2 * hz, so the implied stride is v / (2 * hz).
+    hz_per_mps, min_hz = 2.0, 0.6
+    strides = {}
+    for v in (0.1, 0.2, 0.3, 0.5, 1.0):
+        hz = min(max(hz_per_mps * v, min_hz), 2.0)
+        strides[v] = v / (2.0 * hz)
+    # Monotone non-decreasing in speed, and never absurd at the slow end.
+    assert all(
+        strides[a] <= strides[b] + 1e-9
+        for a, b in zip((0.1, 0.2, 0.3, 0.5), (0.2, 0.3, 0.5, 1.0))
+    ), f"implied stride must not shrink as speed rises: {strides}"
+    assert strides[0.1] < 0.15, (
+        f"at 0.1 m/s the implied stride is {strides[0.1]:.3f} m; anything at or "
+        "above the gate's 0.15 m minimum at a tenth of a m/s is a demand the "
+        "robot cannot meet without running faster than it is rewarded for"
+    )
+
+
 def test_stride_term_function_is_defined():
     src = GAIT.read_text()
     tree = ast.parse(src)

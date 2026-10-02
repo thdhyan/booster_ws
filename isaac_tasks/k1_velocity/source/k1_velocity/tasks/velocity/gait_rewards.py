@@ -387,20 +387,43 @@ def phase_locked_stride(
     commanded amplitude is wrong regardless of how often it moves -- and only a
     stride at the clock's frequency survives.
 
-    Amplitude scales with the commanded speed through ``target_stride`` being
-    interpreted per unit of the clock's own frequency (see ``gait_clock``: the
-    phase now advances at a command-coupled rate), so demanding the same
+    Amplitude is the stride the command implies -- ``v / (2 * hz)`` -- read from
+    the same command-coupled clock the phase advances on, so demanding the same
     absolute stride at 0.1 and 0.5 m/s would again fight velocity tracking.
+    ``target_stride`` is only the fallback when no command term is readable.
 
     Returns the per-env mean squared fore-aft placement error, in m^2.
     """
     robot = env.scene[asset_cfg.name]
     phase = gait_clock.get_phase(env)
     hz = gait_clock.get_frequency(env)
-    # Reference amplitude per env: the stride the commanded cadence implies.
-    # At 1 Hz (2 steps/s) this is target_stride; faster cadence shortens the
-    # per-step excursion, which is what a real gait does at higher speed.
-    amp = target_stride / hz.clamp(min=0.1)
+    # Reference amplitude per env: the stride the command itself implies.
+    #
+    # stride = v / steps_per_second, and the clock's hz is half the step rate
+    # (one full cycle is two steps), so amp = v / (2 * hz). Dimensionally this is
+    # the only correct form: (m/s) / (1/s) = m.
+    #
+    # This REPLACED ``target_stride / hz``, which was wrong twice over. It is a
+    # dimensional error -- m / (1/s) = m*s, not a length -- that looks correct at
+    # exactly 1 Hz (0.22/1 = 0.22 m) and is wrong everywhere else. And it inverts
+    # the physics: dividing makes a *slower* clock demand a *bigger* step, while a
+    # real gait's stride grows with speed.
+    #
+    # Measured cost of that, 5000 iterations with the old law, gated at 0.1 m/s:
+    # mean cadence 10.65 steps/s against a *demanded* 1.2, stride 8-16 mm, mean
+    # jerk 0.102 -- worse than the 8.48 / 0.064 of the model it was meant to fix.
+    # The mechanism is visible in the numbers: the clock clamps to MIN_HZ=0.6 for
+    # every command from 0.1 to 0.3 m/s, so the old law demanded a 0.22/0.6 =
+    # 0.367 m excursion there, needing ~0.88 m/s of foot speed while the base
+    # moved at 0.1 m/s. The policy ran *faster* trying to chase a reference it
+    # could not reach, which is the opposite of the fix.
+    speed = gait_clock.command_magnitude(env)
+    if speed is None:
+        # No readable command (config probing): fall back to a plausible fixed
+        # excursion rather than guessing a scale from the clock alone.
+        amp = torch.full_like(hz, target_stride)
+    else:
+        amp = speed / (2.0 * hz.clamp(min=0.1))
 
     wave = torch.sin(2.0 * math.pi * phase)              # (num_envs,)
     # Left foot leads the cycle, right foot is half a cycle behind.
