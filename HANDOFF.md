@@ -1371,3 +1371,91 @@ greps log markers, never rc.
    4 m/s goal may not actually be exercised.
 4. Still blocked: Drive/Slides upload needs the user to drag the mp4s into the
    Drive folder and send the file ids.
+
+---
+
+## 📌 SESSION UPDATE — 2026-10-02, latest: the phase-locked run FAILED, and the reason was a dimensional error
+
+### The run: 5000 iters, clean, and worse than the policy it was meant to replace
+
+`p2_move_teacher/2026-10-02_19-14-19`, 512 envs, ~1.1 s/iter, **0 tracebacks**,
+mean reward 3.85 -> 17.72, tracking `+2.87 -> +4.89`. Gated 8/8 FAIL at all four
+speeds:
+
+| cmd | cadence | stride | jerk |
+|---|---|---|---|
+| 0.1 | **10.65** | 0.012 m | 0.102 |
+| 0.2 | 8.07 | — | 0.117 |
+| 0.3 | 7.38 | — | 0.137 |
+| 0.5 | 7.25 | — | **0.176** |
+
+vs `model_6321` at 0.1 m/s: cadence 8.48, jerk 0.064. **Worse on both.** Jerk
+also degrades monotonically with speed. Not distilled.
+
+Frame check of `videos/teacher4999_v05_panels.mp4` (rule: look before believing):
+at step 300 all 8 envs stand **upright, legs together, arms spread horizontally**;
+by step 500 (t=10 s) several have fallen and reset. Standing micro-jitter, not
+walking — which is what 8-16 mm strides at 7-10 steps/s means. The arms-out pose
+also says `joint_deviation_arms` (-0.1) is too weak to be worth anything.
+
+### ROOT CAUSE: `amp = target_stride / hz` is not a length, and it inverts the physics
+
+```python
+amp = target_stride / hz.clamp(min=0.1)   # m / (1/s) = m*s
+```
+
+1. **Dimensional error.** m divided by 1/s is m*s, not a distance. It looks
+   correct at exactly 1 Hz (`0.22/1 = 0.22 m`) and is wrong at every other
+   frequency. A defect that is invisible at the one value anyone would sanity-check.
+2. **Inverted physics.** Dividing demands a *bigger* excursion when the clock is
+   *slower*, while a real gait's stride grows with speed.
+
+The clock clamps to `MIN_HZ = 0.6` for every command from 0.1 to 0.3 m/s, so the
+old law demanded a `0.22/0.6 = 0.367 m` excursion across that whole band -- about
+**0.88 m/s of foot speed while the base moved at 0.1 m/s.** The policy could only
+respond by running faster, chasing a reference it could not reach: cadence 10.65
+against a *demanded* 1.2. Above 0.5 m/s the clock leaves the clamp and the old law
+is plausible, which is exactly why every earlier gate at 0.5 m/s missed it and the
+defect only ever showed up at low speed.
+
+Fixed to `amp = v / (2 * hz)` — the stride the command implies, since the clock's
+`hz` is half the step rate. No tuning knob: 0.083 m at 0.1 m/s rising to 0.25 m at
+0.5 m/s. `gait_clock._command_magnitude` is now public as `command_magnitude`;
+`target_stride` is kept only as the fallback for envs with no readable command
+term. `3b01a42`, 213 tests. The new test asserts the invariant *arithmetically*
+(implied stride must not shrink as speed rises; must stay under the gate's 0.15 m
+at 0.1 m/s), not by substring.
+
+**Lesson worth keeping: a quantity that is only correct at one value of its own
+input is almost always a units bug.** Check the dimensionality before tuning.
+
+### My own bug: four Kit launches in one container
+
+The first gate sweep ran all four speeds as one stage, i.e. four sequential Kit
+launches in a single container. Speeds 0.1 and 0.2 recorded fine; 0.3 and 0.5 died
+with `record_rc=124` and wrote no trace — and `gait_gate.py` then reported
+`GAIT_GATE_RC=1`, which reads exactly like a failing verdict but is only a missing
+file. **Never treat a gate line without a trace behind it as a result.** Now one
+container per speed (`gate_one_speed.sh` + `gate_sweep.sh`), each with its own
+cache dir, and the stage exits early with `GATE_SKIPPED_NO_TRACE` if the trace is
+missing rather than scoring nothing.
+
+### Also confirmed: episodes never time out
+
+`episode_length_s = 20.0` -> 1000-step budget. `Mean episode length` went
+190 -> 238 -> 339 -> **401** and plateaued at 35-45% of budget, so episodes end by
+**termination** (trunk < 0.35 m, tilt > 30 deg, or Trunk contact), never by
+timeout. `termination_penalty` corroborates it: `mdp.is_terminated` excludes
+timeouts, and Isaac Lab normalises an episode's reward sum by `max_episode_length`,
+so one fall per episode reads as -200/1000 = **-0.2** against a measured -0.167
+(a running average over partly-complete episodes). Dividing by the *actual*
+episode length instead gives ~1195 steps, which contradicts the 401 — the 1000-step
+denominator is the one that reconciles. That is also why the velocity curriculum
+finished the run at **0 firings**: its gate reads the same survival ratio (0.40
+against a required 0.80).
+
+### Running now
+
+`aim_spark02`, tmux `k1_phasestride2`, **seed 43** (so it cannot be confused with
+the failed seed-42 run), 512 envs x 5000 iters, same stall watchdog. Gated across
+0.1-0.5 m/s before anything is distilled.
