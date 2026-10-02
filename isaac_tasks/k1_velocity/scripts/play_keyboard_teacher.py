@@ -125,12 +125,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     cmd_buf = env.unwrapped.command_manager.get_command("base_velocity")
 
     with torch.inference_mode():
+        last_print = 0.0
+        clock = 0.0
         while simulation_app.is_running():
             cmd = kb.update(dt)
             cmd_buf[:] = cmd.to(cmd_buf.device, cmd_buf.dtype)
             actions = policy({"policy": obs["policy"]})
             obs, rew, dones, _ = env.step(actions)
+            clock += dt
+            # Live telemetry: without it you cannot tell whether the policy is
+            # tracking the keys you are pressing, or drifting, or falling.
+            if clock - last_print >= 0.5:
+                last_print = clock
+                base = env.unwrapped.scene["robot"]
+                lin = base.data.root_lin_vel_w[0, :2]
+                ang = base.data.root_ang_vel_w[0, 2]
+                z = base.data.root_pos_w[0, 2]
+                err = (lin.cpu() - cmd[0].cpu()[:2]).norm().item()
+                print(
+                    f"[cmd] vx={cmd[0,0]:+.2f} vy={cmd[0,1]:+.2f} wz={cmd[0,2]:+.2f} | "
+                    f"[meas] vx={lin[0]:+.2f} vy={lin[1]:+.2f} wz={ang:+.2f} | "
+                    f"err={err:.2f} m/s  trunk_z={z:.3f} m",
+                    flush=True,
+                )
             if dones.any():
+                print("[teleop] episode reset", flush=True)
                 obs, _ = env.reset()
 
 
