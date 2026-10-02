@@ -50,6 +50,21 @@ parser.add_argument("--num_envs", type=int, default=1)
 # This script builds its own parser, so without add_app_launcher_args() there is
 # no --viz at all and no window ever opens. Default to kit so the keyboard lab
 # is a GUI by default; pass --viz none for a headless smoke.
+# Isaac Lab 3.0-EA forces headless unless a Kit visualizer is selected:
+#   "No visualizer was selected, so running in headless mode. To launch a
+#    visualizer app, pass '--viz <names>' (for example '--viz kit')."
+#
+# Two earlier attempts failed here. (1) set_defaults(viz=[...]) is silently
+# discarded: add_app_launcher_args registers the option as
+#     arg_group.add_argument("--visualizer", "--viz", ...)
+# so the DEST is "visualizer", not "viz", and the value is a list[str] from
+# _parse_visualizer_csv. (2) appending "--viz kit" to sys.argv is wiped by the
+# `sys.argv = [argv0] + hydra_args` reset below, and if it survives that, Hydra
+# re-parses argv and exits "unrecognized arguments: --viz".
+#
+# Setting the real dest through argparse is the only route that works, and it
+# costs nothing: hydra_args will not contain it, so Hydra never sees it.
+parser.set_defaults(visualizer=["kit"])  # pass --viz none for a headless smoke
 AppLauncher.add_app_launcher_args(parser)
 # parse_known_args + argv reset, matching play_record.py / play_keyboard_fixed.py.
 # Hydra re-parses sys.argv when @hydra_task_config is applied, and its parser
@@ -60,13 +75,6 @@ args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
 
 
-# --viz is consumed from sys.argv by AppLauncher itself, NOT from the argparse
-# namespace (add_app_launcher_args does not register it as a normal option), so
-# parser.set_defaults(viz=[...]) is silently ignored. Verified: with the default
-# set that way the namespace had no `viz` key at all and no window ever opened.
-# Inject into argv before the app is built, unless the caller already chose one.
-if not any(a == "--viz" or a.startswith("--viz=") for a in sys.argv):
-    sys.argv += ["--viz", "kit"]
 
 app_launcher = AppLauncher(args_cli=args_cli)
 simulation_app = app_launcher.app
