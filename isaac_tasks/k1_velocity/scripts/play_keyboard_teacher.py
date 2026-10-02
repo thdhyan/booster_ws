@@ -128,8 +128,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         last_print = 0.0
         clock = 0.0
         while simulation_app.is_running():
-            cmd = kb.update(dt)
-            cmd_buf[:] = cmd.to(cmd_buf.device, cmd_buf.dtype)
+            # keyboard_cmd.VelocityKeyboard.update() returns list[float]; the
+            # distilled scripts wrap it in a controller that hands back a tensor.
+            # Coerce here instead, once, rather than at each use site.
+            cmd = torch.as_tensor(kb.update(dt), dtype=cmd_buf.dtype,
+                                  device=cmd_buf.device).reshape(1, -1)[:, :3]
+            cmd_buf[:] = cmd
             actions = policy({"policy": obs["policy"]})
             obs, rew, dones, _ = env.step(actions)
             clock += dt
@@ -141,9 +145,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
                 lin = base.data.root_lin_vel_w[0, :2]
                 ang = base.data.root_ang_vel_w[0, 2]
                 z = base.data.root_pos_w[0, 2]
-                # keyboard_cmd returns a plain list, not a tensor -- coerce
-                # before comparing against the measured velocity.
-                want = torch.as_tensor(cmd, dtype=torch.float32).reshape(-1)[:3]
+                want = cmd[0].cpu()
                 err = (lin.cpu() - want[:2]).norm().item()
                 print(
                     f"[cmd] vx={want[0]:+.2f} vy={want[1]:+.2f} wz={want[2]:+.2f} | "
