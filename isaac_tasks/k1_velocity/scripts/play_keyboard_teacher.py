@@ -134,7 +134,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             cmd = torch.as_tensor(kb.update(dt), dtype=cmd_buf.dtype,
                                   device=cmd_buf.device).reshape(1, -1)[:, :3]
             cmd_buf[:] = cmd
-            actions = policy({"policy": obs["policy"]})
+            # Pass the WHOLE obs dict, not {"policy": ...}. This is a PPO policy
+            # whose obs_groups are {"actor": ["teacher"]}, so the model indexes
+            # obs["teacher"] itself -- handing it a dict keyed only by "policy"
+            # raises KeyError: 'teacher'. play_record.py does the same thing for
+            # the non-distillation branch (`return policy(obs)`).
+            actions = policy(obs)
             obs, rew, dones, _ = env.step(actions)
             clock += dt
             # Live telemetry: without it you cannot tell whether the policy is
