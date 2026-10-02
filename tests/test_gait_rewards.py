@@ -424,6 +424,55 @@ def test_phase_swing_pins_foot_order():
     )
 
 
+def test_phase_stride_prices_placement_not_rate():
+    """Regression: rate penalties cannot price a buzz that steps nowhere.
+
+    model_6321 measured across commanded speed -- cadence RISES as the command
+    falls, and stride collapses to 11 mm (smaller than the foot):
+
+    ====== ============ ==========
+    cmd     cadence     stride
+    ====== ============ ==========
+    0.1     8.48/s      0.011 m
+    0.2     7.83/s      0.022 m
+    0.3     7.57/s      0.037 m
+    0.5     5.43/s      0.096 m
+    ====== ============ ==========
+
+    So the gait terms must price where the swinging foot is, not how often it
+    moves. This pins both that the term exists and that it is wired, because a
+    defined-but-unwired reward is inert -- the failure this whole file exists to
+    prevent.
+    """
+    terms = _terms(_rewards_cfg(CFG))
+    assert "phase_stride" in terms, (
+        "phase_stride is not wired into RewardsCfg; a defined-but-unused reward "
+        "is inert, which is how the cadence/jerk terms were missed"
+    )
+    w = _const(_kw(terms["phase_stride"], "weight"))
+    assert w is not None and w < 0, f"phase_stride weight is {w}; it is a penalty"
+    params = _kw(terms["phase_stride"], "params")
+    assert params is not None
+    un = ast.unparse(params)
+    assert "target_stride" in un, "it must state the stride it is asking for"
+    assert "preserve_order=True" in un, (
+        "preserve_order defaults to False, so body_ids would follow the sensor's "
+        "order rather than [left, right] and the two feet would swap windows"
+    )
+
+    src = GAIT.read_text()
+    tree = ast.parse(src)
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "phase_synced_stride"
+    )
+    body = ast.unparse(fn)
+    assert "gait_clock.get_phase(" in body, (
+        "the stride must be judged against the same clock the policy observes, "
+        "or the two drift and the term is noise"
+    )
+
+
 def test_phase_swing_consumes_the_same_clock_as_the_observation():
     """The reward must read the clock through gait_clock, not a private copy.
 
