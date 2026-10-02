@@ -29,29 +29,43 @@ class K1VelocityRoughPlayEnvCfg(K1VelocityRoughEnvCfg):
 
 @configclass
 class K1VelocityTeacherOnlyObsCfg:
-    """Observation cfg exposing ONLY the privileged teacher group, as ``policy``.
+    """Expose the privileged teacher group under BOTH names, as independent objects.
 
-    Deliberately a single group rather than an alias
-    (``self.observations.policy = self.observations.teacher``). Aliasing the same
-    config object into two group slots makes Isaac Lab resolve it twice, and the
-    second pass sees a ``SceneEntityCfg`` that already carries ``joint_ids`` from
-    the first, so it raises::
+    Two consumers need the same 237 terms under different names:
+
+    * ``play_record.py`` / ``play_keyboard_fixed.py`` read ``obs["policy"]``;
+    * the teacher runner cfg declares ``obs_groups = {"actor": ["teacher", ...]}``
+      and raises ``Observation 'teacher' ... not found`` if the env does not
+      publish that name.
+
+    They must be **separate instances**, not one object aliased into two slots.
+    Aliasing makes Isaac Lab resolve the same ``SceneEntityCfg`` twice, and the
+    second pass sees ``joint_ids`` already written by the first::
 
         ValueError: Both 'joint_names' and 'joint_ids' are specified, and are
         not consistent.
 
-    Building a fresh group from the teacher's own terms avoids that entirely.
+    Two independent ``TeacherCfg()`` instances each own their own
+    ``SceneEntityCfg``, so each resolves cleanly. It costs one extra forward pass
+    over the privileged terms, which is irrelevant for a play run.
     """
 
     @configclass
     class PolicyCfg(ObsCfg.TeacherCfg):
         def __post_init__(self):
             super().__post_init__()
-            # Play config: no sensor noise on the privileged group either.
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    @configclass
+    class TeacherCfg(ObsCfg.TeacherCfg):
+        def __post_init__(self):
+            super().__post_init__()
             self.enable_corruption = False
             self.concatenate_terms = True
 
     policy: PolicyCfg = PolicyCfg()
+    teacher: TeacherCfg = TeacherCfg()
 
 
 @configclass
