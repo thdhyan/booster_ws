@@ -33,6 +33,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from isaaclab.app import AppLauncher  # noqa: E402
+
 parser = argparse.ArgumentParser(description="Keyboard teleop for a K1 teacher checkpoint.")
 # The zz-bw container wrapper (`run_k1_train.sh`) always appends --headless.
 # Strip it here so one command line works both headless (smoke / CI) and with a
@@ -42,7 +44,14 @@ if "--headless" in sys.argv:
 parser.add_argument("--task", default="Isaac-Velocity-Rough-K1-Teacher-Play-v0")
 parser.add_argument("--checkpoint", required=True)
 parser.add_argument("--num_envs", type=int, default=1)
-parser.add_argument("--device", default=None)
+# Isaac Lab 3.0-EA REQUIRES a visualizer selection or it silently forces headless:
+#   "No visualizer was selected, so running in headless mode. To launch a
+#    visualizer app, pass '--viz <names>' (for example '--viz kit')."
+# This script builds its own parser, so without add_app_launcher_args() there is
+# no --viz at all and no window ever opens. Default to kit so the keyboard lab
+# is a GUI by default; pass --viz none for a headless smoke.
+AppLauncher.add_app_launcher_args(parser)
+parser.set_defaults(viz=["kit"])
 # parse_known_args + argv reset, matching play_record.py / play_keyboard_fixed.py.
 # Hydra re-parses sys.argv when @hydra_task_config is applied, and its parser
 # knows nothing about --task/--checkpoint/--num_envs, so leaving them in argv
@@ -51,7 +60,6 @@ parser.add_argument("--device", default=None)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
 
-from isaaclab.app import AppLauncher  # noqa: E402
 
 app_launcher = AppLauncher(args_cli=args_cli)
 simulation_app = app_launcher.app
