@@ -42,6 +42,12 @@ cli_args = parser.parse_args()
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
+# The zz-bw container wrapper (`run_k1_train.sh`) always appends --headless.
+# Accept and ignore it here so the same command line works headless (smoke /
+# CI) and with a window (actual keyboard use, which needs a display).
+if "--headless" in sys.argv:
+    sys.argv.remove("--headless")
+
 app_launcher = AppLauncher(args_cli=cli_args)
 simulation_app = app_launcher.app
 
