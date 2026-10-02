@@ -86,13 +86,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     agent_cfg.max_iterations = 1
     agent_cfg_dict = agent_cfg.to_dict()
-    # rsl_rl >= 4 renamed these; strip so serialization matches (same shim as
-    # train.py, which hit the identical ValueError).
-    for key in ("stochastic", "init_noise_std", "noise_std_type", "state_dependent_std"):
-        agent_cfg_dict.pop(key, None)
-    for key in ("student", "teacher"):
-        if isinstance(agent_cfg_dict.get(key), dict):
-            agent_cfg_dict[key].pop(key, None)
+    # rsl_rl 5.x dropped these from MLPModel but isaaclab_rl 3.0.0b2 still
+    # serializes them, so strip them under the model sub-dicts the runner reads.
+    # Must be ("actor", "critic"): stripping "student"/"teacher" leaves them in
+    # place and MLPModel.__init__ rejects `stochastic`.
+    legacy_keys = ("stochastic", "init_noise_std", "noise_std_type", "state_dependent_std")
+    for model_key in ("actor", "critic"):
+        if isinstance(agent_cfg_dict.get(model_key), dict):
+            for key in legacy_keys:
+                agent_cfg_dict[model_key].pop(key, None)
 
     runner = OnPolicyRunner(env, agent_cfg_dict, log_dir="/tmp/k1_play_keyboard_teacher",
                             device=agent_cfg.device)
