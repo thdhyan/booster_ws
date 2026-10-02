@@ -1,0 +1,388 @@
+{
+ "T1": {
+  "termination_penalty": {
+   "weight": -100.0,
+   "std": null,
+   "func": "is_terminated"
+  },
+  "track_lin_vel_xy_exp": {
+   "weight": 5.0,
+   "std": 0.2,
+   "func": "track_lin_vel_xy_exp"
+  },
+  "track_ang_vel": {
+   "weight": 5.0,
+   "std": 0.2,
+   "func": "track_ang_vel_z_exp"
+  },
+  "base_height": {
+   "weight": 2.0,
+   "std": 0.1,
+   "func": "base_height_exp"
+  },
+  "orientation": {
+   "weight": -5.0,
+   "std": null,
+   "func": "flat_orientation_l2"
+  },
+  "torques": {
+   "weight": -0.0001,
+   "std": null,
+   "func": "joint_torques_l2"
+  },
+  "ankle_torques": {
+   "weight": -0.0001,
+   "std": null,
+   "func": "joint_torques_l2"
+  },
+  "ankle_roll_torques": {
+   "weight": -0.002,
+   "std": null,
+   "func": "joint_torques_l2"
+  },
+  "lin_vel_z": {
+   "weight": -0.5,
+   "std": null,
+   "func": "lin_vel_z_l2"
+  },
+  "ang_vel_xy": {
+   "weight": -0.5,
+   "std": null,
+   "func": "ang_vel_xy_l2"
+  },
+  "dof_vel": {
+   "weight": -0.0002,
+   "std": null,
+   "func": "joint_vel_l2"
+  },
+  "action_rate": {
+   "weight": -0.5,
+   "std": null,
+   "func": "action_rate_l2"
+  },
+  "action_rate_rate": {
+   "weight": -0.05,
+   "std": null,
+   "func": "action_rate_rate_l2"
+  },
+  "dof_pos_limits": {
+   "weight": -1.0,
+   "std": null,
+   "func": "joint_pos_limits"
+  },
+  "dof_vel_limits": {
+   "weight": -1.0,
+   "std": null,
+   "func": "joint_vel_limits"
+  },
+  "torque_limits": {
+   "weight": -0.01,
+   "std": null,
+   "func": "applied_torque_limits"
+  },
+  "collision": {
+   "weight": -0.2,
+   "std": null,
+   "func": "undesired_contacts"
+  },
+  "feet_slip": {
+   "weight": -0.1,
+   "std": null,
+   "func": "feet_slip"
+  },
+  "feet_roll": {
+   "weight": -0.1,
+   "std": null,
+   "func": "feet_roll_l2"
+  },
+  "feet_yaw_diff": {
+   "weight": -0.2,
+   "std": null,
+   "func": "feet_yaw_diff_l2"
+  },
+  "feet_yaw_mean": {
+   "weight": -4.0,
+   "std": null,
+   "func": "feet_yaw_mean_vs_base"
+  },
+  "root_acc": {
+   "weight": -2e-05,
+   "std": null,
+   "func": "body_acc_l2"
+  },
+  "feet_distance": {
+   "weight": -0.2,
+   "std": null,
+   "func": "feet_distance_from_ref"
+  }
+ },
+ "G1": {
+  "termination_penalty": {
+   "weight": -200.0,
+   "std": null,
+   "func": "is_terminated"
+  },
+  "track_lin_vel_xy_exp": {
+   "weight": 10.0,
+   "std": 0.5,
+   "func": "track_lin_vel_xy_yaw_frame_exp"
+  },
+  "track_ang_vel_z_exp": {
+   "weight": 3.0,
+   "std": 0.5,
+   "func": "track_ang_vel_z_world_exp"
+  },
+  "track_base_height_exp_smooth": {
+   "weight": 2.0,
+   "std": 0.05,
+   "func": "track_base_height_exp_smooth"
+  },
+  "base_height_in_threshold": {
+   "weight": 0.1,
+   "std": null,
+   "func": "base_height_in_threshold"
+  },
+  "stand_with_both_feet_if_null_cmd": {
+   "weight": 10.0,
+   "std": null,
+   "func": "stand_with_both_feet_if_null_cmd"
+  },
+  "equal_foot_force_if_null_cmd": {
+   "weight": 1.0,
+   "std": null,
+   "func": "equal_foot_force_if_null_cmd"
+  },
+  "dof_pos_limits": {
+   "weight": -1.0,
+   "std": null,
+   "func": "joint_pos_limits"
+  },
+  "dof_vel_limits": {
+   "weight": -0.1,
+   "std": null,
+   "func": "joint_vel_limits"
+  },
+  "dof_vel_l2": {
+   "weight": -0.001,
+   "std": null,
+   "func": "joint_vel_l2"
+  },
+  "torque_limits": {
+   "weight": -0.01,
+   "std": null,
+   "func": "applied_torque_limits"
+  },
+  "no_undersired_base_velocity_exp": {
+   "weight": 1.0,
+   "std": 0.1,
+   "func": "no_undersired_base_velocity_exp"
+  },
+  "dof_torques_l2": {
+   "weight": -2e-05,
+   "std": null,
+   "func": "joint_torques_l2"
+  },
+  "dof_acc_l2": {
+   "weight": -2.5e-07,
+   "std": null,
+   "func": "joint_acc_l2"
+  },
+  "action_rate": {
+   "weight": -0.01,
+   "std": null,
+   "func": "action_rate_l2"
+  },
+  "feet_slide": {
+   "weight": -1.0,
+   "std": null,
+   "func": "feet_slide"
+  },
+  "jumping_penalty": {
+   "weight": -10.0,
+   "std": null,
+   "func": "jumping"
+  },
+  "impact_velocity": {
+   "weight": -0.5,
+   "std": null,
+   "func": "impact_velocity"
+  },
+  "flat_orientation": {
+   "weight": -1.0,
+   "std": null,
+   "func": "flat_orientation_l2"
+  },
+  "flat_orientation_if_null_cmd": {
+   "weight": -4.0,
+   "std": null,
+   "func": "flat_orientation_if_null_cmd"
+  },
+  "relax_if_null_cmd": {
+   "weight": -0.001,
+   "std": null,
+   "func": "relax_if_null_cmd"
+  },
+  "hip_pos_pen": {
+   "weight": -1.0,
+   "std": null,
+   "func": "joint_deviation_l2"
+  }
+ },
+ "K1": {
+  "track_lin_vel_xy_exp": {
+   "weight": 10.0,
+   "std": 0.15,
+   "func": "track_lin_vel_xy_exp_weighted"
+  },
+  "track_ang_vel_z_exp": {
+   "weight": 5.0,
+   "std": 0.25,
+   "func": "track_ang_vel_z_world_exp_weighted"
+  },
+  "base_height": {
+   "weight": 2.0,
+   "std": 0.1,
+   "func": "base_height_exp"
+  },
+  "flat_orientation_l2": {
+   "weight": -5.0,
+   "std": null,
+   "func": "flat_orientation_l2"
+  },
+  "termination_penalty": {
+   "weight": -200.0,
+   "std": null,
+   "func": "is_terminated"
+  },
+  "feet_slide": {
+   "weight": -0.25,
+   "std": null,
+   "func": "feet_slide"
+  },
+  "feet_roll": {
+   "weight": -0.1,
+   "std": null,
+   "func": "feet_roll_l2"
+  },
+  "feet_yaw_diff": {
+   "weight": -0.2,
+   "std": null,
+   "func": "feet_yaw_diff_l2"
+  },
+  "feet_yaw_mean": {
+   "weight": -4.0,
+   "std": null,
+   "func": "feet_yaw_mean_vs_base"
+  },
+  "feet_distance": {
+   "weight": -0.2,
+   "std": null,
+   "func": "feet_distance_from_ref"
+  },
+  "ankle_torques": {
+   "weight": -0.0001,
+   "std": null,
+   "func": "joint_torques_l2"
+  },
+  "dof_vel": {
+   "weight": -0.0002,
+   "std": null,
+   "func": "joint_vel_l2"
+  },
+  "jumping": {
+   "weight": -0.5,
+   "std": null,
+   "func": "jumping"
+  },
+  "lin_vel_z_l2": {
+   "weight": -0.5,
+   "std": null,
+   "func": "lin_vel_z_l2"
+  },
+  "ang_vel_xy_l2": {
+   "weight": -0.5,
+   "std": null,
+   "func": "ang_vel_xy_l2"
+  },
+  "action_rate_l2": {
+   "weight": -2.0,
+   "std": null,
+   "func": "action_rate_l2"
+  },
+  "action_jerk_l2": {
+   "weight": -0.5,
+   "std": null,
+   "func": "action_jerk_l2"
+  },
+  "dof_acc_l2": {
+   "weight": -2.5e-07,
+   "std": null,
+   "func": "joint_acc_l2"
+  },
+  "dof_torques_l2": {
+   "weight": -0.0001,
+   "std": null,
+   "func": "joint_torques_l2"
+  },
+  "ankle_roll_torques": {
+   "weight": -0.002,
+   "std": null,
+   "func": "joint_torques_l2"
+  },
+  "dof_pos_limits": {
+   "weight": -1.0,
+   "std": null,
+   "func": "joint_pos_limits"
+  },
+  "dof_vel_limits": {
+   "weight": -1.0,
+   "std": null,
+   "func": "joint_vel_limits"
+  },
+  "torque_limits": {
+   "weight": -0.01,
+   "std": null,
+   "func": "applied_torque_limits"
+  },
+  "body_acc_l2": {
+   "weight": -2e-05,
+   "std": null,
+   "func": "body_lin_acc_l2"
+  },
+  "joint_deviation_arms": {
+   "weight": -0.1,
+   "std": null,
+   "func": "joint_deviation_l1"
+  },
+  "gait_cadence": {
+   "weight": -1.0,
+   "std": null,
+   "func": "gait_cadence_penalty"
+  },
+  "phase_swing": {
+   "weight": -2.0,
+   "std": null,
+   "func": "phase_synced_swing"
+  },
+  "feet_clearance": {
+   "weight": -8.0,
+   "std": null,
+   "func": "feet_clearance"
+  },
+  "feet_alternation": {
+   "weight": -2.0,
+   "std": null,
+   "func": "feet_alternation_penalty"
+  },
+  "stride_length": {
+   "weight": -6.0,
+   "std": null,
+   "func": "stride_length_penalty"
+  },
+  "undesired_contacts": {
+   "weight": -1.0,
+   "std": null,
+   "func": "undesired_contacts"
+  }
+ }
+}
