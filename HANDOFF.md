@@ -1066,3 +1066,86 @@ the 1M run so that run's result stays attributable.
 `ea7179b`. `test_action_rate_was_strengthened` was **rewritten, not deleted**: it
 correctly failed on the new light static weight, so it now asserts the
 static/ramp **pair** — a static -2.0 regression or a missing ramp both fail.
+
+---
+
+## 📌 SESSION UPDATE — 2026-10-01/02, latest: phase-locked STRIDE + command-coupled clock + video fix
+
+Supersedes the `2ddec51` ramp entry below. **Read this section first.**
+
+### Why: the 5000-iteration run failed 8/8 and it was structural
+
+`p2_gaitfix_5k`: cadence **4.85** steps/s (gate wants 1.2-4.0), jerk **0.114**,
+8/8 fail. The audited weights did **not** fix it, and the reason is not a weight:
+
+1. **A cadence *rate* penalty is bistable.** 0.4 steps/s (standing) and 11 steps/s
+   (chatter) are both "far from 2.0"; the policy takes whichever is cheaper given
+   tracking pays +1.28/step against ~0.7 of gait penalty. No weight fixes an
+   objective with no preferred basin.
+2. **`phase_synced_swing` locked only CONTACT** — a binary predicate a 4 cm twitch
+   satisfies as well as a real stride. That it also failed is the evidence the
+   contact channel is too weak.
+3. **The clock was FIXED at 1.001 Hz** regardless of command, so any position
+   reference would step on our schedule rather than the command's. The measured
+   two-mode split shows it: chattering envs moved ~0.44 m/s effective
+   (11.5 steps/s × 4 cm) — the top of the command range — while under-steppers sat
+   near zero. Chatter was the policy's solution to "go fast".
+
+AGILE avoids (3) by exposing `gait_process` **and `gait_frequency`** from its
+command term. We had the phase without the frequency coupling.
+
+### Landed in `f941d15` / `d22cf3b`
+
+- **`phase_locked_stride`** (term #24, weight −4.0): fore-aft **position** against a
+  sinusoid in the clock's phase, feet antiphase, yaw-aligned forward axis,
+  amplitude scaled by the clock's own frequency, `preserve_order=True` so index 0
+  is the left foot.
+- **`gait_clock` follows the command**: `2.0 Hz per m/s`, clamped to
+  `[0.6, 2.0]` cycles/s so steps/s stays inside the gate band, EMA-smoothed
+  (`COMMAND_SMOOTHING=0.15`) so an 8-12 s resample does not step the reference
+  mid-stride, reset envs jump straight to target. `MIN_HZ` keeps a standing
+  reference — at 0 Hz the phase freezes and the term goes uninformative exactly
+  when the policy is least confident.
+- **`upright_threshold` 0.80 → 0.10 on all 7 ramps.** This was **my error** at
+  `2ddec51`: measured upright ratio is ~0.02-0.15 (mean episode length 20-24 steps
+  of 1000), so the ramp would **never have fired** and all seven gait penalties
+  would have sat at 1/5 strength for the whole run — entrenching the shuffle.
+- **Video**: `--video_interval` 2000 → **1000**; recording now opt-in behind
+  `--video_during_training`.
+
+### VIDEO WAS THE 25× — and the launcher hides it
+
+| | collection time |
+|---|---|
+| with `--video`, 4096 envs | **21 → 23 s/iter** (degrading over ~30 iters) |
+| without | **0.85-1.14 s/iter** |
+
+`render_mode="rgb_array"` makes the renderer capture **every step**, including the
+~990 of every 1000 that no clip covers. `python.sh` returns **rc=0 on crash** —
+the stride run's first attempt died with a shape `RuntimeError` at the first
+reward step and still exited 0. **Gate on log markers, never rc.**
+
+### Bug that cost a run (`d22cf3b`)
+
+`phase_locked_stride` built a 2-component forward axis against 3-component
+positions → `RuntimeError: The size of tensor a (3) must match the size of tensor
+b (2)` on step 1. Fixed to `(x, y, 0)`; test added for the shape specifically.
+
+### Running now
+
+`k1_stride_1m` on zz-bw **GPU 1**, 42 000 iters × 4096 envs, log
+`/export/scratch/thakk100/k1/stride_1m.log`. Verified at iteration 12/42000:
+0 tracebacks, `phase_locked_stride` firing (−0.0046/step), ~12 s/iter, 6.5 GB, 4 %
+util. ETA at 12 s/iter ≈ **14 days** — the box is loaded (avg 58, 23 users) and SSH
+resets constantly; wrap remote calls in a retry loop, and use
+`ssh -o ClearAllForwardings=yes zz-bw`.
+
+**Do not scale further until `gait_gate.py` passes at 3 000 iterations.** The 4 m/s
+curriculum still has never fired (its gate needs upright ≥0.80 sustained, which we
+have never reached) — that speed goal remains untested.
+
+### Base height (squat/jump/lift)
+
+`docs/k1_base_height_parameter.md`. Blocked on: `jumping` (−0.5) currently
+*forbids* jumping; `base_height` (+2.0) pins 0.57 m and fights squatting;
+AGILE's `min_walk_height`/`squatting_threshold` already solve the second.
