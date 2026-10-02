@@ -231,6 +231,22 @@ def test_weight_ramp_refuses_a_degenerate_range():
     assert "hi > lo" in src or "hi > lo:" in src, "degenerate range must be rejected"
 
 
+def _load_agile_module():
+    """Import ``agile_rewards`` by file path, bypassing the package ``__init__``.
+
+    ``k1_velocity.tasks.velocity.__init__`` registers every gym task, and that
+    global registration breaks unrelated tests later in the suite (they then
+    resolve a task config through a stale import). Loading the one module we need
+    keeps this test's side effects to the module under test.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_agile_under_test", AGILE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_degenerate_range_is_only_tolerated_when_the_caller_opts_in():
     """A pinned axis must not crash play, but must still crash training.
 
@@ -244,15 +260,9 @@ def test_degenerate_range_is_only_tolerated_when_the_caller_opts_in():
     The opt-in must be narrow: with the default the guard still raises, because a
     silent collapse during training is exactly the bug it was written to catch.
     """
-    import sys
-
     import torch
 
-    src_root = str(VEL.parents[2])
-    if src_root not in sys.path:
-        sys.path.insert(0, src_root)
-    from k1_velocity.tasks.velocity import agile_rewards
-
+    agile_rewards = _load_agile_module()
     mag = torch.tensor([0.0, 0.5, 2.0])
     # Opted in (play): a zero-width range yields the floor weight, not a crash.
     out = agile_rewards._weight_from_magnitude(mag, 0.1, 0.0, require_span=False)
@@ -267,32 +277,35 @@ def test_degenerate_range_is_only_tolerated_when_the_caller_opts_in():
 def test_play_configs_opt_out_of_the_range_span_requirement():
     """Both play cfgs that keep rewards must set ``require_span=False``.
 
-    The teacher play cfg replaces RewardsCfg wholesale, so it never hit the bug --
-    which is exactly why this went unnoticed. The Rough and Distill play cfgs keep
-    the training rewards and pin the command, so both need the opt-out, and a new
-    play cfg that keeps rewards will need it too.
+    The teacher play cfg replaces RewardsCfg wholesale, so it never evaluated a
+    tracking term and never hit the bug -- which is exactly why this went
+    unnoticed. The Rough and Distill play cfgs keep the training rewards and pin
+    the command, so both need the opt-out, and any new play cfg that keeps rewards
+    will need it too.
+
+    Checked on the source rather than by instantiating the cfgs: building a cfg
+    pulls in the whole task module tree, and this file's tests are AST + source by
+    design so they run with no GPU.
     """
-    import sys
-
-    if str(VEL.parents[2]) not in sys.path:
-        sys.path.insert(0, str(VEL.parents[2]))
-
-    weighted = ("track_lin_vel_xy_exp", "track_ang_vel_z_exp")
-    for mod_name, cls_name in (
-        ("k1_velocity.tasks.velocity.velocity_play_cfg", "K1VelocityRoughPlayEnvCfg"),
-        ("k1_velocity.tasks.velocity.velocity_play_distill", "K1VelocityDistillPlayEnvCfg"),
-    ):
-        mod = __import__(mod_name, fromlist=[cls_name])
-        cls = getattr(mod, cls_name)
-        cfg = cls()
-        for term_name in weighted:
-            term = getattr(cfg.rewards, term_name)
-            assert term is not None, f"{cls_name} no longer defines {term_name}"
-            assert term.params.get("require_span") is False, (
-                f"{cls_name}.rewards.{term_name} must set require_span=False: a "
-                "fixed command pins the unused axes to zero, so its ramp has no "
-                "span and the term raises on the first reward step without this"
+    for path in (VEL / "velocity_play_cfg.py", VEL / "velocity_play_distill.py"):
+        tree = ast.parse(path.read_text())
+        post_inits = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "__post_init__"
+        ]
+        assert post_inits, f"{path.name} has no __post_init__ to configure from"
+        body = "\n".join(ast.unparse(n) for n in post_inits)
+        for term_name in ("track_lin_vel_xy_exp", "track_ang_vel_z_exp"):
+            assert term_name in body, (
+                f"{path.name} no longer references {term_name}; if the weighted "
+                "tracking terms moved, re-check whether it still needs the opt-out"
             )
+        assert '"require_span"] = False' in body.replace("'", '"'), (
+            f"{path.name} must set params[\"require_span\"] = False on the weighted "
+            "tracking terms: a fixed command pins the unused axes to zero, so the "
+            "ramp has no span and the term raises on the first reward step"
+        )
 
 
 def test_min_vel_norm_is_a_parameter_and_never_zeroes_commands():
