@@ -41,6 +41,7 @@ import isaaclab.terrains as terrain_gen
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
+from . import agile_rewards as agile
 from . import gait_clock
 from . import gait_rewards as gait
 from . import velocity_curriculum
@@ -387,17 +388,24 @@ class RewardsCfg:
        deg cannot recover.
     """
 
-    # --- Task: velocity tracking (AGILE weight 5.0, std 0.2) ---
+    # --- Task: velocity tracking (AGILE T1 weight 5.0, std 0.2) ---
+    # AGILE-parity switch (2026-10-01): the *weighted* tracker, 1.0x at rest to
+    # 2.0x at the top of the commanded range. The plain exponential this
+    # replaces returned ~the same credit for 0.09 m/s as for 0.5 m/s, which is
+    # the measured failure: the last retrain walked 0.09-0.31 m/s against a
+    # 0.5 m/s command and was paid for the shortfall. Weight 10.0 (not AGILE's
+    # 5.0) is kept because it was raised from 5.0 during the earlier audit when
+    # the unweighted term proved too flat to earn a gradient; the 2.0x speed
+    # multiplier now supplies the extra pull that raise was substituting for.
+    # std stays at the audited 0.15, not AGILE's 0.2 -- that narrowing was the
+    # other half of the same fix.
     track_lin_vel_xy_exp = RewTerm(
-        func=mdp.track_lin_vel_xy_yaw_frame_exp,
+        func=agile.track_lin_vel_xy_exp_weighted,
         weight=10.0,
-        # std was 0.25, which is nearly flat near the optimum: a 0.14 m/s tracking
-        # error cost almost nothing. The policy settled at 69% of commanded speed
-        # and was paid for it. Sharpened to 0.15 so the error actually hurts.
         params={"command_name": "base_velocity", "std": 0.15},
     )
     track_ang_vel_z_exp = RewTerm(
-        func=mdp.track_ang_vel_z_world_exp,
+        func=agile.track_ang_vel_z_world_exp_weighted,
         weight=5.0,
         params={"command_name": "base_velocity", "std": 0.25},
     )
@@ -459,6 +467,38 @@ class RewardsCfg:
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
             "ref_distance": 0.2,
+        },
+    )
+
+    # AGILE-parity additions (2026-10-01). Weights are AGILE T1's verbatim --
+    # agile/rl_env/tasks/locomotion/t1/velocity_env_cfg.py. These three were the
+    # only H2/T1 terms this config was missing; see docs/agile_parity_zzbw.md.
+    # `ankle_torques` is NOT a duplicate of `ankle_roll_torques` below: that one
+    # is 20x heavier and roll-only, so it covers a different failure (a weak
+    # lateral axis letting the foot twist) rather than repeating it.
+    ankle_torques = RewTerm(
+        func=mdp.joint_torques_l2,
+        weight=-1.0e-4,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["(?i).*_Ankle_.*"])},
+    )
+    # All joints, matching AGILE T1's `SceneEntityCfg("robot")` -- this is a
+    # whole-body joint-speed penalty, not a leg-only one.
+    dof_vel = RewTerm(
+        func=mdp.joint_vel_l2,
+        weight=-2.0e-4,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+    # Both feet off the ground at once. Threshold 1.0 N matches AGILE T1's
+    # `feet_slip` contact threshold; the K1 weighs ~24 kg, so 1 N is a firm
+    # criterion for "no longer supporting load" rather than a noisy near-zero.
+    jumping = RewTerm(
+        func=agile.jumping,
+        weight=-0.5,
+        params={
+            "threshold": 1.0,
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces", body_names=["left_foot_link", "right_foot_link"]
+            ),
         },
     )
 
