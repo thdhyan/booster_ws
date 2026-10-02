@@ -141,9 +141,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
                 lin = base.data.root_lin_vel_w[0, :2]
                 ang = base.data.root_ang_vel_w[0, 2]
                 z = base.data.root_pos_w[0, 2]
-                err = (lin.cpu() - cmd[0].cpu()[:2]).norm().item()
+                # keyboard_cmd returns a plain list, not a tensor -- coerce
+                # before comparing against the measured velocity.
+                want = torch.as_tensor(cmd, dtype=torch.float32).reshape(-1)[:3]
+                err = (lin.cpu() - want[:2]).norm().item()
                 print(
-                    f"[cmd] vx={cmd[0,0]:+.2f} vy={cmd[0,1]:+.2f} wz={cmd[0,2]:+.2f} | "
+                    f"[cmd] vx={want[0]:+.2f} vy={want[1]:+.2f} wz={want[2]:+.2f} | "
                     f"[meas] vx={lin[0]:+.2f} vy={lin[1]:+.2f} wz={ang:+.2f} | "
                     f"err={err:.2f} m/s  trunk_z={z:.3f} m",
                     flush=True,
