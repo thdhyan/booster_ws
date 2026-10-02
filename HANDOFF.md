@@ -1149,3 +1149,84 @@ have never reached) — that speed goal remains untested.
 `docs/k1_base_height_parameter.md`. Blocked on: `jumping` (−0.5) currently
 *forbids* jumping; `base_height` (+2.0) pins 0.57 m and fights squatting;
 AGILE's `min_walk_height`/`squatting_threshold` already solve the second.
+
+---
+
+## 📌 SESSION UPDATE — 2026-10-02, ROOT CAUSE: the actuator gains were 4-5x wrong
+
+**This supersedes every reward-tuning section above it. Four consecutive 8/8
+gait-gate failures were caused by the ankle gains, not by the rewards.**
+
+### The bug
+
+Our fork of `booster_train` had dropped `armature_ratio=(1.4, 0.4)` from both K1
+ankle joints, silently falling back to the wrapper's class default `(2.0, 2.0)`.
+The K1 ankle is a 4-bar parallel linkage — pitch and roll axes have genuinely
+different effective inertia, which is exactly what that per-axis ratio encodes.
+Dropping it is silent: the config loads, runs, and is simply wrong.
+
+On top of that, `velocity_env_cfg` hand-overrode every leg and ankle gain
+(hips/knee → 100.0, ankle pitch → 100.0), reasoning that the published 4 Hz
+natural frequency was "too soft to stand" and that AGILE's T1 runs 100.
+
+| joint | broken fork | **upstream** | what we forced |
+|---|---|---|---|
+| ankle pitch | 35.69 | **24.98** | 100.00 → **4x the real robot** |
+| ankle roll | 35.69 | **7.14** | 35.69 → **5x the real robot** |
+
+Source: `BoosterRobotics/booster_train@main`,
+`source/booster_train/booster_train/assets/robots/booster_k1.py`. Derived via
+`stiffness = armature * (2*pi*f)^2`, E4310 armature `0.0282528`, f = 4 Hz.
+
+**All overrides removed.** The articulation is now used exactly as published. A
+policy cannot be taught to walk on gains 4x the robot's — which is why every
+reward experiment kept failing.
+
+### Verified on the robot's own gains (AGILE Stage 1 gate)
+
+`sweep_standing_gains.py`, zero action, 300 steps:
+
+```
+  mult  stiff@start     z@0   z@min   z@end  verdict
+   1.0         32.5   0.587   0.522   0.559  STANDS
+```
+
+**The K1 stands on the manufacturer's gains.** That gate had never been passed
+before this session.
+
+### Training effect, measured
+
+| | before (broken gains) | after (upstream) |
+|---|---|---|
+| mean episode length | **6 steps** / 1000 | **34 steps** / 1000 (**5.7x**) |
+| base_orientation terminations | 96% | 85% |
+| upright ratio | 0.006 | 0.034 |
+
+### Ramp gate — third and final fix
+
+Two hand-picked gates (0.80, then 0.10) were both unreachable against a measured
+0.006-0.024 ratio, silently pinning all seven gait penalties at 1/5 strength.
+Now: baseline sampled **once**, gate = `baseline + 0.05` (additive).
+Two multiplicative forms were tried first and **both were caught by tests, not by
+reading the number** — instantaneous `baseline*1.25` (gate rises with the
+policy, never overtaken) and fixed `baseline*1.25` (gate starts *above* where the
+robot already is). The noise floor is capped by the baseline, since a floor above
+the ratio is itself an unreachable gate.
+
+### Running now
+
+`k1_gains`, zz-bw **GPU 1**, **6322 iterations × 8192 envs**, log
+`/export/scratch/thakk100/k1/gains_48h.log`. Smoke: 0 tracebacks, 26.1 s/iter.
+Verified at iteration 13: 0 tracebacks, `phase_locked_stride` firing.
+
+**Gate at ~1000 / ~3000 / ~6000 iterations with `gait_gate.py`.** Realistic
+expectation: the gains fix is necessary but not sufficient — 34 steps of 1000 is
+standing, not walking.
+
+### Video cost, for the record
+
+`--video` cost **~25x** (21-23 s/iter vs 0.85-1.14) because
+`render_mode="rgb_array"` captures every step, not just the ~200 a clip covers.
+Opt-in behind `--video_during_training` since `f941d15`. And `python.sh` returns
+**rc=0 on crash** — a run that died at the first reward step still exited clean.
+Gate on log markers, never rc.
