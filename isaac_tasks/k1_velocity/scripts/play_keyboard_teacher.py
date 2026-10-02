@@ -50,8 +50,14 @@ parser.add_argument("--num_envs", type=int, default=1)
 # This script builds its own parser, so without add_app_launcher_args() there is
 # no --viz at all and no window ever opens. Default to kit so the keyboard lab
 # is a GUI by default; pass --viz none for a headless smoke.
+# --viz is consumed from sys.argv by AppLauncher itself, NOT from the argparse
+# namespace (add_app_launcher_args does not register it as a normal option), so
+# parser.set_defaults(viz=[...]) is silently ignored. Verified: with the default
+# set that way the namespace had no `viz` key at all and no window ever opened.
+# Inject into argv before the app is built, unless the caller already chose one.
+if not any(a == "--viz" or a.startswith("--viz=") for a in sys.argv):
+    sys.argv += ["--viz", "kit"]
 AppLauncher.add_app_launcher_args(parser)
-parser.set_defaults(viz=["kit"])
 # parse_known_args + argv reset, matching play_record.py / play_keyboard_fixed.py.
 # Hydra re-parses sys.argv when @hydra_task_config is applied, and its parser
 # knows nothing about --task/--checkpoint/--num_envs, so leaving them in argv
