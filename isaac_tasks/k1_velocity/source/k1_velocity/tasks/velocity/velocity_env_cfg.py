@@ -80,62 +80,38 @@ K1_ARM_HEAD_JOINTS = [
 # upright target for the base_height reward and as the fall-termination reference.
 K1_TRUNK_HEIGHT = 0.57
 
-# K1 articulation — imported from booster_train (real actuators, K1_22dof.urdf, init_pos z=0.57)
+# K1 articulation — imported from booster_train (real actuators, K1_22dof.urdf,
+# init_pos z=0.57).
 #
-# Leg-gain override for locomotion training.  booster_train derives
-# stiffness = armature * (2*pi*f)^2 with natural_freq = 4 Hz, which yields hip
-# gains of only 17.8-30.2 and knee 60.4.  Measured consequence (reward probe,
-# zero action): the trunk sinks monotonically from 0.589 m to 0.076 m in 2.4 s --
-# the robot cannot hold itself up, so no reward can produce a walk.  AGILE's
-# Booster T1, a biped validated for standing and velocity tracking with sim2real,
-# runs stiffness 100 on hips and knee.
+# ACTUATOR GAINS ARE NOW THE MANUFACTURER'S, NOT HAND-TUNED.
 #
-# These gains are SIM-ONLY and deliberately do not live in booster.py: the
-# shared hardware model keeps its real-robot values, and Track B is unaffected.
-K1_P2_LEG_STIFFNESS = {
-    ".*_Hip_Pitch": 100.0,
-    ".*_Hip_Roll": 100.0,
-    ".*_Hip_Yaw": 60.0,
-    ".*_Knee_Pitch": 100.0,
-}
-K1_P2_LEG_DAMPING = {
-    ".*_Hip_Pitch": 5.0,
-    ".*_Hip_Roll": 5.0,
-    ".*_Hip_Yaw": 3.0,
-    ".*_Knee_Pitch": 5.0,
-}
-# Ankle gains (gait lever 1 of 3) -- same argument as the leg override above,
-# applied one group further down. The stock ``feet`` group is two
-# ``BoosterK1AnkleParaWrapperCfg`` around the E4310 (the hip-yaw motor), solved
-# at natural_freq 4 Hz / damping_ratio 1.5 and then divided by the 4-bar
-# armature ratio squared, which lands on 35.7 Nm/rad -- a third of the 100
-# Nm/rad the hip pitch and knee run at. Measured consequence (GAIT_GATE on
-# p2_gaitshuffle_2999: stride 0.03 m, cadence 8.25 steps/s, 8/8 fail): the foot
-# twists under the stance moment instead of holding a rigid lever, the sole
-# slides, and the policy answers with shuffling.
+# This block previously overrode every leg and ankle gain (hips/knee to 100.0,
+# ankle pitch to 100.0) on the reasoning that booster_train's 4 Hz natural
+# frequency was "too soft to stand" and that AGILE's T1 runs 100. That inference
+# was wrong, and it was built on a bug in our own fork of booster_train:
 #
-#   .*_Ankle_Pitch -> 100.0: the sagittal push-off axis, raised to the same
-#       authority as hip pitch / knee. damping 5.0 matches the leg override
-#       (~1.05x critical for the wrapper's 0.0565 kg.m^2 armature).
-#   .*_Ankle_Roll  -> held at the wrapper-derived 35.69 (damping 4.26). It is a
-#       small-range lateral axis under a 38.3 Nm limit, roll deviation is ~0 on
-#       flat ground anyway, and stiffening it only risks contact chatter. Keep
-#       the change to the sagittal axis so a gait-gate pass or fail means one
-#       thing. Both keys must be listed: an actuator pattern that matches no
-#       joint errors out, a joint matched by no pattern silently gets 0.0 gain.
-K1_P2_FOOT_STIFFNESS = {
-    ".*_Ankle_Pitch": 100.0,
-    ".*_Ankle_Roll": 35.69,
-}
-K1_P2_FOOT_DAMPING = {
-    ".*_Ankle_Pitch": 5.0,
-    ".*_Ankle_Roll": 4.26,
-}
+#   Upstream BoosterRobotics/booster_train @ main passes
+#   `armature_ratio=(1.4, 0.4)` to both K1 ankle joints. Our local fork had
+#   dropped it, silently falling back to the class default (2.0, 2.0).
+#
+#   The K1 ankle is a 4-bar parallel linkage, so the pitch and roll axes have
+#   different effective inertia -- which is exactly what that per-axis ratio
+#   encodes. Restoring upstream's values (booster.py) changes the derived ankle
+#   stiffness from 35.69/35.69 to **24.98/7.14** Nm/rad, and the override was
+#   then forcing **4x and 5x** the real robot's gains on top.
+#
+#   The measured consequence is the thing that actually blocked training: mean
+#   episode length **6 steps** of a 1000-step horizon, **96%** of episodes
+#   terminating on base_orientation. A policy that falls in six steps cannot be
+#   taught to walk by any reward, which is why four consecutive runs failed the
+#   gait gate 8/8.
+#
+# So: no overrides. booster.py now carries the manufacturer's ankle ratios, and
+# the articulation is used as published. If the K1 still cannot stand on these
+# gains, that is a real finding about the robot or the URDF -- and the right
+# response is the AGILE Stage 1 Gain Tuner sweep, not a magic number pasted over
+# the hardware model.
 K1_ARTICULATION_CFG = copy.deepcopy(BOOSTER_K1_CFG)
-K1_ARTICULATION_CFG.actuators["legs"].stiffness = dict(K1_P2_LEG_STIFFNESS)
-K1_ARTICULATION_CFG.actuators["legs"].damping = dict(K1_P2_LEG_DAMPING)
-K1_ARTICULATION_CFG.actuators["feet"].stiffness = dict(K1_P2_FOOT_STIFFNESS)
-K1_ARTICULATION_CFG.actuators["feet"].damping = dict(K1_P2_FOOT_DAMPING)
 
 
 # ---------------------------------------------------------------------------

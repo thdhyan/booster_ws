@@ -39,13 +39,31 @@ class FakeRewardManager:
 
 
 class FakeEnv:
-    """Minimal stand-in for the two things the ramp reads off env."""
+    """Minimal stand-in for the two things the ramp reads off env.
+
+    ``episode_length_buf`` ADVANCES on every ``step()`` call, because the ramp's
+    idempotency guard compares it against the previous read: if it never moves,
+    ``stepped`` is always 0 and the ramp never credits anything. Reproducing that
+    here is what let an earlier version of these tests pass a ramp that could not
+    actually fire.
+    """
 
     def __init__(self, step, upright_frac, max_len=1000, weights=None):
         self.common_step_counter = step
-        self.episode_length_buf = _Buf(upright_frac * max_len)
         self.max_episode_length = max_len
+        self._len = upright_frac * max_len
+        self.episode_length_buf = _Buf(self._len)
         self.reward_manager = FakeRewardManager(weights or {})
+        self._max_len = max_len
+
+    def step(self):
+        """One control step: the episode buffer ticks up."""
+        self._len = min(self._len + 1, self._max_len)
+        self.episode_length_buf = _Buf(self._len)
+
+    def set_upright(self, frac):
+        self._len = frac * self._max_len
+        self.episode_length_buf = _Buf(self._len)
 
 
 class _Buf:
@@ -92,12 +110,98 @@ def _ramp_obj(env, **kw):
     return mod.RewardWeightRamp(env, **kwargs)
 
 
+def _ramp_class():
+    """The logic class itself, for the class-level constants."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ramp_mod_cls", RAMP)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.RewardWeightRamp
+
+
+RewardWeightRamp = _ramp_class()
+
+
+def test_gate_calibrates_below_the_robots_own_ratio():
+    """The gate must be reachable even when the configured value is not.
+
+    Two configured gates were unreachable and both silently disabled the whole
+    ramp: 0.80 (AGILE's shape, not our regime) and 0.10 (guessed) against a
+    measured upright ratio of 0.006. A ramp that cannot fire is invisible --
+    it registers in the curriculum table like a working term while holding every
+    weight at its start value.
+    """
+    # policy barely stands: 6 steps of 1000, and improves a little
+    env = FakeEnv(step=1000, upright_frac=0.006, weights={"action_rate_l2": -0.5})
+    r = _ramp_obj(env, start_step=0, num_steps=100, upright_threshold=0.10)
+    for _ in range(50):
+        env.set_upright(0.10)  # 0.006 baseline -> now standing 10% of episodes
+        env.step()
+        r(env, None)
+    assert r.credit > 0, (
+        "an unreachable gate left credit at 0: the ramp can never fire, so every "
+        "gait penalty stays at its 1/5 start weight for the whole run"
+    )
+    assert env.reward_manager.get_term_cfg("action_rate_l2").weight < -0.5
+
+
+def test_calibrated_gate_still_demands_improvement():
+    """Auto-calibration must not mean 'always open'.
+
+    The gate sits at measured * 1.25, so a policy has to be clearly better than
+    it was at the start -- being exactly as bad does not earn credit.
+    """
+    env = FakeEnv(step=1000, upright_frac=0.10, weights={"action_rate_l2": -0.5})
+    r = _ramp_obj(env, start_step=0, num_steps=100, upright_threshold=0.80)
+    for _ in range(20):
+        env.set_upright(0.10)  # holding exactly steady
+        env.step()
+        r(env, None)
+    assert r.credit == 0, "holding steady at the starting ratio must not earn credit"
+    # now clearly better than the 0.125 calibrated gate
+    for _ in range(20):
+        env.set_upright(0.20)
+        env.step()
+        r(env, None)
+    assert r.credit == 20
+
+
+def test_explicit_reachable_threshold_is_respected():
+    """When the configured gate IS reachable it wins -- no silent loosening."""
+    env = FakeEnv(step=1000, upright_frac=0.90, weights={"action_rate_l2": -0.5})
+    r = _ramp_obj(env, start_step=0, num_steps=100, upright_threshold=0.80)
+    for _ in range(10):
+        r(env, None)
+        env.step()
+    assert r.credit == 10
+
+
+def test_noise_level_ratio_keeps_the_gate_reachable():
+    """A near-zero measured ratio must not produce a gate ABOVE that ratio.
+
+    This is the original failure restated as a test: the 0.10 gate against a
+    0.006 ratio. A noise floor is still wanted (so jitter cannot open the gate),
+    but it must be capped by the baseline -- otherwise the floor itself makes the
+    ramp unreachable, which is the bug this replaced.
+    """
+    env = FakeEnv(step=1000, upright_frac=0.006, weights={"action_rate_l2": -0.5})
+    r = _ramp_obj(env, start_step=0, num_steps=100, upright_threshold=0.80)
+    r(env, None)
+    gate = r._effective_threshold()
+    # The gate must be a small, finite step above the baseline -- reachable by a
+    # policy that improves, rather than an order of magnitude away.
+    assert gate > 0.006, "the gate must demand some improvement over the baseline"
+    assert gate < 0.006 + 0.5, f"gate {gate} is implausibly far above baseline 0.006"
+    assert gate > 0.0, "the gate must stay strictly positive so jitter cannot open it"
+
+
 # --- the arithmetic -----------------------------------------------------------
 def test_weight_holds_at_start_before_start_step():
     env = FakeEnv(step=0, upright_frac=1.0, weights={"action_rate_l2": -0.5})
     r = _ramp_obj(env, start_step=100, num_steps=100)
     for _ in range(10):
         r(env, None)
+        env.step()
     assert env.reward_manager.get_term_cfg("action_rate_l2").weight == -0.5
     assert r.credit == 0
 
@@ -107,6 +211,7 @@ def test_weight_reaches_terminal_after_full_ramp():
     r = _ramp_obj(env, start_step=0, num_steps=100)
     for _ in range(100):
         r(env, None)
+        env.step()
     assert env.reward_manager.get_term_cfg("action_rate_l2").weight == pytest.approx(-2.0)
     assert r.progress() == pytest.approx(1.0)
 
@@ -116,6 +221,7 @@ def test_weight_interpolates_linearly_in_between():
     r = _ramp_obj(env, start_step=0, num_steps=100)
     for _ in range(50):
         r(env, None)
+        env.step()
     # halfway: -0.5 + (-2.0 - -0.5) * 0.5 = -1.25
     assert env.reward_manager.get_term_cfg("action_rate_l2").weight == pytest.approx(-1.25)
 
@@ -130,6 +236,7 @@ def test_no_credit_while_falling_is_the_critical_behaviour():
     env = FakeEnv(step=1000, upright_frac=0.10, weights={"action_rate_l2": -0.5})
     r = _ramp_obj(env, start_step=0, num_steps=100, upright_threshold=0.80)
     for _ in range(500):
+        env.set_upright(0.10)  # falling, and staying fallen
         r(env, None)
     assert r.credit == 0, "a policy that is falling accrued ramp credit"
     assert env.reward_manager.get_term_cfg("action_rate_l2").weight == pytest.approx(-0.5)
@@ -141,6 +248,7 @@ def test_credit_accrues_only_above_the_threshold():
     r = _ramp_obj(env, start_step=0, num_steps=100, upright_threshold=0.80)
     for _ in range(10):
         r(env, None)
+        env.step()
     assert r.credit == 10
     assert env.reward_manager.get_term_cfg("action_rate_l2").weight < -0.5
 
@@ -149,12 +257,14 @@ def test_a_policy_that_recovers_still_gets_credit():
     env = FakeEnv(step=1000, upright_frac=0.10, weights={"action_rate_l2": -0.5})
     r = _ramp_obj(env, start_step=0, num_steps=100)
     for _ in range(50):
+        env.set_upright(0.10)  # falling, and staying fallen
         r(env, None)
     assert r.credit == 0
     # policy learns to stand
-    env.episode_length_buf = _Buf(950.0)
+    env.set_upright(0.95)
     for _ in range(100):
         r(env, None)
+        env.step()
     assert r.progress() == pytest.approx(1.0)
 
 
@@ -165,9 +275,9 @@ def test_missing_signal_is_not_read_as_success():
     success would climb the range while nothing was being measured.
     """
     env = FakeEnv(step=1000, upright_frac=1.0, weights={"action_rate_l2": -0.5})
-    env.episode_length_buf = None
     r = _ramp_obj(env, start_step=0, num_steps=100)
     for _ in range(50):
+        env.episode_length_buf = None  # measurement unavailable
         r(env, None)
     assert r.credit == 0
     assert r.last_upright is None
@@ -219,6 +329,7 @@ def test_write_is_read_back_so_an_inert_ramp_cannot_pass_silently():
     r = _ramp_obj(env, start_step=0, num_steps=100)
     with pytest.raises(RuntimeError, match="inert"):
         r(env, None)
+        env.step()
 
 
 # --- config wiring ------------------------------------------------------------

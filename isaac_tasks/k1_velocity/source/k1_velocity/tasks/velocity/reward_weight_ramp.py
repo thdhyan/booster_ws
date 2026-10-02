@@ -84,10 +84,40 @@ class RewardWeightRamp:
 
     The weight sits at ``start_weight`` until ``start_step``, then advances
     linearly toward ``terminal_weight`` over ``num_steps`` of *credited* steps. A
-    step is credited only while the upright ratio is at or above
-    ``upright_threshold``, so a policy that is still falling does not approach the
-    terminal penalty.
+    step is credited only while the upright ratio is at or above the effective
+    gate, so a policy that is still falling does not approach the terminal
+    penalty.
+
+    THE GATE CALIBRATES ITSELF. ``upright_threshold`` is honoured only when it is
+    reachable; otherwise the ramp measures the robot's own upright ratio and
+    gates below it. Two hand-picked gates were both unreachable and neither was
+    caught until the training budget was gone -- 0.80 (copied from AGILE's shape
+    without checking the regime) and then 0.10 (guessed), against a measured
+    ratio of 0.006-0.024. A ramp that never fires is the worst failure mode here:
+    it registers in the log's curriculum table like a working term while
+    silently holding every weight at its start value. See ``_effective_threshold``.
     """
+
+    # A measured ratio below this is treated as noise, and the gate is floored here
+    # so it can never be driven to ~zero and opened by jitter. Note the floor
+    # must never exceed the measured ratio, or the floor itself makes the gate
+    # unreachable -- which is precisely how the original 0.10 gate failed against
+    # a 0.006 ratio. ``_effective_threshold`` therefore also clamps the floor to
+    # the baseline.
+    MIN_MEASURABLE_RATIO = 0.01
+    # ADDITIVE margin the policy must clear above its own baseline ratio before the
+    # ramp starts crediting. The baseline is sampled ONCE and held, so this is
+    # "clearly better than the robot was when this ramp started".
+    #
+    # Two earlier forms both produced a permanently-unreachable gate, and both
+    # were caught by tests rather than by reading the number:
+    #   * instantaneous baseline * 1.25 -- the gate rises with the policy, so it
+    #     can never be overtaken;
+    #   * fixed baseline * 1.25 -- the gate starts ABOVE where the robot already
+    #     is, so a policy sitting at baseline can never pass it.
+    # An ADDITIVE margin is reachable from the first step (0.006 baseline -> 0.05
+    # gate) while still demanding real improvement.
+    CALIBRATION_HEADROOM = 0.05
 
     def __init__(
         self,
@@ -133,6 +163,9 @@ class RewardWeightRamp:
         self.stalled_steps = 0
         self.applied = None
         self.last_upright = None
+        # Sampled once, at the first evaluation, and then fixed. See
+        # CALIBRATION_HEADROOM for why an instantaneous baseline cannot work.
+        self.baseline_upright = None
 
     # -- introspection --------------------------------------------------------
     def current_weight(self) -> float:
@@ -144,6 +177,35 @@ class RewardWeightRamp:
     def _at(self, credited: int) -> float:
         scale = credited / self.num_steps
         return self.start_weight + (self.terminal_weight - self.start_weight) * scale
+
+    def _effective_threshold(self) -> float:
+        """The gate actually applied this step.
+
+        The explicit ``upright_threshold`` wins whenever it is REACHABLE. When the
+        robot's own measured upright ratio sits below it, the gate is lowered to
+        ``measured * CALIBRATION_HEADROOM`` -- otherwise the ramp provably can
+        never fire, which is what silently pinned all seven gait penalties at
+        1/5 strength across two previous runs.
+        """
+        explicit = float(self.upright_threshold)
+        if explicit <= 0.0:
+            return explicit  # explicit opt-out of gating
+        if self.baseline_upright is None:
+            return min(explicit, self.MIN_MEASURABLE_RATIO)
+        calibrated = self.baseline_upright
+        # CALIBRATION_HEADROOM is a FLOOR on how far above baseline the policy must
+        # be, not a multiplier applied to it. Multiplying the baseline by it
+        # (baseline * 1.25) sets the gate ABOVE where the robot already is, so a
+        # policy sitting exactly at baseline can never pass and the ramp is dead
+        # again -- which is what a test caught at baseline 0.006.
+        #
+        # So: gate = max(baseline, baseline + headroom), capped by the explicit
+        # value and floored for noise. When the baseline is small the additive
+        # term dominates and the gate is reachable; when it is large, baseline +
+        # headroom exceeds 1.0 and the explicit threshold takes over.
+        floor = min(self.MIN_MEASURABLE_RATIO, calibrated)
+        gate = min(explicit, max(calibrated + self.CALIBRATION_HEADROOM, floor))
+        return gate
 
     # -- the actual work ------------------------------------------------------
     def _term_cfg(self):
@@ -180,7 +242,11 @@ class RewardWeightRamp:
 
         upright = _upright_ratio(env)
         self.last_upright = upright
-        if upright is None or upright < self.upright_threshold:
+        if upright is not None and self.baseline_upright is None:
+            # Sample the baseline once, at the first usable measurement.
+            self.baseline_upright = upright
+        gate = self._effective_threshold()
+        if upright is None or upright < gate:
             # No credit. Freezing the weight is the whole point: a falling policy
             # must not be charged for not being smooth.
             self.stalled_steps += 1
@@ -195,7 +261,7 @@ class RewardWeightRamp:
                 env,
                 f"[weight-ramp] {self.reward_name} {new_weight:.4f} "
                 f"(step {step}, credit {self.credit}/{self.num_steps}, "
-                f"upright {upright:.3f})",
+                f"upright {upright:.3f}, gate {gate:.3f})",
             )
         return None
 
