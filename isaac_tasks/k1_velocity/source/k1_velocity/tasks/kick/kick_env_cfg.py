@@ -40,7 +40,10 @@ from . import mdp
 
 # Use the real K1 articulation config from booster_train (correct actuators, URDF path, PD gains)
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
-from k1_velocity.sim_backend import apply_physics_backend
+from k1_velocity.sim_backend import (
+    apply_physics_backend,
+    ensure_physx_gpu_capacity,
+)
 
 # ============================================================================
 # K1 Joint Constants
@@ -379,6 +382,9 @@ class K1KickEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.use_newton_actuators = False
         # Physics backend: Newton/warp by default (K1_PHYSICS=newton|physx).
         apply_physics_backend(self)
+        # GPU broadphase pair buffer must scale with env count or PhysX
+        # silently drops contacts (see ensure_physx_gpu_capacity).
+        ensure_physx_gpu_capacity(self)
         self.sim.dt = 0.005          # 200 Hz physics
         self.decimation = 4          # 50 Hz control
         self.episode_length_s = 20.0

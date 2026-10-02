@@ -44,7 +44,10 @@ from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from . import push_mdp as mdp
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
-from k1_velocity.sim_backend import apply_physics_backend
+from k1_velocity.sim_backend import (
+    apply_physics_backend,
+    ensure_physx_gpu_capacity,
+)
 from k1_velocity.tasks.partial.mdp import randomize_arm_pose
 
 # Frozen-base policy path. PUSH_BASE_POLICY overrides it (docker/dl runs; env
@@ -321,6 +324,9 @@ class K1PushEnvCfg(ManagerBasedRLEnvCfg):
         super().__post_init__()
         self.sim.use_newton_actuators = False
         apply_physics_backend(self)
+        # GPU broadphase pair buffer must scale with env count or PhysX
+        # silently drops contacts (see ensure_physx_gpu_capacity).
+        ensure_physx_gpu_capacity(self)
         self.sim.dt = 0.005
         self.decimation = 4
         self.episode_length_s = 20.0

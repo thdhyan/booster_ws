@@ -34,6 +34,55 @@ import os
 from isaaclab.sim import SimulationCfg
 
 
+#: Aggregate pairs to budget per environment. The observed demand at 8192 envs is
+#: ~256 pairs/env (2 099 817 / 8192); 512 is 2x that, so the buffer does not sit
+#: one contact short of the cap.
+PAIRS_PER_ENV = 512
+#: Floor regardless of env count, so small runs are not raised to a silly size.
+MIN_AGGREGATE_PAIRS = 2**22  # 4 194 304
+
+
+def ensure_physx_gpu_capacity(env_cfg) -> int:
+    """Raise the GPU broadphase pair buffer so contacts are not silently dropped.
+
+    PhysX allocates its GPU aggregate-pair buffer once, from
+    ``gpu_total_aggregate_pairs_capacity``, which defaults to ``2**21``.  When
+    demand exceeds it the broadphase does NOT fail loudly -- it logs, once per
+    physics step::
+
+        PhysX error: The application needs to increase
+        PxGpuDynamicsMemoryConfig::totalAggregatePairsCapacity to 2099817
+        , otherwise, the simulation will miss interactions
+
+    and then **drops contacts**, so feet pass through the ground and the policy
+    trains against a wrong contact model.
+
+    This is not hypothetical and it was badly misdiagnosed.  At 8192 envs with the
+    corrected ankle gains the K1 generates 2 099 817 pairs against the 2 097 152
+    default -- short by 2 665, i.e. 0.13% -- and the resulting error flood cost
+    roughly 6x wall-clock (3.1-5.0 s/iter with 1 logged error, versus 20-32 s/iter
+    with 1392).  The overflow tracks *env count and contact activity*, not the
+    gains: a 2048-env A/B of the same two gain settings showed a 0.3% difference
+    because 2048 envs never reach the cap.  That is why the gains looked innocent
+    at 2048 and guilty at 8192.
+
+    Hence sizing from ``num_envs`` rather than hardcoding a constant: a run at
+    16 384 envs would otherwise silently start dropping contacts again.
+
+    Returns the capacity now configured, or 0 when not applicable (Newton).
+    """
+    physx = getattr(env_cfg.sim, "physx", None)
+    if physx is None:
+        return 0
+    if not hasattr(physx, "gpu_total_aggregate_pairs_capacity"):
+        return 0
+    num_envs = int(getattr(env_cfg.scene, "num_envs", 0) or 0)
+    want = max(MIN_AGGREGATE_PAIRS, num_envs * PAIRS_PER_ENV)
+    if physx.gpu_total_aggregate_pairs_capacity < want:
+        physx.gpu_total_aggregate_pairs_capacity = want
+    return int(physx.gpu_total_aggregate_pairs_capacity)
+
+
 def apply_physics_backend(env_cfg) -> str:
     """Select the physics backend on ``env_cfg`` from ``$K1_PHYSICS``.
 

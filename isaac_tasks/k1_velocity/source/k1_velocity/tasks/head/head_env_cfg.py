@@ -37,7 +37,10 @@ except (ImportError, ModuleNotFoundError):
     import isaaclab_tasks.manager_based.locomotion.velocity.mdp as vmdp
 from ..kick.mdp import BALL_MASS, BALL_RADIUS
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
-from k1_velocity.sim_backend import apply_physics_backend
+from k1_velocity.sim_backend import (
+    apply_physics_backend,
+    ensure_physx_gpu_capacity,
+)
 
 K1_HEAD_JOINTS = ["AAHead_yaw", "Head_pitch"]
 
@@ -195,6 +198,9 @@ class K1HeadTrackEnvCfg(ManagerBasedRLEnvCfg):
         super().__post_init__()
         self.sim.use_newton_actuators = False
         apply_physics_backend(self)
+        # GPU broadphase pair buffer must scale with env count or PhysX
+        # silently drops contacts (see ensure_physx_gpu_capacity).
+        ensure_physx_gpu_capacity(self)
         self.sim.dt = 0.005
         self.decimation = 4
         self.episode_length_s = 20.0
