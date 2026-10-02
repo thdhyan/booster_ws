@@ -231,6 +231,70 @@ def test_weight_ramp_refuses_a_degenerate_range():
     assert "hi > lo" in src or "hi > lo:" in src, "degenerate range must be rejected"
 
 
+def test_degenerate_range_is_only_tolerated_when_the_caller_opts_in():
+    """A pinned axis must not crash play, but must still crash training.
+
+    Recording a fixed straight-line command sets ``ang_vel_z = (0, 0)``, so the
+    yaw ramp's upper bound is 0 and ``hi > lo`` is false. Before ``require_span``
+    existed, every ``--cmd X 0 0`` run of the Distill and Rough play tasks died on
+    the first reward step with "weighted tracking needs hi > lo, got lo=0.1,
+    hi=0.0" -- which blocked straight-line gait recordings and the keyboard
+    forward-walk session, the two things the play cfgs exist for.
+
+    The opt-in must be narrow: with the default the guard still raises, because a
+    silent collapse during training is exactly the bug it was written to catch.
+    """
+    import sys
+
+    import torch
+
+    src_root = str(VEL.parents[2])
+    if src_root not in sys.path:
+        sys.path.insert(0, src_root)
+    from k1_velocity.tasks.velocity import agile_rewards
+
+    mag = torch.tensor([0.0, 0.5, 2.0])
+    # Opted in (play): a zero-width range yields the floor weight, not a crash.
+    out = agile_rewards._weight_from_magnitude(mag, 0.1, 0.0, require_span=False)
+    assert torch.allclose(out, torch.ones_like(mag)), (
+        f"a pinned axis should hold the floor weight, got {out.tolist()}"
+    )
+    # Default (training): still refuses, so a curriculum collapse stays loud.
+    with pytest.raises(ValueError, match="hi > lo"):
+        agile_rewards._weight_from_magnitude(mag, 0.1, 0.0)
+
+
+def test_play_configs_opt_out_of_the_range_span_requirement():
+    """Both play cfgs that keep rewards must set ``require_span=False``.
+
+    The teacher play cfg replaces RewardsCfg wholesale, so it never hit the bug --
+    which is exactly why this went unnoticed. The Rough and Distill play cfgs keep
+    the training rewards and pin the command, so both need the opt-out, and a new
+    play cfg that keeps rewards will need it too.
+    """
+    import sys
+
+    if str(VEL.parents[2]) not in sys.path:
+        sys.path.insert(0, str(VEL.parents[2]))
+
+    weighted = ("track_lin_vel_xy_exp", "track_ang_vel_z_exp")
+    for mod_name, cls_name in (
+        ("k1_velocity.tasks.velocity.velocity_play_cfg", "K1VelocityRoughPlayEnvCfg"),
+        ("k1_velocity.tasks.velocity.velocity_play_distill", "K1VelocityDistillPlayEnvCfg"),
+    ):
+        mod = __import__(mod_name, fromlist=[cls_name])
+        cls = getattr(mod, cls_name)
+        cfg = cls()
+        for term_name in weighted:
+            term = getattr(cfg.rewards, term_name)
+            assert term is not None, f"{cls_name} no longer defines {term_name}"
+            assert term.params.get("require_span") is False, (
+                f"{cls_name}.rewards.{term_name} must set require_span=False: a "
+                "fixed command pins the unused axes to zero, so its ramp has no "
+                "span and the term raises on the first reward step without this"
+            )
+
+
 def test_min_vel_norm_is_a_parameter_and_never_zeroes_commands():
     """``min_vel_norm`` must stay a weighting knob, never a command filter.
 

@@ -73,14 +73,28 @@ def _cmd_term(env, command_name: str):
 
 
 def _weight_from_magnitude(mag: torch.Tensor, lo: float, hi: float,
-                           weight_min: float = 1.0, weight_max: float = 2.0) -> torch.Tensor:
-    """Linear ramp ``weight_min -> weight_max`` over commanded magnitude ``lo -> hi``."""
+                           weight_min: float = 1.0, weight_max: float = 2.0,
+                           require_span: bool = True) -> torch.Tensor:
+    """Linear ramp ``weight_min -> weight_max`` over commanded magnitude ``lo -> hi``.
+
+    ``require_span`` distinguishes two ways the range can collapse, which are not
+    the same bug. During *training* the velocity curriculum rewrites
+    ``cfg.ranges``, and a collapse there means the tracking weights silently stop
+    ramping -- worth failing loudly, so that stays the default. In *play* the
+    collapse is deliberate: a fixed-command recording pins the axes it does not
+    use to zero, so a straight-line run has ``ang_vel_z == (0, 0)`` and a
+    spin-only run has ``lin_vel_x == lin_vel_y == (0, 0)``. Nothing was commanded
+    on the pinned axis, so there is no span to climb and the term correctly keeps
+    its floor weight.
+    """
     if not hi > lo:
-        raise ValueError(
-            f"weighted tracking needs hi > lo, got lo={lo}, hi={hi}. The commanded "
-            "velocity range is degenerate, so the weight ramp has no span and the "
-            "term would silently pin to weight_min."
-        )
+        if require_span:
+            raise ValueError(
+                f"weighted tracking needs hi > lo, got lo={lo}, hi={hi}. The commanded "
+                "velocity range is degenerate, so the weight ramp has no span and the "
+                "term would silently pin to weight_min."
+            )
+        return torch.full_like(mag, weight_min)
     clamped = mag.clamp(lo, hi)
     normalized = (clamped - lo) / (hi - lo)
     return weight_min + (weight_max - weight_min) * normalized
@@ -91,6 +105,7 @@ def track_lin_vel_xy_exp_weighted(
     command_name: str,
     std: float = 0.2,
     min_vel_norm: float = 0.1,
+    require_span: bool = True,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """AGILE ``track_lin_vel_xy_yaw_frame_exp_weighted_simplified``.
@@ -118,7 +133,9 @@ def track_lin_vel_xy_exp_weighted(
             torch.tensor([ranges.lin_vel_x[1], ranges.lin_vel_y[1]], dtype=torch.float32)
         ).item()
     )
-    weight = _weight_from_magnitude(torch.linalg.norm(vel_cmd, dim=1), lo, hi)
+    weight = _weight_from_magnitude(
+        torch.linalg.norm(vel_cmd, dim=1), lo, hi, require_span=require_span
+    )
     return weight * torch.exp(-lin_vel_error / std**2)
 
 
@@ -127,11 +144,17 @@ def track_ang_vel_z_world_exp_weighted(
     command_name: str,
     std: float = 0.2,
     min_vel_norm: float = 0.1,
+    require_span: bool = True,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """AGILE ``track_ang_vel_z_world_exp_weighted_simplified``.
 
     World-frame yaw-rate tracking, scaled 1.0 -> 2.0 by commanded yaw magnitude.
+
+    ``hi`` is the *upper* bound of the live yaw range, so any run that pins yaw
+    to zero has no ramp to climb. That is the normal case for a straight-line
+    recording (``--cmd 0.5 0 0``), which is why ``require_span`` exists; see
+    ``_weight_from_magnitude``.
     """
     asset = env.scene[asset_cfg.name]
     term = _cmd_term(env, command_name)
@@ -143,7 +166,7 @@ def track_ang_vel_z_world_exp_weighted(
     ranges = term.cfg.ranges
     lo = float(min_vel_norm)
     hi = abs(float(ranges.ang_vel_z[1]))
-    weight = _weight_from_magnitude(torch.abs(ang_vel_cmd), lo, hi)
+    weight = _weight_from_magnitude(torch.abs(ang_vel_cmd), lo, hi, require_span=require_span)
     return weight * torch.exp(-ang_vel_error / std**2)
 
 

@@ -33,3 +33,10 @@ class K1VelocityDistillPlayEnvCfg(K1VelocityDistillEnvCfg):
         self.commands.base_velocity.ranges.lin_vel_x = (0.8, 0.8)
         self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
         self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+        # The pinned axes leave the weighted tracking ramps with no span; without
+        # this, --cmd X 0 0 raises "weighted tracking needs hi > lo" on the first
+        # reward step. See _weight_from_magnitude.
+        for _term in (self.rewards.track_lin_vel_xy_exp,
+                      self.rewards.track_ang_vel_z_exp):
+            if _term is not None:
+                _term.params["require_span"] = False

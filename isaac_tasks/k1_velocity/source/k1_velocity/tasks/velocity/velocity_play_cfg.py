@@ -25,6 +25,14 @@ class K1VelocityRoughPlayEnvCfg(K1VelocityRoughEnvCfg):
         self.commands.base_velocity.ranges.lin_vel_x = (0.8, 0.8)
         self.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
         self.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+        # ...which pins the unused axes to zero, so the weighted tracking ramps
+        # have no span to climb. Without this, any --cmd X 0 0 recording dies with
+        # "weighted tracking needs hi > lo" on the first reward step, because the
+        # yaw range upper bound is 0. See _weight_from_magnitude.
+        for _term in (self.rewards.track_lin_vel_xy_exp,
+                      self.rewards.track_ang_vel_z_exp):
+            if _term is not None:
+                _term.params["require_span"] = False
 
 
 @configclass
