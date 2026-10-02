@@ -115,11 +115,30 @@ def test_tracking_reward_was_sharpened():
     )
 
 
-def test_action_rate_was_strengthened():
-    """-0.5 could not see 8 Hz chatter; action_rate_l2 only sees 1st differences."""
+def test_action_rate_reaches_minus_two_via_a_ramp():
+    """The -2.0 still has to be reached, but by ramping rather than from step 0.
+
+    -0.5 alone could not see 8 Hz chatter. It was raised to -2.0 as a static
+    weight on 2026-10-01, which is right for a converged policy and wrong while
+    99.3% of episodes end in a fall. The static weight is now AGILE's -0.5 and
+    CurriculumCfg ramps it to -2.0 once the robot is actually upright, so the
+    original intent is preserved without the early-training penalty.
+
+    Asserted as a pair: a static -2.0 (regression, back to penalising a falling
+    policy) or no ramp at all (the term never strengthens) both fail here.
+    """
     terms = _terms(_rewards_cfg(CFG))
-    w = _const(_kw(terms["action_rate_l2"], "weight"))
-    assert w is not None and w <= -2.0, f"action_rate_l2 weight is {w}, expected <= -2.0"
+    static = _const(_kw(terms["action_rate_l2"], "weight"))
+    assert static == pytest.approx(-0.5), (
+        f"action_rate_l2 static weight is {static}; it must be AGILE's light start "
+        "value, with the ramp supplying the rest"
+    )
+
+    src = CFG.read_text()
+    assert '"reward_name": "action_rate_l2"' in src, "action_rate_l2 must be ramped"
+    assert '"terminal_weight": -2.0' in src, (
+        "the ramp must still reach -2.0, which is what actually suppressed the chatter"
+    )
 
 
 def test_gait_functions_defined_in_module():

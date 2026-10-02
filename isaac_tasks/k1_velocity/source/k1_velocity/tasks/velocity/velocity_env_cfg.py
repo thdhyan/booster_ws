@@ -44,6 +44,7 @@ from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from . import agile_rewards as agile
 from . import gait_clock
 from . import gait_rewards as gait
+from . import reward_weight_ramp
 from . import velocity_curriculum
 
 try:  # Isaac Lab 3.0-EA layout (dl); isaac-lab image renamed this package
@@ -505,20 +506,33 @@ class RewardsCfg:
     # --- Regularization (AGILE) ---
     lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.5)
-    # Smoothness. action_rate_l2 only sees the first difference, which 8 Hz
-    # chatter satisfies cheaply; measured jerk was 0.10 rad/step^2 overall and
-    # 0.26 in hip-yaw. Weight raised from -0.5 and paired with an explicit
-    # third-difference (jerk) term below.
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-2.0)
+    # Smoothness -- STATIC value is AGILE's *start* weight; the ramp in
+    # CurriculumCfg raises both smoothness terms and all five gait extras toward
+    # their previous values as the policy proves it can stand.
+    #
+    # These two weights were raised (-0.5 -> -2.0, and -0.02 -> -0.5 in the 10-01
+    # audit) because at the *end* of training the terms were inert against a
+    # +1.18 tracking term. That reasoning is correct for a converged policy and
+    # wrong for the first 1 000 iterations, where the policy falls in 99.3% of
+    # episodes and is being charged for smoothness it cannot yet express. AGILE
+    # makes the same call explicitly: update_reward_weight_step runs action_rate
+    # at -0.5 until step 50 000 and ramps to -2.0 (see docs/agile_weight_comparison.md).
+    # The static number is now the light one; the ramp owns the rest.
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.5)
     action_jerk_l2 = RewTerm(
         func=gait.action_jerk_l2,
         # Audit 2026-10-01: at -0.02 this term contributed **-0.0028 per step** in
         # the 3000-iteration run -- inert -- while jerk was the metric the gait
         # gate actually failed (0.107 against a <0.06 bound). Two orders of
         # magnitude of headroom against a +1.18 tracking term, so it never
-        # competed. -0.5 puts it at ~0.07/step for the observed jerk, enough to
-        # price the chatter the gate rejects without fighting the task.
-        weight=-0.5,
+        # competed.
+        #
+        # Now the AGILE *start* value (-0.05), with a ramp in CurriculumCfg up to
+        # -0.5 as the policy proves it can stand. Same reasoning as
+        # action_rate_l2 above: -0.5 is right for a converged policy and wrong
+        # while 99.3% of episodes end in a fall. AGILE ramps its equivalent term
+        # from -0.05 to -1.0 over 100k steps for exactly this reason.
+        weight=-0.05,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
     )
     dof_acc_l2 = RewTerm(
@@ -578,9 +592,17 @@ class RewardsCfg:
     # clock. Update both together if the gait moves again -- they are the two
     # numbers gait_gate.py actually measures (cadence from joint actions,
     # stride from speed/cadence).
+    #
+    # WEIGHTS BELOW ARE START VALUES, NOT FINAL. These five terms sum to -19.1,
+    # which is 53% of our entire per-step penalty budget against AGILE T1's 13.4
+    # total -- all of it non-AGILE, all of it applied from iteration 0 to a policy
+    # that at iteration 12 falls in 99.3% of episodes. Each starts at a fifth of
+    # its final weight and is ramped by CurriculumCfg once the robot stands; the
+    # ramp's terminal weights are the values the 10-01 audit settled on.
     gait_cadence = RewTerm(
         func=gait.gait_cadence_penalty,
-        weight=-1.0,
+        # -1.0 final -> -0.2 start.
+        weight=-0.2,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS),
             "target_hz": 2.0,
@@ -589,7 +611,8 @@ class RewardsCfg:
     )
     phase_swing = RewTerm(
         func=gait.phase_synced_swing,
-        weight=-2.0,
+        # -2.0 final -> -0.4 start.
+        weight=-0.4,
         params={
             # contact for the swing/stance test; the phase comes from
             # gait_clock.get_phase(env), the same state the observation sees.
@@ -606,7 +629,9 @@ class RewardsCfg:
     )
     feet_clearance = RewTerm(
         func=gait.feet_clearance,
-        weight=-8.0,
+        # -8.0 final -> -1.6 start. Heaviest single term in the budget and it
+        # reads -0.0000/step today (a hinge, zero until a foot actually lifts).
+        weight=-1.6,
         params={
             # contact for the swing/stance test, robot for the foot heights.
             # These are different prims: a ContactSensor has no body_pos.
@@ -617,7 +642,8 @@ class RewardsCfg:
     )
     feet_alternation = RewTerm(
         func=gait.feet_alternation_penalty,
-        weight=-2.0,
+        # -2.0 final -> -0.4 start.
+        weight=-0.4,
         params={
             "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
         },
@@ -630,7 +656,8 @@ class RewardsCfg:
         # and what remained rewarded a permanent split stance instead of steps.
         # 0.22 m sits inside the band the gate calls a stride (>=0.15) and inside
         # what a 2 m/s gait at 2 steps/s actually needs.
-        weight=-6.0,
+        # -6.0 final -> -1.2 start.
+        weight=-1.2,
         params={
             # Foot separation comes from the articulation, not the sensor.
             "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
@@ -713,6 +740,101 @@ class CurriculumCfg:
             "success_threshold": 0.80,
             "patience": 5,
             "interval_steps": 50,
+        },
+    )
+
+    # ---- regularization ramps (AGILE's idea, upright-gated) ------------------
+    # Our per-step penalty budget was 35.9 vs AGILE T1's 13.4, with 53% of it in
+    # five non-AGILE gait terms applied from iteration 0 -- while 99.3% of
+    # episodes ended in a fall. AGILE ships update_reward_weight_step to run
+    # action_rate at -0.5 until step 50k and ramp it to -2.0 over 100k; G1 simply
+    # carries a static -0.01. We borrow the mechanism and change one thing: credit
+    # accrues only while the robot is UPRIGHT, so a policy still falling at step
+    # 3 000 is not charged for not being smooth yet.
+    #
+    # num_steps=100_000 is AGILE's value and is scaled for the 42 000-iteration run
+    # (1.0M control steps): the ramp starts ~4% in and completes ~12% in, matching
+    # AGILE's schedule as a fraction of training.
+    #
+    # Seven terms: the two smoothness terms plus the five gait extras that make
+    # up the other half of the budget. start_weight must equal the static weight
+    # in RewardsCfg -- the ramp reads it from the reward manager, and a mismatch
+    # makes the static value dead. Terminal values are the 10-01 audit numbers.
+    action_rate_regularization = CurrTerm(
+        func=reward_weight_ramp.RewardWeightRampTerm,
+        params={
+            "reward_name": "action_rate_l2",
+            "start_weight": -0.5,
+            "terminal_weight": -2.0,
+            "start_step": 20_000,
+            "num_steps": 100_000,
+            "upright_threshold": 0.80,
+        },
+    )
+    action_jerk_regularization = CurrTerm(
+        func=reward_weight_ramp.RewardWeightRampTerm,
+        params={
+            "reward_name": "action_jerk_l2",
+            "start_weight": -0.05,
+            "terminal_weight": -0.5,
+            "start_step": 20_000,
+            "num_steps": 100_000,
+            "upright_threshold": 0.80,
+        },
+    )
+    gait_cadence_regularization = CurrTerm(
+        func=reward_weight_ramp.RewardWeightRampTerm,
+        params={
+            "reward_name": "gait_cadence",
+            "start_weight": -0.2,
+            "terminal_weight": -1.0,
+            "start_step": 20_000,
+            "num_steps": 100_000,
+            "upright_threshold": 0.80,
+        },
+    )
+    phase_swing_regularization = CurrTerm(
+        func=reward_weight_ramp.RewardWeightRampTerm,
+        params={
+            "reward_name": "phase_swing",
+            "start_weight": -0.4,
+            "terminal_weight": -2.0,
+            "start_step": 20_000,
+            "num_steps": 100_000,
+            "upright_threshold": 0.80,
+        },
+    )
+    feet_clearance_regularization = CurrTerm(
+        func=reward_weight_ramp.RewardWeightRampTerm,
+        params={
+            "reward_name": "feet_clearance",
+            "start_weight": -1.6,
+            "terminal_weight": -8.0,
+            "start_step": 20_000,
+            "num_steps": 100_000,
+            "upright_threshold": 0.80,
+        },
+    )
+    feet_alternation_regularization = CurrTerm(
+        func=reward_weight_ramp.RewardWeightRampTerm,
+        params={
+            "reward_name": "feet_alternation",
+            "start_weight": -0.4,
+            "terminal_weight": -2.0,
+            "start_step": 20_000,
+            "num_steps": 100_000,
+            "upright_threshold": 0.80,
+        },
+    )
+    stride_length_regularization = CurrTerm(
+        func=reward_weight_ramp.RewardWeightRampTerm,
+        params={
+            "reward_name": "stride_length",
+            "start_weight": -1.2,
+            "terminal_weight": -6.0,
+            "start_step": 20_000,
+            "num_steps": 100_000,
+            "upright_threshold": 0.80,
         },
     )
 

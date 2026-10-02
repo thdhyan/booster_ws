@@ -13,7 +13,12 @@ class K1VelocityPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     """PPO training config for K1 velocity locomotion."""
 
     num_steps_per_env = 24
-    max_iterations = 5000
+    # 42 000 iterations x 24 steps = 1 008 000 control steps, matching the scale
+    # of AGILE's own reference run (50 000 x 24 = 1.2M) rather than our earlier
+    # 3 000-iteration runs (72 000 steps, 20x shorter). The reward-weight ramps in
+    # CurriculumCfg are denominated in control steps and rescaled for this
+    # length; see docs/agile_weight_comparison.md.
+    max_iterations = 42_000
     save_interval = 100
     experiment_name = "k1_velocity_rough"
     logger = "wandb"
