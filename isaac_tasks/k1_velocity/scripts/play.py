@@ -25,6 +25,13 @@ parser.add_argument("--steps", type=int, default=1000)
 parser.add_argument("--export", default="", help="export TorchScript .pt path")
 parser.add_argument("--export_onnx", default="", help="export ONNX path")
 parser.add_argument("--disable_jit", action="store_true")
+parser.add_argument(
+    "--keyboard",
+    action="store_true",
+    help="drive the velocity command from the keyboard (W/S/A/D/Q/E, Space stop, Esc quit)",
+)
+parser.add_argument("--max_lin", type=float, default=1.5, help="keyboard cap on commanded |vx|,|vy| (m/s)")
+parser.add_argument("--max_ang", type=float, default=2.0, help="keyboard cap on commanded |wz| (rad/s)")
 AppLauncher.add_app_launcher_args(parser)
 # keep only unknown args for hydra (mirrors train.py)
 args_cli, hydra_args = parser.parse_known_args()
@@ -78,8 +85,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     total_rew = torch.zeros(args_cli.num_envs, device=env.device)
     ep_len = torch.zeros(args_cli.num_envs, device=env.device)
     rew_sum, n_steps = 0.0, 0
+
+    # Keyboard control writes straight into the live command tensor.
+    #
+    # ``CommandManager.set_command`` no longer exists (Isaac Lab 2.1+), and
+    # ``get_command`` returns the tensor the term samples from, so writing in
+    # place is both the supported path and the one that stops the 8-12 s
+    # resample timer from overwriting the key command between frames. Reading is
+    # the X11 backend from keyboard_cmd, which replaces ``carb.input`` (absent in
+    # Isaac Sim 6).
+    kb = None
+    cmd_buf = None
+    if args_cli.keyboard:
+        import keyboard_cmd
+
+        kb = keyboard_cmd.VelocityKeyboard(
+            max_lin=args_cli.max_lin,
+            max_ang=args_cli.max_ang,
+            on_quit=simulation_app.close,
+        )
+        print(f"[INFO] keyboard backend: {kb.state.backend}")
+        cmd_buf = env.unwrapped.command_manager.get_command("base_velocity")
+        cmd_buf.zero_()  # start still rather than at the config's command
+
     with torch.inference_mode():
         while simulation_app.is_running() and n_steps < args_cli.steps:
+            if kb is not None:
+                cmd_buf[:] = torch.tensor(
+                    kb.update(env.unwrapped.step_dt),
+                    dtype=cmd_buf.dtype,
+                    device=cmd_buf.device,
+                )
             actions = policy(obs)
             obs, rew, dones, _ = env.step(actions)
             total_rew += rew

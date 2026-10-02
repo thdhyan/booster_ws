@@ -609,6 +609,33 @@ class RewardsCfg:
             "dt": 0.02,
         },
     )
+    # Term #24, and the one the 5000-iteration run was missing: a phase-locked
+    # STRIDE, not a cadence rate and not a contact schedule.
+    #
+    # `gait_cadence` is bistable -- 0.4 steps/s and 11 steps/s are both "far from
+    # 2.0" and the policy takes whichever is cheaper, which is how a 5000-iter
+    # run ended at cadence 4.85 / jerk 0.114 / 8-of-8 gate failures.
+    # `phase_swing` locked only CONTACT, a binary predicate a 4 cm twitch
+    # satisfies as readily as a stride, so it could not fix it either.
+    # Locking fore-aft POSITION against the clock makes slow and fast both
+    # expensive, leaving one basin.
+    #
+    # Weight -4.0: squared metres of placement error, so ~0.1 m off-reference
+    # costs -0.04/step against the +1.28 tracking term. Sized to compete, not
+    # to dominate -- an over-weighted position prior makes the robot walk the
+    # reference instead of the command, which is the failure the command-coupled
+    # clock exists to prevent.
+    phase_locked_stride = RewTerm(
+        func=gait.phase_locked_stride,
+        weight=-4.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=["left_foot_link", "right_foot_link"], preserve_order=True
+            ),
+            "base_body_cfg": SceneEntityCfg("robot", body_names=["Trunk"]),
+            "target_stride": 0.22,
+        },
+    )
     phase_swing = RewTerm(
         func=gait.phase_synced_swing,
         # -2.0 final -> -0.4 start.
@@ -760,6 +787,14 @@ class CurriculumCfg:
     # up the other half of the budget. start_weight must equal the static weight
     # in RewardsCfg -- the ramp reads it from the reward manager, and a mismatch
     # makes the static value dead. Terminal values are the 10-01 audit numbers.
+    #
+    # upright_threshold is 0.10, NOT AGILE's-everything-is-fine 0.80. This was
+    # my error at 2ddec51: 0.80 is unreachable while the measured upright ratio
+    # is ~0.02-0.15 (mean episode length 20 steps of 1000), so the ramp would
+    # never fire and the gait penalties would sit at 1/5 strength for the whole
+    # run -- entrenching exactly the shuffle we are trying to remove. 0.10 is
+    # reachable from the first iteration and still means "standing far more than
+    # it currently does".
     action_rate_regularization = CurrTerm(
         func=reward_weight_ramp.RewardWeightRampTerm,
         params={
@@ -768,7 +803,7 @@ class CurriculumCfg:
             "terminal_weight": -2.0,
             "start_step": 20_000,
             "num_steps": 100_000,
-            "upright_threshold": 0.80,
+            "upright_threshold": 0.10,
         },
     )
     action_jerk_regularization = CurrTerm(
@@ -779,7 +814,7 @@ class CurriculumCfg:
             "terminal_weight": -0.5,
             "start_step": 20_000,
             "num_steps": 100_000,
-            "upright_threshold": 0.80,
+            "upright_threshold": 0.10,
         },
     )
     gait_cadence_regularization = CurrTerm(
@@ -790,7 +825,7 @@ class CurriculumCfg:
             "terminal_weight": -1.0,
             "start_step": 20_000,
             "num_steps": 100_000,
-            "upright_threshold": 0.80,
+            "upright_threshold": 0.10,
         },
     )
     phase_swing_regularization = CurrTerm(
@@ -801,7 +836,7 @@ class CurriculumCfg:
             "terminal_weight": -2.0,
             "start_step": 20_000,
             "num_steps": 100_000,
-            "upright_threshold": 0.80,
+            "upright_threshold": 0.10,
         },
     )
     feet_clearance_regularization = CurrTerm(
@@ -812,7 +847,7 @@ class CurriculumCfg:
             "terminal_weight": -8.0,
             "start_step": 20_000,
             "num_steps": 100_000,
-            "upright_threshold": 0.80,
+            "upright_threshold": 0.10,
         },
     )
     feet_alternation_regularization = CurrTerm(
@@ -823,7 +858,7 @@ class CurriculumCfg:
             "terminal_weight": -2.0,
             "start_step": 20_000,
             "num_steps": 100_000,
-            "upright_threshold": 0.80,
+            "upright_threshold": 0.10,
         },
     )
     stride_length_regularization = CurrTerm(
@@ -834,7 +869,7 @@ class CurriculumCfg:
             "terminal_weight": -6.0,
             "start_step": 20_000,
             "num_steps": 100_000,
-            "upright_threshold": 0.80,
+            "upright_threshold": 0.10,
         },
     )
 

@@ -35,67 +35,37 @@ import isaaclab_tasks
 import booster_train.tasks
 import k1_velocity.tasks.velocity
 
+import keyboard_cmd  # same directory; X11 keyboard backend
 
-# Keyboard input handler using carb
+
+# Keyboard input handler.
+#
+# Was: ``carb.input.acquire_input_interface()``, which Isaac Sim 6 no longer has
+# -- it raised ``AttributeError: module 'carb' has no attribute 'input'`` on the
+# first frame, which is what the [DEBUG] prints below used to chase. The reading
+# and the ramp now live in keyboard_cmd, which falls back to X11.
 class KeyboardController:
     def __init__(self):
-        import carb  # Import here to ensure it's after env creation
-        print("[DEBUG] Getting carb input interface...")
-        self.input = carb.input.acquire_input_interface()
-        self.keyboard = self.input.get_keyboard()
-        print(f"[DEBUG] Keyboard: {self.keyboard}")
-        self.carb = carb  # Store reference
+        self._impl = keyboard_cmd.VelocityKeyboard(
+            max_lin=1.5, max_ang=2.0, on_quit=simulation_app.close
+        )
+        print(f"[DEBUG] keyboard backend: {self._impl.state.backend}")
         self.cmd = torch.zeros(3)  # lin_x, lin_y, ang_z
-        self.speed_lin = 1.0
-        self.speed_ang = 1.0
         self.max_lin = 1.5
         self.max_ang = 2.0
 
     def update(self, dt):
-        if not self.keyboard:
-            return self.cmd
-        carb = self.carb
-        # W/S - forward/back
-        if self.input.is_key_pressed(self.keyboard, carb.input.KeyboardInput.W):
-            self.cmd[0] = min(self.cmd[0] + self.speed_lin * dt, self.max_lin)
-        elif self.input.is_key_pressed(self.keyboard, carb.input.KeyboardInput.S):
-            self.cmd[0] = max(self.cmd[0] - self.speed_lin * dt, -self.max_lin)
-        else:
-            self.cmd[0] *= 0.95  # decay to zero
-
-        # A/D - left/right strafe
-        if self.input.is_key_pressed(self.keyboard, carb.input.KeyboardInput.A):
-            self.cmd[1] = min(self.cmd[1] + self.speed_lin * dt, self.max_lin)
-        elif self.input.is_key_pressed(self.keyboard, carb.input.KeyboardInput.D):
-            self.cmd[1] = max(self.cmd[1] - self.speed_lin * dt, -self.max_lin)
-        else:
-            self.cmd[1] *= 0.95
-
-        # Q/E - yaw
-        if self.input.is_key_pressed(self.keyboard, carb.input.KeyboardInput.Q):
-            self.cmd[2] = min(self.cmd[2] + self.speed_ang * dt, self.max_ang)
-        elif self.input.is_key_pressed(self.keyboard, carb.input.KeyboardInput.E):
-            self.cmd[2] = max(self.cmd[2] - self.speed_ang * dt, -self.max_ang)
-        else:
-            self.cmd[2] *= 0.95
-
-        # Space - stop
-        if self.input.is_key_pressed(self.keyboard, carb.input.KeyboardInput.SPACE):
-            self.cmd = torch.zeros(3)
-
-        # Esc - quit
-        if self.input.is_key_pressed(self.keyboard, carb.input.KeyboardInput.ESCAPE):
-            carb.log_info("ESC pressed - quitting")
-            simulation_app.close()
-
+        values = self._impl.update(dt)
+        self.cmd = torch.tensor(values, dtype=self.cmd.dtype, device=self.cmd.device)
         return self.cmd
+
+    # The ramp, decay, Space-to-stop and Esc-to-quit logic used to live here,
+    # reading carb.input directly. It is now keyboard_cmd.VelocityKeyboard; see
+    # that module for why carb.input cannot be used on Isaac Sim 6.
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg, agent_cfg):
-    import carb  # Import here
-    print(f"[DEBUG] carb.input available: {hasattr(carb, 'input')}")
-    
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device else env_cfg.sim.device
     from isaaclab.envs.common import ViewerCfg
@@ -104,7 +74,7 @@ def main(env_cfg, agent_cfg):
     env = gym.make(args_cli.task, cfg=env_cfg)
     env = RslRlVecEnvWrapper(env)
 
-    print(f"[DEBUG] After gym.make, carb.input available: {hasattr(carb, 'input')}")
+    print("[DEBUG] keyboard backend resolved by keyboard_cmd, not carb.input")
 
     agent_cfg.max_iterations = 1
     agent_cfg_dict = agent_cfg.to_dict()
@@ -131,13 +101,27 @@ def main(env_cfg, agent_cfg):
     print("  ESC - quit")
 
     obs, _extras = env.reset()
-    dt = env.unwrapped.physics_dt * env.unwrapped.decimation  # control dt
+    # Control dt. ``decimation`` moved from the env to the cfg in Isaac Lab 2.1+,
+    # so reading it off the env raised
+    # ``AttributeError: 'ManagerBasedRLEnv' object has no attribute 'decimation'``.
+    # ``step_dt`` is the composed control timestep and is the honest thing to feed
+    # the key ramp anyway; fall back to physics_dt * cfg decimation if absent.
+    dt = getattr(env.unwrapped, "step_dt", None)
+    if dt is None:
+        dt = env.unwrapped.physics_dt * env_cfg.decimation
+
+    # ``CommandManager`` has no ``set_command`` in Isaac Lab 2.1+ (only
+    # ``get_command``/``get_term``), so the old call raised
+    # ``AttributeError: 'CommandManager' object has no attribute 'set_command'``.
+    # ``get_command`` returns the live tensor the term samples from, so writing
+    # into it in place is both the supported path and the one that also stops the
+    # 8-12 s resample timer from overwriting the keyboard command between frames.
+    cmd_buf = env.unwrapped.command_manager.get_command("base_velocity")
 
     with torch.inference_mode():
         while simulation_app.is_running():
             cmd = kb.update(dt)
-            if hasattr(env.unwrapped, "command_manager"):
-                env.unwrapped.command_manager.set_command(cmd.unsqueeze(0))
+            cmd_buf[:] = cmd.to(cmd_buf.device, cmd_buf.dtype)
 
             actions = policy({"policy": obs["policy"]})
             obs, rew, dones, _ = env.step(actions)

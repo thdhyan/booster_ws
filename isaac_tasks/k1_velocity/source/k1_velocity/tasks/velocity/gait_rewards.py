@@ -12,6 +12,8 @@ straight into ``RewTerm`` with a negative weight, matching AGILE's convention.
 """
 from __future__ import annotations
 
+import math
+
 import torch
 
 from isaaclab.managers import SceneEntityCfg
@@ -335,6 +337,67 @@ def phase_synced_swing(
     swing = torch.stack((left_swing, ~left_swing), dim=1)
     # In contact while owing swing, or airborne while owing stance, is the error.
     return (swing == contact).float().mean(dim=1)
+
+
+def phase_locked_stride(
+    env,
+    asset_cfg: SceneEntityCfg,
+    base_body_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    target_stride: float = 0.22,
+) -> torch.Tensor:
+    """Penalise fore-aft foot placement that disagrees with the gait clock.
+
+    WHY THIS EXISTS
+    ---------------
+    ``gait_cadence_penalty`` cannot fix the measured shuffle, and the 5000-
+    iteration run proved it: cadence 4.85 steps/s (gate wants 1.2-4.0), jerk
+    0.114, 8/8 fail. The reason is that a *rate* penalty is bistable. Both 0.4
+    steps/s (standing) and 11 steps/s (chatter) are "far from 2.0", so the policy
+    picks whichever is cheaper given that tracking pays +1.28/step against ~0.7
+    of combined gait penalty. No weight fixes an objective with no preferred
+    basin.
+
+    ``phase_synced_swing`` already locks *contact* to the clock and also failed,
+    which is the evidence that contact is too weak a channel: contact is a
+    binary predicate, satisfied by a 4 cm twitch as readily as by a real stride.
+
+    So this locks *position*. The reference is a sinusoid in the clock's phase:
+    each foot's fore-aft offset from the hip should follow
+    ``target_stride * sin(2*pi*phase)``, left and right half a cycle apart. Slow
+    and fast are then both expensive -- a foot that does not travel the
+    commanded amplitude is wrong regardless of how often it moves -- and only a
+    stride at the clock's frequency survives.
+
+    Amplitude scales with the commanded speed through ``target_stride`` being
+    interpreted per unit of the clock's own frequency (see ``gait_clock``: the
+    phase now advances at a command-coupled rate), so demanding the same
+    absolute stride at 0.1 and 0.5 m/s would again fight velocity tracking.
+
+    Returns the per-env mean squared fore-aft placement error, in m^2.
+    """
+    robot = env.scene[asset_cfg.name]
+    phase = gait_clock.get_phase(env)
+    hz = gait_clock.get_frequency(env)
+    # Reference amplitude per env: the stride the commanded cadence implies.
+    # At 1 Hz (2 steps/s) this is target_stride; faster cadence shortens the
+    # per-step excursion, which is what a real gait does at higher speed.
+    amp = target_stride / hz.clamp(min=0.1)
+
+    wave = torch.sin(2.0 * math.pi * phase)              # (num_envs,)
+    # Left foot leads the cycle, right foot is half a cycle behind.
+    reference = torch.stack((wave, -wave), dim=1) * amp.unsqueeze(1)   # (N, 2)
+
+    pos = robot.data.body_pos_w[:, asset_cfg.body_ids]                 # (N, 2, 3)
+    hip = robot.data.body_pos_w[:, base_body_cfg.body_ids]             # (N, 1, 3)
+
+    # Yaw-aligned forward axis: a fixed world +x would call "forward" whatever
+    # direction the robot happens to face, which breaks the moment it turns.
+    quat = robot.data.body_quat_w[:, base_body_cfg.body_ids]
+    w, x, y, z = quat.unbind(-1)
+    fwd = torch.stack((1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + w * z)), dim=-1)
+
+    along = ((pos - hip) * fwd.unsqueeze(1)).sum(dim=-1)               # (N, 2)
+    return (along - reference).pow(2).mean(dim=1)
 
 
 def action_jerk_l2(env, asset_cfg: SceneEntityCfg) -> torch.Tensor:
