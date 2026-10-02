@@ -38,15 +38,15 @@ parser.add_argument("--task", default="Isaac-Velocity-Rough-K1-Teacher-Play-v0")
 parser.add_argument("--checkpoint", required=True)
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--device", default=None)
+# The zz-bw container wrapper (`run_k1_train.sh`) always appends --headless.
+# Strip it BEFORE parse_args -- doing it afterwards was useless because argparse
+# had already exited 2 on it. Absorbing it here lets one command line work both
+# headless (smoke / CI) and with a window (real keyboard use).
+if "--headless" in sys.argv:
+    sys.argv.remove("--headless")
 cli_args = parser.parse_args()
 
 from isaaclab.app import AppLauncher  # noqa: E402
-
-# The zz-bw container wrapper (`run_k1_train.sh`) always appends --headless.
-# Accept and ignore it here so the same command line works headless (smoke /
-# CI) and with a window (actual keyboard use, which needs a display).
-if "--headless" in sys.argv:
-    sys.argv.remove("--headless")
 
 app_launcher = AppLauncher(args_cli=cli_args)
 simulation_app = app_launcher.app
