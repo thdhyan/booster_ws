@@ -34,21 +34,26 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 parser = argparse.ArgumentParser(description="Keyboard teleop for a K1 teacher checkpoint.")
+# The zz-bw container wrapper (`run_k1_train.sh`) always appends --headless.
+# Strip it here so one command line works both headless (smoke / CI) and with a
+# window (real keyboard use).
+if "--headless" in sys.argv:
+    sys.argv.remove("--headless")
 parser.add_argument("--task", default="Isaac-Velocity-Rough-K1-Teacher-Play-v0")
 parser.add_argument("--checkpoint", required=True)
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--device", default=None)
-# The zz-bw container wrapper (`run_k1_train.sh`) always appends --headless.
-# Strip it BEFORE parse_args -- doing it afterwards was useless because argparse
-# had already exited 2 on it. Absorbing it here lets one command line work both
-# headless (smoke / CI) and with a window (real keyboard use).
-if "--headless" in sys.argv:
-    sys.argv.remove("--headless")
-cli_args = parser.parse_args()
+# parse_known_args + argv reset, matching play_record.py / play_keyboard_fixed.py.
+# Hydra re-parses sys.argv when @hydra_task_config is applied, and its parser
+# knows nothing about --task/--checkpoint/--num_envs, so leaving them in argv
+# makes Hydra exit with
+#   "unrecognized arguments: --task --checkpoint ... --num_envs 1".
+args_cli, hydra_args = parser.parse_known_args()
+sys.argv = [sys.argv[0]] + hydra_args
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
-app_launcher = AppLauncher(args_cli=cli_args)
+app_launcher = AppLauncher(args_cli=args_cli)
 simulation_app = app_launcher.app
 
 import gymnasium as gym  # noqa: E402
@@ -67,16 +72,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import keyboard_cmd  # noqa: E402
 
 
-@hydra_task_config(cli_args.task, "rsl_rl_cfg_entry_point")
+@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
-    env_cfg.scene.num_envs = cli_args.num_envs
-    if cli_args.device:
-        env_cfg.sim.device = cli_args.device
+    env_cfg.scene.num_envs = args_cli.num_envs
+    if args_cli.device:
+        env_cfg.sim.device = args_cli.device
     from isaaclab.envs.common import ViewerCfg
 
     env_cfg.viewer = ViewerCfg(eye=(2.5, 0.0, 1.4), lookat=(0.0, 0.0, 0.55))
 
-    env = gym.make(cli_args.task, cfg=env_cfg)
+    env = gym.make(args_cli.task, cfg=env_cfg)
     env = RslRlVecEnvWrapper(env)
 
     agent_cfg.max_iterations = 1
@@ -91,8 +96,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     runner = OnPolicyRunner(env, agent_cfg_dict, log_dir="/tmp/k1_play_keyboard_teacher",
                             device=agent_cfg.device)
-    print(f"[INFO] loading TEACHER checkpoint: {cli_args.checkpoint}")
-    runner.load(os.path.abspath(cli_args.checkpoint),
+    print(f"[INFO] loading TEACHER checkpoint: {args_cli.checkpoint}")
+    runner.load(os.path.abspath(args_cli.checkpoint),
                 load_cfg={"optimizer": False, "iteration": True})
     policy = runner.alg.get_policy()
     policy.eval()
