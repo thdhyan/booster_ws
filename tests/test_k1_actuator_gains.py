@@ -23,12 +23,15 @@ from __future__ import annotations
 import pathlib
 import re
 
+import pytest
+
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOOSTER = (
     _ROOT
     / "isaac_tasks/booster_train_ref/source/booster_train/booster_train/assets/robots/booster.py"
 )
 ACTUATOR = BOOSTER.with_name("actuator.py")
+_SUBMODULE = "isaac_tasks/booster_train_ref"
 CFG = (
     _ROOT
     / "isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/velocity_env_cfg.py"
@@ -121,6 +124,62 @@ def test_published_gains_are_the_documented_ones():
         "the wrapper's class default changed; re-verify the derived gains"
     )
     assert "class BoosterJointE4310" in act
+
+
+def test_the_pinned_submodule_commit_contains_the_fix():
+    """The PINNED submodule commit must carry the fix, not just the working tree.
+
+    This is the guard for the actual failure. ``isaac_tasks/booster_train_ref`` is
+    a git submodule, and the armature_ratio fix was originally made only in its
+    working tree. Every test in this file passed locally while the training box
+    ran ``git reset --hard origin/main``, which restored the submodule to a commit
+    WITHOUT the fix -- so the box silently trained on the wrong ankle gains
+    (35.69/35.69 instead of 24.98/7.14) and nobody noticed until the two
+    environments were compared.
+
+    Checking the file on disk cannot catch that: locally the file was correct.
+    This reads what the parent repo actually pins, which is what a fresh clone and
+    every training host will check out.
+    """
+    import subprocess
+
+    pinned = subprocess.run(
+        ["git", "ls-tree", "HEAD", _SUBMODULE],
+        cwd=_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert len(pinned) >= 3 and pinned[1] == "commit", (
+        f"could not read the pinned submodule commit for {_SUBMODULE}: {pinned!r}"
+    )
+    sha = pinned[2]
+
+    # The fix must be present IN that commit, not merely in the working tree.
+    blob = subprocess.run(
+        ["git", "-C", str(_ROOT / _SUBMODULE), "show", f"{sha}:source/booster_train/"
+         "booster_train/assets/robots/booster.py"],
+        capture_output=True, text=True,
+    )
+    if blob.returncode != 0:
+        pytest.skip(f"submodule commit {sha[:8]} is not fetched locally")
+    assert blob.stdout.count("armature_ratio=(1.4, 0.4)") == 2, (
+        f"submodule commit {sha[:8]} does NOT contain the ankle armature_ratio fix. "
+        "The training hosts check out this commit, so they would silently run the "
+        "wrong gains. Commit and push the fix inside the submodule, then bump the "
+        "pointer here."
+    )
+
+
+def test_working_tree_matches_the_pinned_submodule():
+    """No uncommitted submodule edits -- they will vanish on the next clone/reset."""
+    import subprocess
+
+    dirty = subprocess.run(
+        ["git", "-C", str(_ROOT / _SUBMODULE), "status", "--porcelain"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert not dirty, (
+        "the booster_train submodule has uncommitted changes; they are invisible to "
+        f"the parent repo and are lost on any clone or reset:\n{dirty}"
+    )
 
 
 def test_the_cause_is_documented_where_the_fix_lives():
