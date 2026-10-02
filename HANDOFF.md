@@ -954,3 +954,115 @@ Five policies, all MLP (512,256,128): **P1 stand** and **P2 walk** are *teacher�
 
 1. User **go-ahead on the plan** → T6.0 git closure → T6.1 env rebuild → T6.2 migration → T6.3 infra → T6.4 base policies → T6.5 HRL → T6.6 integration.
 2. Every gate (G0–G6) blocks the next stage; user reviews wandb + videos every 200 iters.
+
+---
+
+## 📌 SESSION UPDATE — 2026-10-01, latest: AGILE parity + upright-gated weight ramps + 1M-step run on zz-bw
+
+**Read this before `docs/agile_weight_comparison.md`.**
+
+### zz-bw is NOT unreachable (STATE.md §3.3 is stale)
+
+`ssh zz-bw` works. The `kex_exchange_identification: Connection reset` symptom is a
+**stale local port-forward bind**, not a down host — `~/.ssh/config` has
+`LocalForward 3001 localhost:3001` for zz-bw, and once 3001 is held, every
+subsequent connection dies during kex:
+
+```bash
+ssh -o ClearAllForwardings=yes zz-bw     # <- works
+```
+
+Do **not** use `ssh -F ~/.ssh/config zz-bw`; the `-F` path fails with
+`Can't open user config file` from the remote side. Use the form above. The box
+also resets connections under load (load avg ~50, 17 users) — wrap remote calls in
+a retry loop, that is normal and not a failure.
+
+### AGILE parity (`bbf01ac`) — 23 terms, matching AGILE's Booster T1
+
+Closed the gap against `nvidia-isaac/WBC-AGILE` (the reference NVIDIA ships for
+T1 is the closest analogue to K1). Was 20/23, now 23/23 plus 8 non-AGILE extras.
+
+| added | AGILE T1 weight | why |
+|---|---|---|
+| `ankle_torques` | -1e-4 | all 4 ankle joints, NOT roll-only — that is `ankle_roll_torques`' job at 20× |
+| `dof_vel` | -2e-4 | whole robot; a `joint_names` filter would make it weaker than the reference |
+| `jumping` | -0.5 | both feet off ground, clock-independent |
+| **weighted trackers** | — | replaces the plain exponential; **this is the speed fix** |
+
+The weighted tracker (`agile_rewards.py`) ramps 1.0×→2.0× on commanded speed.
+The plain exponential returns nearly the same credit for creeping as for arriving,
+which is why the retrain walked **0.09-0.31 m/s against a 0.5 m/s command** and
+was paid for the shortfall. Weight stays 10.0 and std stays 0.15 (audited values,
+not AGILE's 5.0/0.2) — reverting either undoes half the same fix.
+
+Two port traps, both documented in the module: AGILE reads
+`command_term.cfg.min_vel_norm`, which exists only on AGILE's command class, and
+the weight ramp must read `cfg.ranges` **live** because
+`VelocityRangeCurriculumTerm` mutates those ranges mid-run (a ramp pinned to the
+initial range goes flat the moment the curriculum moves).
+
+### Upright-gated weight ramps (`2ddec51`) — the main change
+
+**Static weights are now light; ramps supply the rest.** Seven terms:
+
+| term | start (static) | terminal (ramped) |
+|---|---|---|
+| `action_rate_l2` | -0.5 | -2.0 |
+| `action_jerk_l2` | -0.05 | -0.5 |
+| `gait_cadence` | -0.2 | -1.0 |
+| `phase_swing` | -0.4 | -2.0 |
+| `feet_clearance` | -1.6 | -8.0 |
+| `feet_alternation` | -0.4 | -2.0 |
+| `stride_length` | -1.2 | -6.0 |
+
+New `reward_weight_ramp.py`. **The deviation from AGILE, and why it matters:**
+AGILE's `update_reward_weight_step` ramps on `common_step_counter` alone. We
+credit progress **only while upright** (≥0.80, same signal
+`VelocityRangeCurriculumTerm` uses). A step-based schedule would hand a still-
+falling policy the terminal smoothness penalty for not being smooth yet. A
+missing upright measurement is never read as success.
+
+`max_iterations` 5 000 → **42 000** (= 1.008M control steps vs AGILE's 1.2M).
+AGILE's absolute 50k/150k schedule would have been **unstarted** for the whole of
+our earlier 3 000-iteration (72k-step) runs — scaled to 20 000/100 000 instead.
+
+### Do these terms make learning easier? No — measured
+
+| term | weight | measured contribution |
+|---|---|---|
+| `feet_clearance` | -8.0 | **-0.0000/step** |
+| `stride_length` | -6.0 | -0.0015 |
+| `gait_cadence` | -1.0 | -0.0015 |
+| `phase_swing` | -2.0 | -0.0043 |
+| `feet_alternation` | -2.0 | -0.0004 |
+| **tracking** | **10.0** | **+1.18** |
+
+53% of the penalty budget, four orders of magnitude below the task signal. More
+gating of this kind makes the objective **harder**, which is why they ramp.
+
+### Running job
+
+`k1_ramp_1m` on zz-bw GPU1, **42 000 iters × 4096 envs**, log
+`/export/scratch/thakk100/k1/ramp_1m.log`, session `k1_ramp_1m`.
+Verified live at iteration 10/42000: 0 tracebacks, all 7 ramps registered as
+curriculum terms 2–8, `Mean episode length 20.07` (full episode = the ramp gate
+is open early). Video every 2000 iters. Superseded control `agilepar_teacher`
+killed at iteration 41. Iteration time ~16.2 s — expect **~7.5 days** at this
+rate; that is the contended-GPU number, not the 1.14 s/iter exclusive one.
+
+### Base height (squat/jump/lift) — proposal only, NOT in the run
+
+See `docs/k1_base_height_parameter.md`. Three conflicts must be fixed before any
+height command: `jumping` (-0.5) currently **forbids jumping**;
+`base_height` (+2.0) pins 0.57 m and so fights squatting; AGILE's
+`UniformVelocityBaseHeightCommandCfg` (`min_walk_height`, `squatting_threshold`)
+already solves the second. Gate height before commanding it, and keep it out of
+the 1M run so that run's result stays attributable.
+
+### Test state
+
+`169 passed`. The single failure, `test_deployability_invariant`, is **pre-existing**
+(`k1_velocity` is not on PYTHONPATH on the laptop) and fails identically at
+`ea7179b`. `test_action_rate_was_strengthened` was **rewritten, not deleted**: it
+correctly failed on the new light static weight, so it now asserts the
+static/ramp **pair** — a static -2.0 regression or a missing ramp both fail.
