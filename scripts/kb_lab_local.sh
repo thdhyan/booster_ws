@@ -15,4 +15,5 @@ source scripts/phase6_env.sh
 exec "$PHASE6_VENV/bin/python" isaac_tasks/k1_velocity/scripts/play_keyboard_teacher.py \
   --task Isaac-Velocity-Rough-K1-Teacher-Play-v0 \
   --checkpoint "$CKPT" \
-  --num_envs 1
+  --num_envs 1 \
+  --viz kit

@@ -54,17 +54,16 @@ parser.add_argument("--num_envs", type=int, default=1)
 #   "No visualizer was selected, so running in headless mode. To launch a
 #    visualizer app, pass '--viz <names>' (for example '--viz kit')."
 #
-# Two earlier attempts failed here. (1) set_defaults(viz=[...]) is silently
-# discarded: add_app_launcher_args registers the option as
-#     arg_group.add_argument("--visualizer", "--viz", ...)
-# so the DEST is "visualizer", not "viz", and the value is a list[str] from
-# _parse_visualizer_csv. (2) appending "--viz kit" to sys.argv is wiped by the
-# `sys.argv = [argv0] + hydra_args` reset below, and if it survives that, Hydra
-# re-parses argv and exits "unrecognized arguments: --viz".
+# --viz CANNOT be defaulted in code. It is registered as
+#     arg_group.add_argument("--visualizer", "--viz", action=ExplicitAction, ...)
+# and ExplicitAction sets "<dest>_explicit" only when the option is genuinely
+# typed on the command line. _resolve_headless_settings then takes the
+# "no CLI visualizer selection" branch and forces headless anyway.
 #
-# Setting the real dest through argparse is the only route that works, and it
-# costs nothing: hydra_args will not contain it, so Hydra never sees it.
-parser.set_defaults(visualizer=["kit"])  # pass --viz none for a headless smoke
+# So the launcher script must pass --viz kit on the command line. That is safe
+# with parse_known_args: --viz is a known option, so it lands in args_cli and is
+# absent from hydra_args -- Hydra never sees it, unlike putting it straight into
+# sys.argv.
 AppLauncher.add_app_launcher_args(parser)
 # parse_known_args + argv reset, matching play_record.py / play_keyboard_fixed.py.
 # Hydra re-parses sys.argv when @hydra_task_config is applied, and its parser
