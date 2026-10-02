@@ -23,6 +23,19 @@ gym.register(
 )
 
 gym.register(
+    id="Isaac-Velocity-Rough-K1-Teacher-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        # Teacher actor = 237-dim privileged obs, so the play env must promote
+        # the teacher group into `policy`. Loading a teacher checkpoint into
+        # Isaac-Velocity-Rough-K1-Play-v0 fails on a 512x237 vs 512x50 mismatch.
+        "env_cfg_entry_point": "k1_velocity.tasks.velocity.velocity_play_cfg:K1VelocityRoughTeacherPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.rsl_rl_ppo_cfg:K1VelocityPPOTeacherRunnerCfg",
+    },
+)
+
+gym.register(
     id="Isaac-Velocity-Rough-K1-Teacher-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
