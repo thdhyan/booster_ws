@@ -71,11 +71,20 @@ AppLauncher.add_app_launcher_args(parser)
 # makes Hydra exit with
 #   "unrecognized arguments: --task --checkpoint ... --num_envs 1".
 args_cli, hydra_args = parser.parse_known_args()
-sys.argv = [sys.argv[0]] + hydra_args
+# NB: do NOT reset sys.argv yet. AppLauncher re-parses sys.argv itself and
+# IGNORES the namespace passed to it for the visualizer flags -- verified: the
+# namespace held visualizer=['kit'], visualizer_explicit=True, yet after
+# construction AppLauncher reported explicit=False, types=[] and headless=True,
+# because the reset below had already stripped --viz. The reset is done after
+# AppLauncher(), further down.
 
 
 
 app_launcher = AppLauncher(args_cli=args_cli)
+# Now that AppLauncher has read sys.argv, hand Hydra a clean copy without
+# our flags. Hydra re-parses sys.argv when @hydra_task_config is applied
+# and knows nothing about --task/--checkpoint/--num_envs/--viz.
+sys.argv = [sys.argv[0]] + hydra_args
 simulation_app = app_launcher.app
 
 import gymnasium as gym  # noqa: E402
