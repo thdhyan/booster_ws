@@ -136,6 +136,26 @@ def test_stride_is_position_based_not_a_rate_penalty():
     assert "sin" in body, "the reference must oscillate with phase"
 
 
+def test_stride_forward_axis_is_three_dimensional():
+    """Regression: the yaw forward axis was built 2-component and broadcast
+    against 3-component positions.
+
+    Cost a full run before it was caught:
+    ``RuntimeError: The size of tensor a (3) must match the size of tensor b (2)
+    at non-singleton dimension 3`` on the first reward step. The launcher still
+    exited 0, which is the ``python.sh`` rc trap -- only the log showed it.
+    """
+    body = GAIT.read_text().split("def phase_locked_stride", 1)[1].split("\ndef ", 1)[0]
+    # A 3-component axis must be stacked from three entries, not two.
+    assert "torch.zeros_like" in body, (
+        "the forward axis must be 3-component (x, y, 0) to project 3-D positions"
+    )
+    # And it must be applied without an unsqueeze that would mis-shape it.
+    assert ".sum(dim=-1)                             # (N, 2)" in body or (
+        "along = ((pos - hip) * fwd).sum(dim=-1)" in body
+    ), "fwd must broadcast directly against (N, 2, 3) offsets"
+
+
 def test_stride_reference_antiphases_the_two_feet():
     """Left and right must be half a cycle apart, else both feet move together."""
     body = GAIT.read_text().split("def phase_locked_stride", 1)[1].split("\ndef ", 1)[0]

@@ -392,11 +392,16 @@ def phase_locked_stride(
 
     # Yaw-aligned forward axis: a fixed world +x would call "forward" whatever
     # direction the robot happens to face, which breaks the moment it turns.
+    # Built in the world frame with a zero z component, so it is (N, 1, 3) and
+    # broadcasts against the (N, 2, 3) foot offsets -- a 2-component axis here
+    # raises "size of tensor a (3) must match tensor b (2)".
     quat = robot.data.body_quat_w[:, base_body_cfg.body_ids]
     w, x, y, z = quat.unbind(-1)
-    fwd = torch.stack((1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + w * z)), dim=-1)
+    fwd_x = 1.0 - 2.0 * (y * y + z * z)
+    fwd_y = 2.0 * (x * y + w * z)
+    fwd = torch.stack((fwd_x, fwd_y, torch.zeros_like(fwd_x)), dim=-1)   # (N, 1, 3)
 
-    along = ((pos - hip) * fwd.unsqueeze(1)).sum(dim=-1)               # (N, 2)
+    along = ((pos - hip) * fwd).sum(dim=-1)                             # (N, 2)
     return (along - reference).pow(2).mean(dim=1)
 
 
