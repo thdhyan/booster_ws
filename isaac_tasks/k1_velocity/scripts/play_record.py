@@ -55,6 +55,13 @@ parser.add_argument("--disable_jit", action="store_true")
 parser.add_argument("--panel_video", action="store_true",
                     help="write a labelled overview/top-down/follow/side debug panel instead of the HUD clip")
 parser.add_argument("--panel_fps", type=int, default=25)
+parser.add_argument("--keyboard", action="store_true",
+                    help="drive the command from the keyboard (W/S/A/D/Q/E, Space stop, "
+                         "Esc quit) while recording video + trace")
+parser.add_argument("--max_lin", type=float, default=1.5,
+                    help="keyboard cap on commanded |vx|,|vy| (m/s)")
+parser.add_argument("--max_ang", type=float, default=2.0,
+                    help="keyboard cap on commanded |wz| (rad/s)")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -273,6 +280,33 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         env_cfg.commands.base_velocity.heading_command = False
         cmd_text = f"vx={vx:+.2f}  vy={vy:+.2f}  wz={wz:+.2f}"
 
+    # -- keyboard drive -----------------------------------------------------
+    # Same three things play.py established, in the same order:
+    #   * the X11 backend from keyboard_cmd, because carb.input is absent in
+    #     Isaac Sim 6;
+    #   * write into the tensor `get_command` returns rather than calling
+    #     CommandManager.set_command, which no longer exists;
+    #   * zero it first, so the session starts still instead of at whatever the
+    #     config's command term sampled.
+    # Writing in place also beats set_command against the 8-12 s resample timer,
+    # which would otherwise overwrite the key command between frames.
+    # env.decimation is not the timestep either: it is env.step_dt.
+    kb = None
+    cmd_buf = None
+    if args_cli.keyboard:
+        if args_cli.cmd is not None:
+            print("[WARN] --keyboard given with --cmd; the keyboard wins and the "
+                  "pinned range is ignored")
+        import keyboard_cmd
+
+        kb = keyboard_cmd.VelocityKeyboard(
+            max_lin=args_cli.max_lin,
+            max_ang=args_cli.max_ang,
+            on_quit=simulation_app.close,
+        )
+        print(f"[INFO] keyboard backend: {kb.state.backend} "
+              f"(W/S fwd-back, A/D strafe, Q/E turn, Space stop, Esc quit)")
+
     # -- env + rgb render --------------------------------------------------
     gym_env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
     base_env = gym_env.unwrapped
@@ -368,7 +402,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         _has_feet = False
         print(f"[WARN] foot trace unavailable ({type(exc).__name__}: {exc}); "
               "swing/clearance cannot be measured from this trace")
+    if _has_feet:
+        # Declare them here, not at the dict literal above: appending to a key
+        # that was never created raises KeyError on the first step.
+        trace.setdefault("foot_pos", [])
+        trace.setdefault("foot_contact_n", [])
     obs, _extras = env.reset()
+    if kb is not None:
+        cmd_buf = base_env.command_manager.get_command("base_velocity")
+        cmd_buf.zero_()  # start still, not at the config's sampled command
+        cmd_text = "keyboard (Space=stop)"
     eye_offset = eye if eye is not None else tuple(env_cfg.viewer.eye)
     lookat_offset = lookat if lookat is not None else tuple(env_cfg.viewer.lookat)
     _set_recording_camera(base_env, robot, eye_offset, lookat_offset)
@@ -408,6 +451,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             if not simulation_app.is_running():
                 break
             actions = infer(obs)
+            if kb is not None:
+                # kb.update returns a 3-vector (vx, vy, wz) already ramped and
+                # clamped by --max_lin/--max_ang. step_dt is the control period;
+                # env.decimation is not it.
+                _cmd = kb.update(base_env.step_dt)
+                cmd_buf[:] = torch.tensor(_cmd, dtype=cmd_buf.dtype, device=cmd_buf.device)
+                cmd_text = (f"KEY vx={_cmd[0]:+.2f} vy={_cmd[1]:+.2f} wz={_cmd[2]:+.2f}")
             obs, rew, dones, _ = env.step(actions)
             ep_reward += rew
             ep_reward[dones.bool()] = 0.0
@@ -457,6 +507,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         panel_recorder.close()
         panel_cams.close()
         print(f"[INFO] panel video saved -> {args_cli.video_out} ({frames_written} frames)")
+    if kb is not None:
+        # Releases the X11 display grab; without it the next keyboard session in
+        # the same X session can fail to open the keyboard.
+        kb.close()
+        print("[INFO] keyboard released")
     if writer is not None:
         writer.close()
         print(f"[INFO] video saved -> {args_cli.video_out} "
