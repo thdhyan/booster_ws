@@ -131,10 +131,17 @@ class LocomotionNode(Node):
         imu_topic = self.declare_parameter('imu_topic', '').value
         odom_topic = self.declare_parameter('odom_topic', '').value
         history_len = int(self.declare_parameter('history_len', 10).value)
+        self._history_len = history_len
         self._input_mode = self.declare_parameter('input_mode', 'latest').value
         if self._input_mode not in ('latest', 'stacked'):
             raise ValueError(f"input_mode must be 'latest' or 'stacked', "
                              f"got {self._input_mode!r}")
+        # Width the policy is actually fed at inference. The load-time probe must
+        # use this and not a hardcoded OBS_DIM: a distilled student is
+        # (history_len * OBS_DIM)-input, so the one mode that can run it
+        # ('stacked') is the one the old probe rejected.
+        self._policy_input_dim = (history_len * OBS_DIM
+                                  if self._input_mode == 'stacked' else OBS_DIM)
         publish_obs_debug = bool(
             self.declare_parameter('publish_obs_debug', True).value)
 
@@ -222,19 +229,31 @@ class LocomotionNode(Node):
         policy = torch.jit.load(path)
         policy.eval()
         # Fail fast on layout drift: probe input dim with a dummy forward.
+        # Probe at the width this node will actually feed (see
+        # _policy_input_dim), not at OBS_DIM. Naming both real candidates matters
+        # because the old message blamed 48-dim exports and sent the reader
+        # looking for a phase-clock regression that was not the cause.
+        want = self._policy_input_dim
         with torch.no_grad():
             try:
-                out = policy(torch.zeros(1, OBS_DIM))
+                out = policy(torch.zeros(1, want))
             except RuntimeError as exc:
+                other = OBS_DIM if want != OBS_DIM else self._history_len * OBS_DIM
                 raise RuntimeError(
                     f'policy input layout mismatch: {path} does not accept '
-                    f'OBS_DIM={OBS_DIM}. Exports made before the phase-clock '
-                    f'change are 48-dim — retrain and re-export the gait-fix '
-                    f'policy before deploying it here.'
+                    f'{want} inputs, which is what input_mode='
+                    f'{self._input_mode!r} feeds (history_len='
+                    f'{self._history_len} x OBS_DIM={OBS_DIM}). If this export '
+                    f'was built for the other layout, it wants {other} — set '
+                    f'input_mode accordingly. A distilled student is '
+                    f'{self._history_len * OBS_DIM}-input and needs '
+                    f"input_mode='stacked'."
                 ) from exc
         if out.numel() != 12:
             raise RuntimeError(f'policy output dim {out.numel()} != 12')
-        self.get_logger().info(f'policy loaded: {path} (in={OBS_DIM}, out=12)')
+        self.get_logger().info(
+            f'policy loaded: {path} (in={want}, out=12, '
+            f"input_mode={self._input_mode})")
         return policy
 
     # ------------------------------------------------------------------ #
@@ -327,6 +346,9 @@ class LocomotionNode(Node):
             else:
                 # current blind policy consumes the LATEST single-step obs
                 x = torch.from_numpy(self._history[-1]).unsqueeze(0)
+            assert x.numel() == self._policy_input_dim, (
+                f'inference feeds {x.numel()} but the policy was probed at '
+                f'{self._policy_input_dim}; history_len and input_mode disagree')
             action = self._policy(x).squeeze(0).numpy()
 
         with self._lock:
