@@ -635,15 +635,24 @@ class RewardsCfg:
     )
     feet_clearance = RewTerm(
         func=gait.feet_clearance,
-        # -8.0 final -> -1.6 start. Heaviest single term in the budget and it
-        # reads -0.0000/step today (a hinge, zero until a foot actually lifts).
+        # -8.0 final -> -1.6 start. Heaviest single term in the budget.
+        #
+        # It read -0.0000/step for every run until 2026-10-06 because the term
+        # compared foot height against 0.06 m while the foot link rests at
+        # ~0.059 m -- short = 1 mm, short^2 = 1e-6, so it could only ever charge
+        # for sinking, never for failing to lift. It now measures LIFT against
+        # the stance foot, which the measured shuffle does not produce at all
+        # (+0.0000 m at 0.1 m/s, +0.015 m at 0.5 m/s).
         weight=-1.6,
         params={
             # contact for the swing/stance test, robot for the foot heights.
             # These are different prims: a ContactSensor has no body_pos.
-            "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
-            "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
-            "target_height": 0.06,
+            "contact_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"], preserve_order=True),
+            "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"], preserve_order=True),
+            # 6 cm of foot clearance above the stance foot -- a real step, not a
+            # scrape. Replaces the old target_height, which was compared against
+            # the foot's absolute standing height and so was unreachable-by-construction.
+            "target_lift": 0.06,
         },
     )
     feet_alternation = RewTerm(

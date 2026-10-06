@@ -231,24 +231,59 @@ def feet_clearance(
     env,
     contact_cfg: SceneEntityCfg,
     asset_cfg: SceneEntityCfg,
-    target_height: float = 0.06,
+    target_lift: float = 0.06,
     foot_height_threshold: float = 1.0,
 ) -> torch.Tensor:
-    """Penalise a swing foot that stays below ``target_height`` off the ground.
+    """Penalise a swing foot that is not lifted clear of the stance foot.
 
-    Guards against the shuffle directly: with 3-5 cm strides the feet barely
-    leave the floor. Only feet that are genuinely swinging are scored, so the
-    policy is not penalised for the stance foot staying down, and an env with no
-    swing foot at all is skipped rather than punished.
+    WHY THIS MEASURES LIFT, NOT HEIGHT
+    ----------------------------------
+    The previous version compared each swinging foot's world height against
+    ``target_height = 0.06`` m. Measured on the seed-43 student, **the foot link
+    origin rests at ~0.059 m**, so at rest ``short = 0.06 - 0.059 = 0.001 m`` and
+    ``short**2 = 1e-6``. The term was mathematically pinned near zero in every
+    512-env run and could only ever charge a foot for being *below its own normal
+    standing height* -- i.e. for sinking. It could not charge a policy for failing
+    to lift, which is the failure we actually have.
+
+    That measurement is the whole reason the shuffle survived seven reward terms:
+
+    ====== =========== ============= ==============
+    cmd     cadence     LIFT (mean)  swing% (foot unloaded)
+    ====== =========== ============= ==============
+    0.1     9.65/s      +0.0000 m    63.3%
+    0.2     9.63/s      +0.0036 m    70.0%
+    0.3     8.80/s      +0.0097 m    73.9%
+    0.5     8.53/s      +0.0153 m    79.5%
+    ====== =========== ============= ==============
+
+    The feet come off the ground and go straight back down. So the quantity to
+    charge for is the **lift**: a swinging foot's height relative to the stance
+    foot. That is self-referencing, so it needs no absolute height that has to be
+    re-tuned when the robot's geometry or pose changes, and it cannot be
+    satisfied by a foot that never rises.
+
+    A stance foot is treated as being at target so it contributes nothing, and an
+    env with no swinging foot at all is skipped rather than punished -- that gate
+    is what let the old term read a clean 0.0000 and hide the problem.
+
+    Returns the per-env mean squared lift shortfall, in m^2.
     """
-    feet = env.scene[asset_cfg.name].data.body_pos_w[:, asset_cfg.body_ids, 2]
+    z = env.scene[asset_cfg.name].data.body_pos_w[:, asset_cfg.body_ids, 2]
     forces = env.scene.sensors[contact_cfg.name].data.net_forces_w[
         :, contact_cfg.body_ids
     ]
     swing = forces.norm(dim=-1) <= foot_height_threshold
+
+    # Reference each foot against the mean of the OTHERS, so with two feet the
+    # swinging foot is measured against the stance foot.
+    n_feet = z.shape[1]
+    others = (z.sum(dim=1, keepdim=True) - z) / max(n_feet - 1, 1)
+    lift = z - others
+
     # Treat a stance foot as being at target so it contributes nothing.
-    scored = torch.where(swing, feet, torch.full_like(feet, target_height))
-    short = (target_height - scored).clamp(min=0.0)
+    scored = torch.where(swing, lift, torch.full_like(lift, target_lift))
+    short = (target_lift - scored).clamp(min=0.0)
     # Only score envs that have at least one swinging foot.
     active = swing.any(dim=1).float()
     return (short.pow(2).mean(dim=1) * active).mean()

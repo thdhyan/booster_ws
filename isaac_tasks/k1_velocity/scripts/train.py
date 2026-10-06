@@ -73,6 +73,18 @@ parser.add_argument(
     help="use a fixed low LR and tighter gradient clip for a short checkpoint recovery",
 )
 parser.add_argument(
+    "--warm_start",
+    action="store_true",
+    default=False,
+    help=(
+        "with --checkpoint, load actor+critic only: fresh optimizer and the "
+        "iteration counter reset to 0. Use this to fine-tune an existing policy "
+        "under a CHANGED reward -- a plain resume restores Adam moments from the "
+        "old reward and starts the iteration counter at the checkpoint's, so "
+        "--max_iterations buys no budget."
+    ),
+)
+parser.add_argument(
     "--vel_success_threshold",
     type=float,
     default=None,
@@ -272,7 +284,33 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
 
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-        runner.load(resume_path)
+        if getattr(args_cli, "warm_start", False):
+            # Weights only: actor + critic, NO optimizer, and the iteration
+            # counter left at 0.
+            #
+            # Why not a plain resume, when fine-tuning under a CHANGED reward:
+            #   * optimizer_state_dict carries Adam's exp_avg/exp_avg_sq, moment
+            #     estimates accumulated against the old reward. Those moments are
+            #     meaningless once the reward's scale and shape change, and they
+            #     are the first thing to bias a warm start.
+            #   * `iteration` restores current_learning_iteration, so
+            #     --max_iterations buys nothing: learn() runs
+            #     range(current_learning_iteration, +num_learning_iterations),
+            #     and resuming a model_4999 at max_iterations=5000 starts at 4999.
+            #     Resetting to 0 gives the full budget and a clean log.
+            #
+            # The learning rate needs no help: rsl_rl's PPO adapts it on measured
+            # KL (lr /= 1.5 or *= 1.5, clamped to [1e-5, 1e-2]) rather than on
+            # iteration index, so a fresh optimizer simply starts at the
+            # configured LR and adapts from the first update.
+            runner.load(resume_path, load_cfg={
+                "actor": True, "critic": True,
+                "optimizer": False, "rnd": False, "iteration": False,
+            })
+            print("[INFO]: WARM_START weights only (actor+critic), fresh optimizer, "
+                  "iteration counter reset to 0")
+        else:
+            runner.load(resume_path)
         if args_cli.safe_resume:
             # runner.load() restores the checkpoint's param_groups, so the
             # conservative LR is re-applied after loading or it is a no-op.
