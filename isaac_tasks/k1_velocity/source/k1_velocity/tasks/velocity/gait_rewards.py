@@ -286,7 +286,15 @@ def feet_clearance(
     short = (target_lift - scored).clamp(min=0.0)
     # Only score envs that have at least one swinging foot.
     active = swing.any(dim=1).float()
-    return (short.pow(2).mean(dim=1) * active).mean()
+    # LINEAR in the shortfall, not squared. The measured shortfall is ~3.3 cm,
+    # and (0.033)**2 = 1.1e-3, so a squared penalty at weight -1.6 charged
+    # -0.0017/step while action_rate_l2 charged -1.95: the heaviest weight in the
+    # budget was 1150x weaker than the lightest. Squaring a *persistent, large*
+    # error is what hid it a second time -- the first time it was the wrong
+    # reference height, this time it is the curvature. A linear hinge gives the
+    # same constant gradient whether the foot is 1 cm or 5 cm short, which is what
+    # a failure this persistent needs, and it keeps the weight human-scale.
+    return (short.mean(dim=1) * active).mean()
 
 
 def feet_alternation_penalty(

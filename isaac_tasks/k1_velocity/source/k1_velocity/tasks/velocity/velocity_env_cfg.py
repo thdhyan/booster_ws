@@ -641,8 +641,19 @@ class RewardsCfg:
         # compared foot height against 0.06 m while the foot link rests at
         # ~0.059 m -- short = 1 mm, short^2 = 1e-6, so it could only ever charge
         # for sinking, never for failing to lift. It now measures LIFT against
-        # the stance foot, which the measured shuffle does not produce at all
-        # (+0.0000 m at 0.1 m/s, +0.015 m at 0.5 m/s).
+        # the stance foot.
+        #
+        # Then it was still 1150x too weak: measuring lift fixed the reference
+        # but the SQUARE made a persistent ~3.3 cm shortfall charge -0.0017 while
+        # action_rate_l2 charged -1.95. So the shortfall is now LINEAR, which puts
+        # the charge at 0.053/step at this weight and 0.264/step once
+        # feet_clearance_regularization has walked it to its -8.0 terminal value
+        # -- the same league as gait_cadence (-0.38) instead of 1150x below it.
+        #
+        # The static weight stays at the ramp's light START value: the ramp runs
+        # from env step 20,000 over 100,000 steps, so a full 5000-iteration run
+        # (~24.5 env steps/iteration, ~122k steps) reaches the -8.0 terminal just
+        # before it ends. Setting it statically to -8.0 would defeat the ramp.
         weight=-1.6,
         params={
             # contact for the swing/stance test, robot for the foot heights.

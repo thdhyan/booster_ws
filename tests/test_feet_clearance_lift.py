@@ -144,6 +144,98 @@ def test_clearance_is_wired_with_a_target_lift_and_pinned_foot_order():
         )
 
 
+def test_penalty_is_linear_not_squared_in_the_shortfall():
+    """Regression, second hiding of the same term.
+
+    Measuring lift fixed the reference, but the penalty stayed squared. The
+    measured shortfall is ~3.3 cm and (0.033)**2 = 1.1e-3, so at weight -1.6 the
+    term charged -0.0017/step while action_rate_l2 charged -1.95 -- the heaviest
+    weight in the budget was 1150x weaker than the lightest, and mean lift only
+    moved +0.0000 -> +0.0098 m over 1000 iterations.
+
+    So the curvature has to be pinned, not just the reference: squaring a
+    *persistent, large* error is as effective at hiding it as comparing against
+    the wrong height was.
+    """
+    body = _code_only(_fn("feet_clearance"))
+    assert ".pow(2)" not in body and "**2" not in body, (
+        "the shortfall must be penalised LINEARLY: squaring a persistent ~3 cm "
+        "error is what made the term 1150x weaker than action_rate_l2"
+    )
+    assert "short.mean(dim=1)" in body, "the mean must be linear in the shortfall"
+
+    # The weight must be human-scale. Getting -0.2/step out of a 3.3 cm linear
+    # shortfall needs a weight of order -8, not -235, which is what matching
+    # gait_cadence would have demanded if the penalty stayed squared.
+    shortfall_m = 0.033
+    # Linear at the ramp's light start value, then at its terminal value.
+    assert abs(-1.6 * shortfall_m) > 0.05, (
+        "at a 3.3 cm shortfall the linear penalty must charge at least ~0.05/step "
+        "even at the ramp's start weight; a weight that needs -235 to get there "
+        "would be a sign the functional form is wrong, not the scale"
+    )
+    assert abs(-8.0 * shortfall_m) > 0.2, (
+        "at the ramp's -8.0 terminal weight the term must reach ~0.26/step, "
+        "comparable to gait_cadence (-0.38)"
+    )
+
+
+def test_clearance_is_ramped_to_a_competitive_terminal_weight():
+    """The static weight is the ramp's START; the ramp supplies the real weight.
+
+    It is firing -- `[weight-ramp] feet_clearance -1.9840 (step 28983, credit
+    6000/100000)` -- and it runs from env step 20,000 over 100,000 steps. At ~24.5
+    env steps per iteration a full 5000-iteration run reaches ~122k steps, so the
+    -8.0 terminal arrives just before the run ends. That is the designed schedule,
+    so the static weight must stay light; hardcoding -8.0 would defeat it.
+    """
+    params = _term_params("feet_clearance")
+    assert "target_lift" in params
+    ramp = _ramp_params("feet_clearance_regularization")
+    start = _const(ramp["start_weight"])
+    terminal = _const(ramp["terminal_weight"])
+    static = _static_weight("feet_clearance")
+    assert start is not None and terminal is not None, (
+        "the ramp must state both weights"
+    )
+    assert terminal < start <= 0, "the ramp must walk the weight more negative"
+    assert static == start, (
+        f"static weight {static} should be the ramp's light start {start}; the "
+        "ramp exists so the policy does not pay the full penalty from iteration 0"
+    )
+    assert terminal <= -4.0, (
+        f"terminal weight {terminal} is too weak to matter: at a 3.3 cm linear "
+        "shortfall it must charge order -0.26/step to compete with gait_cadence"
+    )
+
+
+def _static_weight(term_name: str):
+    cls = _cls("RewardsCfg")
+    assigns = {
+        n.targets[0].id: n.value
+        for n in ast.walk(cls)
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)
+    }
+    return _const(next(kw.value for kw in assigns[term_name].keywords if kw.arg == "weight"))
+
+
+def _ramp_params(term_name: str) -> dict:
+    cls = _cls("CurriculumCfg")
+    assigns = {
+        n.targets[0].id: n.value
+        for n in ast.walk(cls)
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name)
+    }
+    node = assigns[term_name]
+    params = next(kw.value for kw in node.keywords if kw.arg == "params")
+    assert isinstance(params, ast.Dict)
+    out = {}
+    for k, v in zip(params.keys, params.values):
+        if isinstance(k, ast.Constant):
+            out[k.value] = v
+    return out
+
+
 def test_clearance_still_skips_envs_with_no_swing_foot():
     """The `active` gate stays: an env with both feet down must not be punished.
 
