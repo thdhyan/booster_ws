@@ -1459,3 +1459,64 @@ against a required 0.80).
 `aim_spark02`, tmux `k1_phasestride2`, **seed 43** (so it cannot be confused with
 the failed seed-42 run), 512 envs x 5000 iters, same stall watchdog. Gated across
 0.1-0.5 m/s before anything is distilled.
+
+---
+
+## 📌 HOST POLICY — 2026-10-06: spark02 is NOT a training host
+
+**Do not launch training runs on `aim_spark02`.** Use **`zz-bw` for all
+training**. spark02 keeps its role for *gated recordings and short play/eval
+containers*, where a fresh container per Kit launch is the whole point.
+
+Reason, from what actually happened there rather than in advance: spark02 hosted
+two consecutive 5000-iteration teacher runs (~1.5 h each) and then, 3 days later,
+was found **idle at 0% with a completed 70k-iteration run on zz-bw that nobody
+had gated** — 66k+ iterations of GPU time spent while the designated training box
+sat empty, because the two efforts drifted apart. A single named training host
+removes that class of failure.
+
+Operational notes that came out of the spark02 runs:
+
+* **A Kit stall looks exactly like a slow boot.** The first 512-env launch hung
+  60 min: `python3` at 0.0% CPU, 2 threads, blocked in `futex_do_wait` on
+  `/dev/shm/carb-RStringInternals-58`, never printing one Isaac line. A 16-env
+  smoke minutes later was clean. `teacher_supervised.sh` and
+  `distill_supervised.sh` watch for the first `Learning iteration` and restart
+  after 20 min, up to 3 tries.
+* **Containers must be `--name`d.** spark02 is shared and had 4 other compute apps
+  on the GPU; `docker rm -f $(docker ps -q --filter ancestor=...)` would have
+  killed another tenant's container. Never match by image ancestor.
+* **One Kit launch per container.** A 4-speed gate sweep as a single stage
+  recorded 0.1 and 0.2, then died with `rc=124` on the third. `gate_one_speed.sh`
+  + `gate_sweep.sh` now run one container per speed.
+
+### zz-bw is shared too — check before launching
+
+GPU0 reached **97% / 96 GB** from another tenant minutes after the 70k run
+finished, and `/export/scratch` is at **98% (80 GB free)** with 699 checkpoints
+(4.6 GB) from that run. Always check `nvidia-smi` and pick a free GPU
+(`K1_GPU=1` for the distill path); never assume GPU0 is available.
+
+### 70k run on zz-bw: finished, never gated
+
+`logs/rsl_rl/p2_move_teacher/2026-10-02_15-04-14`, 8192 envs, **69,999/70,000**,
+0 tracebacks, 4 days, `SimulationContext cleared`. Its reward profile differs
+qualitatively from the 512-env runs — `feet_clearance -0.019` (the only non-zero
+reading anywhere; ours sit at -0.0000), `action_rate_l2 -0.44` vs -1.96,
+`stride_length -0.159` vs -0.046 — bought at the cost of tracking (1.13 vs 4.13)
+and survival (ep_len ~135 vs 392). It uses the OLD amplitude law, since its
+container loaded the code before `3b01a42`. **Still ungated**; gate it with the
+new measured-swing gate before drawing any conclusion from those numbers.
+
+### Student distillation: launched on zz-bw GPU1
+
+Teacher `models/teacher_s43_4999.pt` (spark02 `p2_move_teacher/2026-10-02_22-52-45`,
+seed 43, the corrected-amplitude run). Copied to zz-bw at
+`/export/scratch/thakk100/k1/models/`, zz-bw synced to `7ee826d` so the student
+trains under the *same* reward law as its teacher. 512 envs x 1500 iters,
+`distill_supervised.sh` with a stall watchdog.
+
+**The student will inherit the shuffle and is expected to fail the gait gate.**
+Its purpose is to produce the 50-dim artifact `locomotion_node.py` can actually
+load, and to prove out the deployable path (50-dim -> TorchScript -> node)
+with a policy we will not run on hardware.
