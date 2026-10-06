@@ -340,6 +340,34 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         print(f"[INFO] recording -> {args_cli.video_out} ({fps} fps)")
 
     trace = {k: [] for k in ("actions", "rewards", "dones", "root_pos", "root_lin_vel")}
+    # ---- foot kinematics + contact, so swing can be MEASURED ------------
+    # WHY: `feet_clearance` reads -0.0000 in the 512-env runs and -0.019 in the
+    # 8192-env 70k run, and that number cannot be interpreted from the trace
+    # alone. The term is gated on `active` = "this env has at least one swinging
+    # foot", so an exact zero has two opposite causes -- no foot ever leaves the
+    # floor (the shuffle), or the swinging feet are already above the 6 cm target
+    # (fine). And `gait_gate.py` cannot break the tie either: its `stride` is
+    # computed as speed / cadence, so it is a restatement of the other two columns
+    # rather than independent evidence of step length, and its `cadence` is the
+    # FFT peak of the knee ACTION. Neither one looks at where the feet are.
+    #
+    # So record the foot state directly. foot_z is world-frame height (the term
+    # reads body_pos_w[..., 2]); foot_contact_n is the contact-sensor force norm
+    # per foot, which is what decides `swing` (force <= FOOT_CONTACT_MAX_N).
+    # resolve_order=True pins [left, right] the same way the reward terms do --
+    # it defaults to False, which follows the sensor's body order instead.
+    FOOT_BODIES = ["left_foot_link", "right_foot_link"]
+    FOOT_CONTACT_MAX_N = 1.0        # must match feet_clearance's foot_height_threshold
+    try:
+        _foot_ids, _ = robot.find_bodies(FOOT_BODIES, preserve_order=True)
+        _sensor = base_env.scene.sensors.get("contact_forces")
+        _sensor_ids, _ = _sensor.find_bodies(FOOT_BODIES, preserve_order=True)
+        _has_feet = True
+    except Exception as exc:  # noqa: BLE001 - contact sensor is optional in play cfgs
+        _foot_ids = _sensor_ids = None
+        _has_feet = False
+        print(f"[WARN] foot trace unavailable ({type(exc).__name__}: {exc}); "
+              "swing/clearance cannot be measured from this trace")
     obs, _extras = env.reset()
     eye_offset = eye if eye is not None else tuple(env_cfg.viewer.eye)
     lookat_offset = lookat if lookat is not None else tuple(env_cfg.viewer.lookat)
@@ -412,6 +440,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             trace["dones"].append(dones.cpu().numpy())
             trace["root_pos"].append(robot.data.root_pos_w.torch[:, :3].cpu().numpy())
             trace["root_lin_vel"].append(robot.data.root_lin_vel_w.torch[:, :3].cpu().numpy())
+            if _has_feet:
+                trace["foot_pos"].append(
+                    robot.data.body_pos_w.torch[:, _foot_ids, :].cpu().numpy())
+                trace["foot_contact_n"].append(
+                    _sensor.data.net_forces_w.torch[:, _sensor_ids, :]
+                    .norm(dim=-1).cpu().numpy())
             for k, v in obs.items():
                 trace.setdefault(f"obs_{k}", []).append(v.cpu().numpy())
 
@@ -434,6 +468,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         # Keep traces in float32: actions/observations can exceed float16 range
         # and previously overflowed to inf during gait validation.
         out = {k: np.stack(v).astype(np.float32) for k, v in trace.items() if v}
+        # Metadata, not a per-step array: the writer above casts everything to
+        # float32, so the foot order and the swing threshold have to travel as
+        # scalars or the save fails on a string dtype.
+        if _has_feet:
+            out["foot_names"] = np.array(FOOT_BODIES)
+            out["foot_contact_max_n"] = np.array(FOOT_CONTACT_MAX_N)
         np.savez_compressed(args_cli.trace_out, **out)
         print(f"[INFO] trace saved -> {args_cli.trace_out}")
 
