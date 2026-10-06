@@ -1520,3 +1520,72 @@ trains under the *same* reward law as its teacher. 512 envs x 1500 iters,
 Its purpose is to produce the 50-dim artifact `locomotion_node.py` can actually
 load, and to prove out the deployable path (50-dim -> TorchScript -> node)
 with a policy we will not run on hardware.
+
+---
+
+## 📌 ROOT CAUSE FOUND — `feet_clearance` can never charge anything (2026-10-06)
+
+The seed-43 student was gated with the new measured-swing trace arrays, which
+settled a question every reward tweak this session had been guessing at.
+
+### The measurement
+
+`students43_v0.1_trace.npz` (8 envs, 750 steps, cmd 0.1 m/s), from `foot_pos` and
+`foot_contact_n`:
+
+```
+mean cadence 9.65 steps/s      MEASURED steps  8.89 steps/s (contact rising edges)
+mean jerk    0.0830            MEASURED swing  63.3% of steps have a foot unloaded
+8/8 envs fail                 MEASURED LIFT   +0.0000 m   <-- the whole thing
+```
+
+Per env, foot-link world z:
+
+| env | stance_z | swing_z | lift |
+|---|---|---|---|
+| 0 | 0.0589 | 0.0599 | +0.0010 |
+| 3 | 0.0612 | 0.0564 | **-0.0048** |
+| 5 | 0.0613 | 0.0563 | **-0.0050** |
+
+**The feet leave the ground but they do not rise.** The foot link sits at
+~0.059 m loaded or unloaded, per-env z range is only ~0.033 m, and in half the
+envs the "swinging" foot is *lower* than the stance foot. So: unload and slap
+back down at the same height, ~8.9 times a second.
+
+This corrects an earlier claim of mine that the feet "never leave the floor".
+They do unload 63% of the time — they just never lift. Same conclusion, wrong
+mechanism, and the mechanism is what matters here.
+
+### Why `feet_clearance` read ~0.000 in every run — and why that was not a hint
+
+```python
+target_height: float = 0.06                                   # gait_rewards.py:234
+feet = robot.data.body_pos_w[:, asset_cfg.body_ids, 2]        # foot LINK ORIGIN z
+short = (target_height - feet).clamp(min=0.0)
+return (short.pow(2).mean(dim=1) * active).mean()
+```
+
+**The foot link origin rests at ~0.059 m.** The target is 0.06 m. So at rest
+`short = 0.06 - 0.059 = 0.001 m`, and `short**2 = 1e-6`. The term is
+**structurally pinned near zero** — it can only ever charge a foot for being
+*below its own normal standing height*, i.e. for sinking. It cannot charge a
+policy for failing to lift, which is the failure we actually have.
+
+That is why `feet_clearance` read -0.0000/-0.0001 in every 512-env run and why I
+wrongly concluded the feet never swung. The `active` gate was satisfied; the
+height simply had nowhere to go. Conversely the 8192-env 70k run's non-zero
+-0.019 means its feet genuinely *sink*, not that it lifts better.
+
+The fix must compare a swinging foot against its **own stance height** (the lift,
+which is what `LIFT` above measures and which is currently 0), or against a
+target well clear of the standing height (~0.12-0.15 m). Comparing against
+0.06 m will keep reading ~0 forever.
+
+### What this means for the session's conclusions
+
+Every reward added to fight the shuffle — `gait_cadence`, `phase_swing`,
+`phase_locked_stride`, the command-coupled clock, the corrected `v/(2*hz)`
+amplitude — prices a **reference or a rate**. None of them charge for the
+foot failing to rise, because the one term that could was measuring the wrong
+quantity. That is the structural reason two 5000-iteration runs and one 70k
+iteration run all produced a fast, smooth, velocity-tracking shuffle.
