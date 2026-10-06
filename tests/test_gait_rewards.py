@@ -115,30 +115,89 @@ def test_tracking_reward_was_sharpened():
     )
 
 
-def test_action_rate_reaches_minus_two_via_a_ramp():
-    """The -2.0 still has to be reached, but by ramping rather than from step 0.
+def test_action_rate_ramp_is_ordered_and_capped_below_the_anti_lift_level():
+    """The ramp must still strengthen the term, but stop well short of -2.0.
 
-    -0.5 alone could not see 8 Hz chatter. It was raised to -2.0 as a static
-    weight on 2026-10-01, which is right for a converged policy and wrong while
-    99.3% of episodes end in a fall. The static weight is now AGILE's -0.5 and
-    CurriculumCfg ramps it to -2.0 once the robot is actually upright, so the
-    original intent is preserved without the early-training penalty.
+    History: -0.5 alone could not see 8 Hz chatter, so it was raised to a static
+    -2.0 on 2026-10-01, then moved to a ramp from -0.5 to -2.0.
 
-    Asserted as a pair: a static -2.0 (regression, back to penalising a falling
-    policy) or no ramp at all (the term never strengthens) both fail here.
+    2026-10-06: -2.0 is too much for this policy, because it is ANTI-lift.
+    Measured raw magnitudes at iteration 4400 were action_jerk 6.6, action_rate
+    2.20 and feet_clearance 0.0153 -- the smoothness budget was 140-430x the lift
+    budget. Lifting a foot cleanly requires fast, deliberate joint motion, which
+    is precisely what these terms tax, so the policy paid ~5.06/step for moving
+    smoothly and 0.08/step for lifting a foot. Strengthening feet_clearance 48x
+    on its own then moved measured lift by nothing at all (+0.0065 m at 0.1 m/s).
+
+    So the ramp is retargeted to -0.4. What must survive is that the term still
+    *ramps* -- a static terminal weight would penalise a falling policy from step
+    0, which is the thing the ramp exists to avoid.
     """
     terms = _terms(_rewards_cfg(CFG))
     static = _const(_kw(terms["action_rate_l2"], "weight"))
-    assert static == pytest.approx(-0.5), (
-        f"action_rate_l2 static weight is {static}; it must be AGILE's light start "
-        "value, with the ramp supplying the rest"
+    assert static == pytest.approx(-0.1), (
+        f"action_rate_l2 static weight is {static}; it must be the ramp's light "
+        "start value, with the ramp supplying the rest"
     )
 
     src = CFG.read_text()
     assert '"reward_name": "action_rate_l2"' in src, "action_rate_l2 must be ramped"
-    assert '"terminal_weight": -2.0' in src, (
-        "the ramp must still reach -2.0, which is what actually suppressed the chatter"
+    assert '"terminal_weight": -0.4' in src, (
+        "the ramp must reach -0.4; -2.0 is anti-lift at the measured magnitudes"
     )
+    # Scope the -2.0 check to this ramp only: phase_swing and feet_alternation
+    # legitimately keep a -2.0 terminal, so a file-wide substring test would be
+    # asserting the wrong thing.
+    block = src.split('"reward_name": "action_rate_l2"', 1)[1][:400]
+    assert '"terminal_weight": -2.0' not in block, (
+        "the action_rate_l2 ramp still reaches -2.0, which made the smoothness "
+        "budget 140-430x the lift budget and kept the policy from lifting a foot"
+    )
+
+
+def test_smoothness_budget_is_not_dominant_over_the_lift_budget():
+    """Neither smoothness terminal may exceed the lift terminal in magnitude.
+
+    This is the check that would have caught the anti-lift imbalance directly,
+    rather than inferring it from a measured lift that refused to move. It is
+    asserted on the terminals because those are what the ramp converges to by the
+    end of a 5000-iteration run.
+    """
+    import ast as _ast
+
+    tree = _ast.parse(CFG.read_text())
+    params: dict[str, dict] = {}
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.Call):
+            continue
+        kw = {k.arg: k.value for k in node.keywords if k.arg == "params"}
+        d = kw.get("params")
+        if not isinstance(d, _ast.Dict):
+            continue
+        got = {
+            k.value: v for k, v in zip(d.keys, d.values)
+            if isinstance(k, _ast.Constant) and isinstance(k.value, str)
+        }
+        name = got.get("reward_name")
+        if isinstance(name, _ast.Constant):
+            params[name.value] = got
+
+    def _c(node):
+        if isinstance(node, _ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, _ast.UnaryOp) and isinstance(node.op, _ast.USub):
+            inner = _c(node.operand)
+            return None if inner is None else -inner
+        return None
+
+    lift = abs(_c(params["feet_clearance"]["terminal_weight"]))
+    for term in ("action_rate_l2", "action_jerk_l2"):
+        w = abs(_c(params[term]["terminal_weight"]))
+        assert w <= lift, (
+            f"{term} terminal |{w}| exceeds feet_clearance |{lift}|: the smoothness "
+            "budget would outweigh the lift budget again, and the policy will not "
+            "lift a foot"
+        )
 
 
 def test_gait_functions_defined_in_module():

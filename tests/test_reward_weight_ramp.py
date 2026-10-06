@@ -384,8 +384,14 @@ def _dict_get(node, key):
 
 # reward term -> (static weight, terminal weight it ramps to)
 RAMPED = {
-    "action_rate_l2": (-0.5, -2.0),
-    "action_jerk_l2": (-0.05, -0.5),
+    # The two smoothness terms were reduced 5-6x on 2026-10-06. Measured raw
+    # magnitudes at iteration 4400 were action_jerk 6.6 and action_rate 2.20
+    # against feet_clearance 0.0153, so the smoothness budget was 140-430x the
+    # lift budget and was actively ANTI-lift: lifting a foot cleanly needs fast
+    # deliberate joint motion, which is what these two tax. Strengthening
+    # feet_clearance 48x on its own moved measured lift not at all (+0.0065 m).
+    "action_rate_l2": (-0.1, -0.4),
+    "action_jerk_l2": (-0.01, -0.08),
     "gait_cadence": (-0.2, -1.0),
     "phase_swing": (-0.4, -2.0),
     "feet_clearance": (-1.6, -8.0),

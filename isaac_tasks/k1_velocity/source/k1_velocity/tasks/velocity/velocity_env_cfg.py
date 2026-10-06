@@ -497,7 +497,7 @@ class RewardsCfg:
     # makes the same call explicitly: update_reward_weight_step runs action_rate
     # at -0.5 until step 50 000 and ramps to -2.0 (see docs/agile_weight_comparison.md).
     # The static number is now the light one; the ramp owns the rest.
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.5)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
     action_jerk_l2 = RewTerm(
         func=gait.action_jerk_l2,
         # Audit 2026-10-01: at -0.02 this term contributed **-0.0028 per step** in
@@ -511,7 +511,12 @@ class RewardsCfg:
         # action_rate_l2 above: -0.5 is right for a converged policy and wrong
         # while 99.3% of episodes end in a fall. AGILE ramps its equivalent term
         # from -0.05 to -1.0 over 100k steps for exactly this reason.
-        weight=-0.05,
+        #
+        # 2026-10-06: the ramp now tops out at -0.08 rather than -0.5. Measured
+        # raw magnitudes at iteration 4400 put jerk at 6.6 against feet_clearance
+        # at 0.0153 -- a 430x imbalance that made the smoothness budget
+        # anti-lift, since lifting a foot cleanly requires fast joint motion.
+        weight=-0.01,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=K1_LEG_JOINTS)},
     )
     dof_acc_l2 = RewTerm(
@@ -798,8 +803,17 @@ class CurriculumCfg:
         func=reward_weight_ramp.RewardWeightRampTerm,
         params={
             "reward_name": "action_rate_l2",
-            "start_weight": -0.5,
-            "terminal_weight": -2.0,
+            "start_weight": -0.1,
+            # -2.0 -> -0.4. The smoothness terms were ANTI-LIFT: measured raw
+            # magnitudes at iteration 4400 were action_jerk 6.6, action_rate 2.20
+            # and feet_clearance 0.0153, i.e. the smoothness budget was 140-430x
+            # the lift budget, so the policy paid ~5.06/step for moving smoothly
+            # and 0.08/step for lifting a foot. Lifting a foot cleanly requires
+            # fast deliberate joint motion, which is exactly what these tax, so
+            # the gradient still pointed at not lifting -- and indeed
+            # strengthening feet_clearance 48x moved measured lift not at all
+            # (+0.0065 m at 0.1 m/s). Weight alone cannot fix a 60x imbalance.
+            "terminal_weight": -0.4,
             "start_step": 20_000,
             "num_steps": 100_000,
             "upright_threshold": 0.10,
@@ -809,8 +823,9 @@ class CurriculumCfg:
         func=reward_weight_ramp.RewardWeightRampTerm,
         params={
             "reward_name": "action_jerk_l2",
-            "start_weight": -0.05,
-            "terminal_weight": -0.5,
+            "start_weight": -0.01,
+            # -0.5 -> -0.08, for the same reason as action_rate above.
+            "terminal_weight": -0.08,
             "start_step": 20_000,
             "num_steps": 100_000,
             "upright_threshold": 0.10,
