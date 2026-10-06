@@ -1,0 +1,86 @@
+# =============================================================================
+# K1 video -> motion retarget SERVICE (thin orchestrator, no GPU)
+# =============================================================================
+# This is deliberately NOT the 20 GB Isaac/torch base in Dockerfile.base. The
+# retarget pipeline's heavy stages already live on other machines and are reached
+# over ssh by k1m.remote_stages:
+#
+#   GVHMR    -> aim_spark02   (video  -> SMPL-X npz)
+#   GMR      -> aim_spark03   (npz    -> K1 joint CSV)
+#   KIMODO   -> aim_spark03   (text   -> SMPL-X npz, optional)
+#
+# remote.py shells out to plain `ssh <alias>` and resolves those aliases through
+# ~/.ssh/config, so this image needs no CUDA, no torch and no GVHMR checkout. It
+# only needs the local half of the pipeline: numpy/scipy for the gate and replay,
+# plus mujoco for the URDF limit check.
+#
+# Build:
+#   docker build -f docker/Dockerfile.k1m -t k1m-service:latest .
+# Run (the ssh mount is what lets it reach the stage hosts):
+#   docker run -d --name k1m -p 7861:7860 \
+#     -v /home/thakk100/.ssh:/root/.ssh:ro \
+#     -v /home/thakk100/k1m_out:/data \
+#     k1m-service:latest
+# =============================================================================
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    K1M_REPO=/opt/booster_ws \
+    K1M_OUTDIR=/data \
+    PIP_NO_CACHE_DIR=1
+
+# ffmpeg for imageio-ffmpeg's decode path; ca-certificates is needed if anything
+# reaches out over https.
+#
+# openssh-client is REQUIRED, not optional: k1m.remote_stages reaches GVHMR and
+# GMR with `ssh <alias>`, so without the binary every stage is unreachable. The
+# /doctor endpoint reports this as `FileNotFoundError: 'ssh'` rather than crashing,
+# which is how it was caught.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg ca-certificates openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# numpy<2 matches the local k1m venv: mujoco and the older scipy wheels in this
+# pipeline are not numpy-2 clean.
+RUN pip install --no-cache-dir \
+        "numpy<2" scipy imageio imageio-ffmpeg pillow "mujoco<3.5" \
+        fastapi "uvicorn[standard]" python-multipart
+
+WORKDIR /opt/booster_ws
+COPY k1m/ /opt/booster_ws/k1m/
+COPY docker/k1m_service.py /opt/booster_ws/docker/k1m_service.py
+
+# The local half shells out to these two scripts (k1m/local_stages.py, cwd=_REPO).
+COPY scripts/motion_feasibility_gate.py /opt/booster_ws/scripts/motion_feasibility_gate.py
+COPY scripts/record_k1_motion.py /opt/booster_ws/scripts/record_k1_motion.py
+
+# BOTH model files are needed, and they are not interchangeable:
+#   K1_22dof.urdf -> schema.DEFAULT_K1_URDF, used by the feasibility GATE to
+#                     parse joint limits (this is the trackability verdict)
+#   K1_22dof.xml  -> record_k1_motion.py's MJCF, used by the replay RENDERER
+# Shipping only the .xml makes the gate exit 2 with "K1 URDF not found", which is
+# how that was found.
+#
+# The meshes ARE needed after all: the gate resolves URDF mesh references and
+# fails with "Error opening file .../meshes/Trunk.STL" without them. 26 MB, which
+# is a fair price for a self-contained image. Only the replay RENDERER additionally
+# needs a GL backend, which is why do_render still defaults to False.
+COPY src/k1_description/assets/robots/K1/meshes/ \
+     /opt/booster_ws/src/k1_description/assets/robots/K1/meshes/
+COPY src/k1_description/assets/robots/K1/K1_22dof.urdf \
+     /opt/booster_ws/src/k1_description/assets/robots/K1/K1_22dof.urdf
+COPY src/k1_description/assets/robots/K1/K1_22dof.xml \
+     /opt/booster_ws/src/k1_description/assets/robots/K1/K1_22dof.xml
+
+# Warm the package import at build time so a broken image fails here rather than
+# on the first request. Also assert the ssh client exists, since its absence is
+# invisible until a request tries to reach a stage host.
+RUN python -c "import sys; sys.path.insert(0, '/opt/booster_ws'); import k1m.pipeline, fastapi; print('k1m import ok')" \
+    && command -v ssh >/dev/null || (echo "ssh client missing from image" && exit 1)
+
+EXPOSE 7860
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=4).status==200 else 1)"
+
+CMD ["uvicorn", "docker.k1m_service:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]

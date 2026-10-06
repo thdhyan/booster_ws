@@ -1624,3 +1624,65 @@ teacher play cfg which zeroes them).
 agree on every measure. The student's value is that it is the 50-dim artifact
 `locomotion_node.py` can load, and that the 50 -> TorchScript -> node path is now
 proven (`ebbd994`).
+
+---
+
+## 📌 2026-10-06 — video → K1 motion as a Docker service on lambda
+
+`app.py` is a Gradio UI (not Streamlit) on :7860, and the pipeline already fans out
+over ssh: **GVHMR → aim_spark02**, **GMR + KIMODO → aim_spark03**. So the useful
+unit is not another UI, it is an endpoint. `docker/Dockerfile.k1m` +
+`docker/k1m_service.py` provide one, and it is thin on purpose — no CUDA, no
+torch, no GVHMR checkout, because those stay where they are.
+
+**Verified working**, human video in → retargeted K1 joint angles out:
+
+| | |
+|---|---|
+| host | `lambda`, container `k1m`, port 7861 |
+| `/health` | `{"ok":true,"repo":"/opt/booster_ws","outdir":"/data"}` |
+| `/doctor` | gvhrm/gmr/kimodo all `reachable: true`, NVIDIA GB10 |
+| `POST /retarget` | `docs/videos/k1_video_tennis.mp4`, 4 s clip → **119 frames**, 45 s wall |
+| CSV | 29 columns, fps sidecar written, fetchable at `/artifact/<stem>/<stem>_k1.csv` |
+| path traversal | `/artifact/../../etc/passwd` → 404, encoded form → 404 |
+
+The gate verdict is returned as **data with `ok:false`**, not as an HTTP error,
+because the CSV exists and the caller needs it. On the tennis clip: 4/10 checks
+pass, 6 blocking — foot slip 10.9 m/s with no foot locking, right foot 346 mm
+through the floor, `Head_pitch` needing 9.87x its effort limit. That is the
+correct answer for a raw GVHMR solve, and it is why the gate exists.
+
+### Host access: lambda was granted the spark key
+
+lambda had no ssh config and could not resolve `aim_spark02`/`aim_spark03`; dl had
+a config but the same resolution failure. So `/home/dhyan/.ssh/aim_spark0x` (the
+key the laptop itself uses for the spark fleet) was copied to lambda, with a
+config containing **only those two hosts**. The container gets a root-owned copy at
+`/root/k1m_ssh` because ssh refuses a config owned by anyone else. To revoke:
+delete that file on lambda.
+
+### Three bugs the container build surfaced, all in my own service
+
+1. **`ssh` is not in `python:3.12-slim`.** Every stage was unreachable;
+   `/doctor` reported it as `FileNotFoundError: 'ssh'` rather than crashing, which
+   is how it was caught. Now installed, and the build asserts `command -v ssh`.
+2. **`do_render` was accepted and ignored.** `pipeline.from_video` runs the gate
+   *and* the renderer internally, so every request died in mujoco's EGL init
+   inside a CPU-only image. The flags are now forwarded, and the gate is read from
+   the report the pipeline already wrote instead of being run a second time.
+3. **Wrong `Result` attribute.** It is `motion_csv`, not `csv`, so every download
+   link was null. And the links omitted the per-run subdirectory, so `/artifact`
+   404'd on files that existed.
+
+Also: the artifact confinement used `str(path).startswith(OUTDIR)`, which accepts
+`/data_evil/x` for an OUTDIR of `/data`. Now `Path.relative_to`.
+
+### Image contents, and why each file is there
+
+Both `K1_22dof.urdf` (the **gate** parses joint limits from it) and
+`K1_22dof.xml` (the **renderer**'s MJCF) are required — they are not
+interchangeable, and shipping only the XML makes the gate exit 2 with "K1 URDF not
+found". The 21 MB of `meshes/` are also required: the gate resolves mesh
+references and fails with `Error opening file .../meshes/Trunk.STL` without them.
+What is deliberately absent is a GL backend, so `do_render` defaults to False. To
+enable the replay, mount the meshes and run with `--gpus all -e MUJOCO_GL=egl`.
