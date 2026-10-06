@@ -1589,3 +1589,38 @@ amplitude — prices a **reference or a rate**. None of them charge for the
 foot failing to rise, because the one term that could was measuring the wrong
 quantity. That is the structural reason two 5000-iteration runs and one 70k
 iteration run all produced a fast, smooth, velocity-tracking shuffle.
+
+### Seed-43 student: full sweep, and lift vs speed
+
+Distilled from `teacher_s43_4999.pt` on zz-bw GPU1, 512 envs x 1500 iters,
+0 tracebacks, `policy (500,)` / `teacher (237,)`, student first Linear
+**(512, 500)**. Gated 8/8 FAIL at every speed, with the foot arrays present in
+all four traces (`foot_pos (750, 8, 2, 3)`, `foot_contact_n (750, 8, 2)`).
+
+| cmd | cadence | jerk | swing% | step_hz | LIFT (mean) | lift p95 |
+|---|---|---|---|---|---|---|
+| 0.1 | 9.65 | 0.083 | 63.3% | 8.89 | **+0.0000 m** | 0.043 |
+| 0.2 | 9.63 | 0.120 | 70.0% | 8.51 | +0.0036 m | 0.038 |
+| 0.3 | 8.80 | 0.135 | 73.9% | 6.64 | +0.0097 m | 0.038 |
+| 0.5 | 8.53 | 0.172 | 79.5% | 6.90 | +0.0153 m | 0.043 |
+
+The lift **does** grow with speed, 0 -> 1.5 cm, so the behaviour is not a dead
+constant. But 1.5 cm mean lift is still a shuffle: the foot unloads and is put
+back down essentially where it was. The per-step p95 sits at ~4 cm at every
+speed, so a real lift is *reachable* but rare.
+
+Two things the new measurements cross-validate: the measured step rate from
+contact rising edges (6.6-8.9 steps/s) tracks the knee-FFT cadence (8.5-9.7)
+independently, so both agree the policy is stepping far too fast; and swing%
+rising with speed (63 -> 80%) while lift stays ~1 cm is the signature of
+increasingly animated shuffling, not of walking.
+
+Frame check of `videos/student_s43_v05_panels.mp4` at step 450 (t=9.0 s): several
+envs already down, the tracked env upright with legs together and arms spread.
+HUD `vx=+0.50`, rewards live (the Distill play cfg keeps reward terms, unlike the
+teacher play cfg which zeroes them).
+
+**Distillation did what it always does: copied the shuffle.** Student and teacher
+agree on every measure. The student's value is that it is the 50-dim artifact
+`locomotion_node.py` can load, and that the 50 -> TorchScript -> node path is now
+proven (`ebbd994`).
