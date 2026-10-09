@@ -586,14 +586,13 @@ def wrist_target_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
     return -(pos_bf - tgt).norm(dim=-1).mean(-1)
 
 
-def wrist_box_proximity(env: ManagerBasedRLEnv, coarse: float = 0.30, fine: float = 0.05) -> torch.Tensor:
-    """two-scale exp(-mean wrist-to-box gap / scale), summed (0..2).
+def wrist_box_gap(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """(n,2) signed distance from each wrist to the box surface, 0 when inside.
 
-    Fix A7: v2's single 0.08 m scale had ~zero gradient beyond ~8 cm (no
-    coarse approach pull); the 0.30 m term pulls the wrist across open space
-    and the 0.05 m term keeps contact shaping sharp. Gap is distance from
-    each wrist to the box surface (0 inside), computed in the BOX frame so
-    the clamp uses the true half-extents regardless of yaw.
+    Computed in the BOX frame so the clamp uses the true half-extents regardless of
+    the box's yaw. Extracted from ``wrist_box_proximity`` so the SG-style terms in
+    ``push_rewards_sg`` measure the same quantity the proximity term does -- two
+    copies of this geometry would drift, and they gate the same contact.
     """
     from isaaclab.utils.math import quat_inv, quat_mul
 
@@ -603,12 +602,22 @@ def wrist_box_proximity(env: ManagerBasedRLEnv, coarse: float = 0.30, fine: floa
     corners_bf = box_corners_base(env)                       # (n,8,3)
     center = corners_bf.mean(1, keepdim=True)                # (n,1,3)
     half = st.half_extents[:, None, :]                       # (n,1,3)
-    # box orientation expressed in the robot base frame -> wrist in box frame
     box_q_bf = quat_mul(quat_inv(robot.data.root_quat_w.torch), env.scene["box"].data.root_quat_w.torch)
     wrist_box = _rot_batch(box_q_bf, wrist_bf - center, inverse=True)               # (n,2,3)
     inside = torch.maximum(torch.minimum(wrist_box, half), -half)
-    gap = (wrist_box - inside).norm(dim=-1)                  # (n,2)
-    g = gap.mean(-1)
+    return (wrist_box - inside).norm(dim=-1)                  # (n,2)
+
+
+def wrist_box_proximity(env: ManagerBasedRLEnv, coarse: float = 0.30, fine: float = 0.05) -> torch.Tensor:
+    """two-scale exp(-mean wrist-to-box gap / scale), summed (0..2).
+
+    Fix A7: v2's single 0.08 m scale had ~zero gradient beyond ~8 cm (no
+    coarse approach pull); the 0.30 m term pulls the wrist across open space
+    and the 0.05 m term keeps contact shaping sharp. Gap is distance from
+    each wrist to the box surface (0 inside), computed in the BOX frame so
+    the clamp uses the true half-extents regardless of yaw.
+    """
+    g = wrist_box_gap(env).mean(-1)
     return torch.exp(-g / coarse) + torch.exp(-g / fine)
 
 
