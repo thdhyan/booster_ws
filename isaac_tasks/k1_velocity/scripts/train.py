@@ -275,9 +275,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     # isaaclab_rl 3.0.0b2's RslRlMLPModelCfg still serializes — strip them.
     agent_cfg_dict = agent_cfg.to_dict()
     legacy_keys = ("stochastic", "init_noise_std", "noise_std_type", "state_dependent_std")
-    for model_key in ("actor", "critic"):
-        for key in legacy_keys:
-            agent_cfg_dict[model_key].pop(key, None)
+    # The runner cfg does not always carry actor/critic. The Distillation runner
+    # (rsl_rl_distill_cfg.K1VelocityDistillRunnerCfg) has `student` and `teacher`
+    # instead, so hardcoding ("actor", "critic") raised
+    #     KeyError: 'actor'
+    # at Isaac-Velocity-Distill-K1-v0 startup -- which is why no distillation run
+    # had ever produced logs despite the task being registered and the cfg existing.
+    for model_key in ("actor", "critic", "student", "teacher"):
+        sub = agent_cfg_dict.get(model_key)
+        if isinstance(sub, dict):
+            for key in legacy_keys:
+                sub.pop(key, None)
     runner = OnPolicyRunner(env, agent_cfg_dict, log_dir=log_dir,
                             device=agent_cfg.device)
     runner.add_git_repo_to_log(__file__)
