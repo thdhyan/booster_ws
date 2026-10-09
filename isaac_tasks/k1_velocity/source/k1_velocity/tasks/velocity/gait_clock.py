@@ -127,6 +127,35 @@ def get_frequency(env, command_name: str = "base_velocity") -> torch.Tensor:
     mag = command_magnitude(env, command_name)
     if mag is None:
         return state["freq_hz"]
+    return get_frequency_from_magnitude(env, mag)
+
+
+def get_frequency_from_magnitude(env, mag: torch.Tensor) -> torch.Tensor:
+    """``get_frequency`` with the caller supplying the speed instead of the env.
+
+    The EMA, the ``[MIN_HZ, MAX_HZ]`` clamp and the reset handling live HERE, in one
+    place, because they are the whole of the clock's behaviour and a second copy of
+    them is how the frequency ends up subtly different between the phase a policy
+    trained on and the phase it is served.
+
+    Needed by the box-push task, where the commanded speed is not in a command term
+    at all: push drives the frozen base through the action's ``[vx, vy, wz, H*]``
+    slice and records it in ``push_state.last_vel_cmd``. Reading
+    ``command_magnitude`` there returns None -- ``base_velocity`` is a wrist-target
+    term with no ``vel_command_b`` -- so the clock would silently freeze at
+    ``PHASE_FREQUENCY_HZ`` and the frozen base would be served a cadence it was never
+    trained against.
+    """
+    device = env.episode_length_buf.device
+    num_envs = env.num_envs
+    state = _CLOCK_STATE.get(id(env))
+    if state is None or state.get("freq_hz") is None or state["freq_hz"].shape != (num_envs,):
+        if state is not None:
+            state["freq_hz"] = torch.full(
+                (num_envs,), PHASE_FREQUENCY_HZ, device=device
+            )
+        else:
+            return torch.full((num_envs,), PHASE_FREQUENCY_HZ, device=device)
 
     mag = mag.to(device=device, dtype=state["freq_hz"].dtype)
     target = (HZ_PER_MPS * mag).clamp(MIN_HZ, MAX_HZ)
@@ -140,6 +169,11 @@ def get_frequency(env, command_name: str = "base_velocity") -> torch.Tensor:
     blend = torch.clamp(COMMAND_SMOOTHING * stepped + fresh, max=1.0)
     state["freq_hz"].lerp_(target, blend)
     return state["freq_hz"]
+
+
+def phase_clock_from_magnitude(env, mag: torch.Tensor) -> torch.Tensor:
+    """``phase_clock`` driven by a caller-supplied speed. See the above."""
+    return phase_clock(env, get_frequency_from_magnitude(env, mag))
 
 
 def get_phase(env, frequency_hz: float | None = None) -> torch.Tensor:
@@ -181,6 +215,12 @@ def get_phase(env, frequency_hz: float | None = None) -> torch.Tensor:
 
     if frequency_hz is None:
         hz = get_frequency(env)
+    elif isinstance(frequency_hz, torch.Tensor):
+        # A per-env tensor frequency, for callers that already resolved it (the push
+        # task derives it from the action's velocity slice rather than a command term).
+        # Kept here rather than in a second phase implementation so the advance,
+        # the reset reseed and the in-place update stay in one place.
+        hz = frequency_hz.to(device=device, dtype=torch.float32).reshape(num_envs)
     else:
         hz = torch.full((num_envs,), float(frequency_hz), device=device)
 
@@ -210,7 +250,9 @@ def phase_clock(env, frequency_hz: float | None = None) -> torch.Tensor:
 
     Args:
         env: The manager-based env (policy or teacher group's env instance).
-        frequency_hz: Gait cycles per second, or None to follow the command.
+        frequency_hz: Gait cycles per second; a float pins the clock, a
+            ``(num_envs,)`` tensor supplies a per-env frequency, or None follows
+            the commanded speed.
 
     Returns:
         A ``(num_envs, 2)`` float32 tensor, concatenated into the group.

@@ -74,6 +74,7 @@ from isaaclab.managers import ActionTermCfg
 from isaaclab.utils.configclass import configclass
 
 import isaaclab.sim as sim_utils
+from k1_velocity.tasks.velocity import gait_clock
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -865,7 +866,20 @@ class FrozenBaseVelocityAction(ActionTerm):
         # joint_vel_rel == raw: default_joint_vel is all-zero in this build
         leg_vel = robot.data.joint_vel[:, self._leg_ids]
         scan = _height_scan(self._env, sensor_cfg=SceneEntityCfg("height_scanner")).clamp(-1.0, 1.0)
-        obs = torch.cat([lin, ang, grav, cmd4, leg_pos, leg_vel, self._last, scan], dim=-1)
+        # 236 dims above + a 2-dim gait clock = 238, which is what a POST-gait-fix
+        # squat export consumes. push_mdp originally assembled 236 to match a
+        # pre-gait-fix legacy export; every current squat teacher appends the clock,
+        # so driving one with the 236 layout failed at the first policy call with
+        #     mat1 and mat2 shapes cannot be multiplied (512x236 and 238x512)
+        # The clock is driven by the action's own velocity slice, NOT by
+        # command_magnitude(): push's `base_velocity` term is a wrist-target command
+        # with no vel_command_b, so reading the command manager would return None and
+        # silently freeze the cadence at PHASE_FREQUENCY_HZ -- serving the frozen base
+        # a cadence it was never trained against.
+        clock = gait_clock.phase_clock_from_magnitude(
+            self._env, st.last_vel_cmd[:, :2].norm(dim=-1)
+        )
+        obs = torch.cat([lin, ang, grav, cmd4, leg_pos, leg_vel, self._last, scan, clock], dim=-1)
         out = None
         if self._diag_mode != "hold":
             with torch.inference_mode():
