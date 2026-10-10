@@ -140,60 +140,88 @@ class TiledPanelRecorder:
         self.frames_added += 1
 
     def close(self) -> None:
-        """Close, publish, and VERIFY.
+        """Close, verify, publish, verify again.
 
-        Verification is the point. Reporting success on file existence alone is how a
-        700-frame video that only had 39 decodable frames got announced as VIDEO_OK: the
-        moov atom is written by the muxer regardless of whether the mdat survived, so
-        the file exists and ffprobe reports the right duration either way. Only counting
-        what a decoder can actually pull back distinguishes the two.
+        The pre-move check is a bisect, not ceremony. Two recordings came out corrupt
+        ("Invalid NAL unit size (117004 > 116125)", 505 decode errors) with the moov
+        atom intact and the correct duration, so file existence and ffprobe duration are
+        both worthless as evidence. Checking at the container-local tmp path and again
+        after the move to the bind mount isolates which stage does the damage:
+        the encoder, or the copy onto /workspace/mounts.
         """
         import shutil
 
         self.writer.close()
+
+        pre = self._count_decodable(self.tmp_path)
+        print(f"[PANEL_VERIFY] pre-move  frames_added={self.frames_added} "
+              f"decodable={pre} bytes={os.path.getsize(self.tmp_path)}")
+
         shutil.move(self.tmp_path, self.path)
+        post = self._count_decodable(self.path)
 
-        decodable = self._count_decodable()
-        ok = decodable == self.frames_added
+        # -1 means the check itself could not run (no ffmpeg, timeout, probe failure).
+        # That is NOT the same as zero decodable frames and must not be reported as
+        # corruption, which is how the first fixed run printed CORRUPT for a file that
+        # had merely gone unchecked.
+        if pre < 0 or post < 0:
+            verdict = "UNCHECKED"
+        elif post == self.frames_added:
+            verdict = "OK"
+        else:
+            verdict = "CORRUPT"
+        blame = ""
+        if verdict == "CORRUPT" and pre == self.frames_added:
+            blame = " (damaged by the move onto the bind mount)"
+        elif verdict == "CORRUPT":
+            blame = " (already corrupt in the encoder's own output)"
         print(
-            f"[PANEL_VERIFY] frames_added={self.frames_added} frames_decodable={decodable} "
-            f"{'OK' if ok else 'CORRUPT'} bytes={os.path.getsize(self.path)} {self.path}"
+            f"[PANEL_VERIFY] post-move frames_added={self.frames_added} "
+            f"decodable={post} {verdict}{blame} bytes={os.path.getsize(self.path)} {self.path}"
         )
-        if not ok:
-            print(
-                f"[PANEL_VERIFY] WARNING: only {decodable}/{self.frames_added} frames "
-                "decoded; the mp4 exists but is not reliably playable"
-            )
 
-    def _count_decodable(self) -> int:
-        """Count frames a decoder can actually produce, via ffmpeg if present."""
+    def _count_decodable(self, path) -> int:
+        """Count frames a decoder can actually produce. -1 = could not check."""
         import shutil as _shutil
         import subprocess
 
-        exe = _shutil.which("ffmpeg")
-        if exe is None:
-            return -1
+        ffmpeg = _shutil.which("ffmpeg")
+        ffprobe = _shutil.which("ffprobe")
+        if ffmpeg is None or ffprobe is None:
+            # imageio drives ffmpeg through the imageio-ffmpeg wheel, which ships its
+            # own binary; the system one is often absent inside the container.
+            try:
+                import imageio_ffmpeg
+                ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[PANEL_VERIFY] no ffmpeg available: {type(exc).__name__}: {exc}")
+                return -1
+            ffprobe = ffmpeg  # ffprobe is not shipped; fall back to ffmpeg's own count
+
         try:
             proc = subprocess.run(
-                [exe, "-v", "error", "-i", self.path, "-f", "null", "-"],
-                capture_output=True, text=True, timeout=600,
+                [ffmpeg, "-v", "error", "-i", path, "-f", "null", "-"],
+                capture_output=True, text=True, timeout=900,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[PANEL_VERIFY] decode check failed: {type(exc).__name__}: {exc}")
             return -1
-        errs = sum(1 for line in proc.stderr.splitlines() if "error" in line.lower())
-        if errs:
-            print(f"[PANEL_VERIFY] ffmpeg reported {errs} decode error line(s)")
-            return -1
-        probe = subprocess.run(
-            [_shutil.which("ffprobe"), "-v", "error", "-select_streams", "v:0",
-             "-count_frames", "-show_entries", "stream=nb_read_frames",
-             "-of", "csv=p=0", self.path],
-            capture_output=True, text=True, timeout=600,
-        )
+
+        if proc.stderr.strip():
+            errs = [l for l in proc.stderr.splitlines() if l.strip()]
+            print(f"[PANEL_VERIFY] ffmpeg emitted {len(errs)} error line(s), first: {errs[0][:90]}")
+            return 0
+
         try:
+            probe = subprocess.run(
+                [ffprobe, "-v", "error", "-select_streams", "v:0",
+                 "-count_frames", "-show_entries", "stream=nb_read_frames",
+                 "-of", "csv=p=0", path],
+                capture_output=True, text=True, timeout=900,
+            )
             return int(probe.stdout.strip().splitlines()[0])
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            print(f"[PANEL_VERIFY] frame count failed: {type(exc).__name__}: {exc}")
             return -1
 
 
