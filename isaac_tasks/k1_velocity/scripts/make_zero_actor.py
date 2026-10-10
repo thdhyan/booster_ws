@@ -46,6 +46,25 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
 
+# ORDERING IS LOAD-BEARING. AppLauncher must run before ANY other isaaclab import.
+#
+# Importing isaaclab_tasks / rsl_rl first splits module identity: interactive_scene then
+# tests the scene's cfgs against a SensorBaseCfg loaded after app start, while the cfgs
+# themselves were built from the pre-app import graph. The classes are nominally the same
+# but are distinct objects, so isinstance() is False and the scene resolver falls all the
+# way through its dispatch chain to
+#
+#     ValueError: Unknown asset config type for height_scanner: RayCasterCfg(...)
+#
+# which is the single most confusing error this task has produced: height_scanner IS a
+# RayCasterCfg, RayCasterCfg IS a SensorBaseCfg subclass, and SensorBaseCfg is checked at
+# line 947, well before the raise at 994. Nothing about that message points at import
+# order, which is why it survived three separate wrong diagnoses (class identity, branch
+# order, GPU contention, a stale clone) before a probe that instantiated the launcher
+# first -- and therefore imported second -- passed the identical build.
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
+
 import torch  # noqa: E402
 from isaaclab_tasks.utils.hydra import hydra_task_config  # noqa: E402
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
@@ -55,9 +74,6 @@ import isaaclab_tasks  # noqa: F401,E402
 import booster_train.tasks  # noqa: F401,E402
 import k1_velocity.tasks.velocity  # noqa: F401,E402
 import k1_velocity.tasks.push  # noqa: F401,E402 — P6 push family
-
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
