@@ -39,6 +39,10 @@ class PanelCameras:
         self._annotators = {}
         self._render_products = []
         self.names = tuple(names)
+        # translucent debug markers (goal cubes, spheres) render opaque without this
+        import carb
+
+        carb.settings.get_settings().set_bool("/rtx/translucency/enabled", True)
         for index, name in enumerate(self.names):
             path = f"/Visuals/K1DebugCams/{name}"
             camera = UsdGeom.Camera.Define(self._stage, path)
