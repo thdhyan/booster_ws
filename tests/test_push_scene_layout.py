@@ -92,14 +92,25 @@ def test_scene_has_a_per_env_ground_patch():
     names = {t.id for s in cls.body if isinstance(s, ast.Assign)
              for t in s.targets if isinstance(t, ast.Name)}
     assert "ground_patch" in names, "no per-env ground patch in the scene"
-    assert "{ENV_REGEX_NS}" in _cfg_src().split("ground_patch = ", 1)[1][:200], (
+    body = ast.unparse(_scene_assign("K1PushSceneCfg", "ground_patch"))
+    # the template now lives in a constant, so resolve it rather than string-matching
+    assert "GROUND_PATCH_PRIM" in body, "the patch must use the shared per-env template"
+    prim = next(n for n in ast.walk(ast.parse(MDP.read_text()))
+                if isinstance(n, ast.Assign) and any(
+                    getattr(t, "id", "") == "GROUND_PATCH_PRIM" for t in n.targets))
+    assert "ENV_REGEX_NS" in ast.literal_eval(prim.value), (
         "the patch must be per-env, not one shared prim"
+    )
+    assert "AssetBaseCfg" in body, (
+        "the patch must be a STATIC collider (AssetBaseCfg); RigidBodyPropertiesCfg has "
+        "no `fixed` field in this build, so a RigidObjectCfg patch raises TypeError at "
+        "cfg construction"
     )
 
 
 def test_patch_top_face_is_the_trained_standing_height():
     """The frozen base was trained standing at z=0; the patch top must be z=0."""
-    body = _cfg_src().split("ground_patch = RigidObjectCfg", 1)[1].split("\n    )", 1)[0]
+    body = ast.unparse(_scene_assign("K1PushSceneCfg", "ground_patch"))
     assert "GROUND_PATCH_THICKNESS * 0.5" in body, (
         "a cuboid centred at -t/2 has its top face at z=0; anything else moves the contact "
         "surface away from the height the frozen base expects"
@@ -108,7 +119,7 @@ def test_patch_top_face_is_the_trained_standing_height():
 
 def test_the_world_ground_is_dropped_so_the_patch_is_the_contact_surface():
     """Two colliders sharing a plane make the contact normal solver-dependent."""
-    g = _cfg_src().split("ground = AssetBaseCfg", 1)[1].split("\n    )", 1)[0]
+    g = ast.unparse(_scene_assign("K1PushSceneCfg", "ground"))
     assert "GROUND_PATCH_THICKNESS" in g, (
         "the world ground must sit one patch-thickness below z=0, otherwise the patch "
         "and the world plane are coincident and z-fight"
@@ -174,16 +185,25 @@ def _event_term(term_name):
 
 
 def test_ground_friction_is_randomised_per_env():
-    """The actual ask: each cell gets its own friction."""
+    """The actual ask: each cell gets its own friction.
+
+    Written on the USD material by our own event, not via
+    randomize_rigid_body_material: the patch is static and so has no rigid view for that
+    helper to write through. prestartup, because friction must be in place before PhysX
+    parses it -- the same reason the box DR is prestartup.
+    """
     call = _event_term("randomize_ground_friction")
     kw = _kwargs(call)
-    assert ast.literal_eval(kw["mode"]) == "startup", (
-        "mode='startup' fires just after sim play, which is when the material impls can "
-        "see asset.root_view; prestartup cannot write materials"
+    assert ast.literal_eval(kw["mode"]) == "prestartup", (
+        "ground friction must land before PhysX parses it"
     )
-    name = _call_str_arg(_dict_get(kw["params"], "asset_cfg"))
-    assert name == "ground_patch", (
-        "the ground friction must be written to the patch, not to the shared world plane"
+    fn = ast.unparse(kw["func"])
+    assert fn.endswith("randomize_ground_friction"), (
+        f"expected our USD writer, got {fn}"
+    )
+    src = ast.unparse(_event_term("randomize_ground_friction"))
+    assert "vmdp.randomize_rigid_body_material" not in src, (
+        "the static patch has no rigid view; that helper cannot write it"
     )
 
 
@@ -197,12 +217,22 @@ def test_ground_friction_lower_bound_respects_the_frozen_base():
     """
     lo = 0.7
     params = _kwargs(_event_term("randomize_ground_friction"))["params"]
-    for key in ("static_friction_range", "dynamic_friction_range"):
-        rng = ast.literal_eval(_dict_get(params, key))
-        assert rng[0] >= lo, (
-            f"{key} lower bound {rng[0]} is below the {lo} floor; 0.5 was measured to drop "
-            "the FROZEN base (DIAG_FAILED_BASE_STILL_FALLS). Widen deliberately."
-        )
+    rng = ast.literal_eval(_dict_get(params, "friction_range"))
+    assert rng[0] >= lo, (
+        f"ground friction lower bound {rng[0]} is below the {lo} floor; 0.5 was measured to "
+        "drop the FROZEN base (DIAG_FAILED_BASE_STILL_FALLS). Widen deliberately."
+    )
+    # and the function's own default must agree, since that is the code that runs
+    fn = next(n for n in ast.walk(ast.parse(MDP.read_text()))
+              if isinstance(n, ast.FunctionDef) and n.name == "randomize_ground_friction")
+    defaults = {a.arg: ast.literal_eval(d) for a, d in
+                zip(fn.args.args[-len(fn.args.defaults):], fn.args.defaults)
+                if a.arg == "friction_range"}
+    assert defaults, "could not read randomize_ground_friction's friction_range default"
+    assert defaults["friction_range"][0] >= lo, (
+        f"the function default floor is {defaults['friction_range'][0]}, below {lo}; the "
+        "event term and the function default must not disagree"
+    )
 
 
 def test_box_annulus_matches_what_the_spacing_assumes():

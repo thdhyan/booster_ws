@@ -103,6 +103,8 @@ LEFT_EE = "left_hand_link"
 RIGHT_EE = "right_hand_link"
 
 PROTO_HALF = 0.5          # 1 m prototype cube
+#: Per-env ground patch prim template; see randomize_ground_friction.
+GROUND_PATCH_PRIM = "{ENV_REGEX_NS}/ground_patch"
 CORNER_SIGNS = torch.tensor(
     [[sx, sy, sz] for sx in (-1.0, 1.0) for sy in (-1.0, 1.0) for sz in (-1.0, 1.0)],
     dtype=torch.float32,
@@ -150,6 +152,62 @@ def _state(env: ManagerBasedRLEnv) -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 # USD-time DR: per-env size + mass (read back after the built-ins write them)
 # ---------------------------------------------------------------------------
+def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
+                               restitution: float = 0.0) -> None:
+    """Give every env's ground patch its own friction, by editing its bound material.
+
+    WHY USD AND NOT randomize_rigid_body_material
+    The patch is a STATIC collider, so it has no rigid view for that helper to write
+    through, and RigidBodyPropertiesCfg in this build has no `fixed`/`fix_root_link`
+    field to make one static-but-viewable. Writing the material on the prim directly is
+    the same route ``randomize_box_geometry`` already takes for the box's MassAPI, so
+    there is precedent in this file rather than an assumption.
+
+    Reads the material the spawn already bound and sets its friction inputs, creating
+    one only if the prim turns out to have none. Fixed for the run (like the box DR):
+    PhysX buckets friction coefficients, so re-rolling per episode would re-upload
+    materials thousands of times for no extra robustness.
+
+    The default floor is 0.7, NOT the reference's 0.3. See randomize_ground_friction in
+    push_env_cfg: a slicker floor was measured to drop the FROZEN base, which cannot
+    adapt to it.
+    """
+    import random as pyrandom
+
+    from isaaclab.sim import utils as sim_utils
+    from pxr import Sdf, UsdShade
+
+    stage = env.sim.stage
+    lo, hi = friction_range
+    mus: list[float] = []
+    for path in sim_utils.find_matching_prim_paths(GROUND_PATCH_PRIM):
+        prim = stage.GetPrimAtPath(path)
+        bound = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()[0]
+        if bound is None:
+            mat_path = Sdf.Path(f"{path}/push_friction")
+            material = UsdShade.Material.Define(stage, mat_path)
+            shader = UsdShade.Shader.Define(stage, mat_path.AppendChild("Shader"))
+            shader.CreateIdAttr("UsdPhysicsMaterial")
+            shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
+            material.CreateSurfaceOutput().ConnectToSource(
+                shader.ConnectableAPI(), "surface"
+            )
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(material)
+            bound = material
+        shader = bound.GetSurfaceShader()
+        mu_s = pyrandom.uniform(lo, hi)
+        mu_d = pyrandom.uniform(lo, hi)
+        for name, value in (("staticFriction", mu_s), ("dynamicFriction", mu_d),
+                            ("restitution", restitution)):
+            inp = shader.GetInput(name)
+            if inp is not None:
+                inp.Set(value)
+        mus.append(mu_s)
+    if mus:
+        print(f"[push] ground friction: {len(mus)} cells, mu {min(mus):.2f}-{max(mus):.2f} "
+              f"(floor {lo} keeps the frozen base standing)")
+
+
 def randomize_box_geometry(env: ManagerBasedRLEnv, env_ids, scale_range, mass_range) -> None:
     """Event mode='usd': scale + mass per env, fixed for the run (PhysX parses
     USD once at startup). Values are read back per prim into push_state.

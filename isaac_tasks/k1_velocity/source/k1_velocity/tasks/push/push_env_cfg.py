@@ -98,8 +98,16 @@ class K1PushSceneCfg(InteractiveSceneCfg):
     # Per-env ground, so each cell can carry its own friction. Sized to the env cell
     # (see the env_spacing note in __post_init__) and static, but kept as a RigidObject
     # so it has a rigid view the standard material randomizer can write through.
-    ground_patch = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/ground_patch",
+    # AssetBaseCfg, NOT RigidObjectCfg: this must be a STATIC collider, and
+    # RigidBodyPropertiesCfg in this build has no `fixed`/`fix_root_link` field, so
+    # passing one raises TypeError at cfg construction. A static collider has no rigid
+    # view, which is why friction is written on the USD material instead
+    # (randomize_ground_friction) rather than through randomize_rigid_body_material.
+    ground_patch = AssetBaseCfg(
+        prim_path=mdp.GROUND_PATCH_PRIM,
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(0.0, 0.0, -GROUND_PATCH_THICKNESS * 0.5)
+        ),
         spawn=sim_utils.CuboidCfg(
             size=(7.9, 7.9, GROUND_PATCH_THICKNESS),
             physics_material=sim_utils.RigidBodyMaterialCfg(
@@ -109,10 +117,6 @@ class K1PushSceneCfg(InteractiveSceneCfg):
                 dynamic_friction=1.0,
             ),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.0, 0.0, -GROUND_PATCH_THICKNESS * 0.5)
-        ),
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(fixed=True),
     )
     robot: ArticulationCfg = BOOSTER_K1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     box = RigidObjectCfg(
@@ -329,15 +333,11 @@ class K1PushEventCfg:
     # until the base is trainable again, so the floor is kept where the base is known to
     # stand. Exposed as cfg.ground_friction_range to widen deliberately.
     randomize_ground_friction = EventTerm(
-        func=mdp.vmdp.randomize_rigid_body_material,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("ground_patch"),
-            "static_friction_range": (0.7, 1.2),
-            "dynamic_friction_range": (0.7, 1.2),
-            "restitution_range": (0.0, 0.02),
-            "num_buckets": 16,
-        },
+        func=mdp.randomize_ground_friction,
+        # prestartup: this writes USD, which needs the stage but no rigid view, and must
+        # land before PhysX parses friction -- the same reason the box DR is prestartup.
+        mode="prestartup",
+        params={"friction_range": (0.7, 1.2), "restitution": 0.0},
     )
     green_alpha = EventTerm(func=mdp.apply_box_green_alpha, mode="startup")
     # per-episode (order matters: pose -> goal -> wrist targets)
