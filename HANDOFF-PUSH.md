@@ -6,7 +6,7 @@
 are **not** updated by this workstream. Do not edit them from here.
 **Repo:** `/home/thakk100/Projects/booster_ws`, branch `main`, GitHub `thdhyan/booster_ws`.
 **Host:** `zz-bw` (`cs-zhang-net-01`) — 2× RTX PRO 6000 Blackwell, 97 GB each.
-**Last commit this doc describes:** `8dae594`.
+**Last commit this doc describes:** `6834137` (2026-10-10).
 
 ---
 
@@ -17,8 +17,10 @@ are **not** updated by this workstream. Do not edit them from here.
 | Squat **teacher** | ✅ trained, `model_8100.pt`, success 0.83 |
 | Squat **student** (distill) | ✅ **finished all 12000 iterations** → `model_11999.pt` |
 | Squat teacher TorchScript (push base) | ✅ `k1_squat_base.pt`, 1.17 MB, verified 238→12 |
-| Push env — **builds** | ⚠️ fixed on `main` (`8cfd278`), **not yet verified in-sim** |
-| Push **training** | ❌ never started. No push policy exists. |
+| Push env — **builds** | ✅ verified in-sim 2026-10-10 (`6834137`), 4096 envs, 3.6 s/iter |
+| Push env video (untrained actor) | ✅ `logs/push_zero/push_env_zero.mp4`, 500/500 frames decodable; base stands (trunk z 0.45–0.57) |
+| Reach **training** | ▶️ running since 2026-10-10 14:45, tmux `k1_reach`, run `p6_push_reach/2026-10-10_14-45-53_p6_push_reach`, log `$S/push_reach.log` |
+| Push stage / push student | ❌ not started (needs Reach first; no push student task is registered) |
 | Tests | 329 passed, 1 pre-existing failure (`test_deployability`) |
 
 **The single most important thing to know:** no push policy has ever been trained. The
@@ -121,12 +123,14 @@ K1_TRAIN_SCRIPT=<script> K1_GPU=<n> ~/run_k1_train.sh <args...>
 | `K1_GPU` | GPU index; defaults to 1 |
 | `PUSH_BASE_MODE` | `squat` selects the frozen squat base |
 
-`K1_TRAIN_SCRIPT` must be reachable from the workdir root, so symlink it first:
+`K1_TRAIN_SCRIPT` is resolved from the workdir root. **Do not symlink `train.py`** —
+through the symlink `sys.path[0]` becomes the clone root and the run dies with
+`No module named 'cli_args'`. For training use `K1_TRAIN_SCRIPT=run_unbuffered.py` (an
+untracked wrapper in the clone root that execs the real `scripts/train.py`). Other scripts
+can be given by full path, e.g. `K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/play_record.py`.
 
-```bash
-cd /export/scratch/thakk100/k1/tmp/booster_ws
-ln -sf isaac_tasks/k1_velocity/scripts/train.py ./train.py
-```
+`--containall` strips host env: `PUSH_BASE_MODE` is **not** passed into the container
+(squat is the default anyway).
 
 ### Paths
 
@@ -262,7 +266,27 @@ the word "error".
 
 ---
 
-## 6. Current blocker — and the four wrong diagnoses behind it
+## 6. Build blockers (resolved 2026-10-10) — and the wrong diagnoses behind them
+
+Fixed after the import-order fix, all verified in-sim:
+
+* `expand_env_regex_ns` does not exist in the container's IsaacLab (`fb24c08`): expand
+  with `GROUND_PATCH_PRIM.format(ENV_REGEX_NS=env.scene.env_regex_ns)`.
+* `randomize_ground_friction` read the default material binding (empty → an *invalid*
+  Material, not `None`) and wrote friction as shader inputs PhysX never reads. Now one
+  `UsdPhysics.MaterialAPI` material per patch, bound on the `"physics"` purpose.
+* `RayCaster currently only supports one mesh prim. Received: 2`: scanner casts onto
+  `/World/ground` only; the frozen base's height scan adds `GROUND_PATCH_THICKNESS` to
+  its offset (`push_mdp.FrozenBaseVelocityAction`).
+* Early `height_below_command` terminations (~0.9 in the first iterations) come from
+  noisy H* exploration (termination compares against the instantaneous command); with
+  near-zero actions the base stands. Not a bug, but watch it.
+* The old watchdog keyed on `Reward/total`, which the log never prints; use
+  `--key "Mean reward"`.
+* `make_zero_actor.py` raises `'Logger' object has no attribute 'writer'` *after*
+  `torch.save` succeeds — the checkpoint is usable.
+
+### Earlier: the import-order blocker
 
 The push env failed to build with:
 
