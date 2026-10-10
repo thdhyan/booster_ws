@@ -251,7 +251,10 @@ def test_ground_friction_resolves_the_env_regex_before_querying():
     which is how the first version of this failed. The patch template is per-env, so the
     event must resolve it -- the same route randomize_box_geometry uses.
     """
-    src = ast.unparse(_event_term("randomize_ground_friction"))
+    # The resolve happens in the FUNCTION, not the event term, so read the function.
+    fn = next(n for n in ast.walk(ast.parse(MDP.read_text()))
+              if isinstance(n, ast.FunctionDef) and n.name == "randomize_ground_friction")
+    src = ast.unparse(fn)
     assert "asset_cfg.resolve(env.scene)" in src, (
         "the prim path template must be resolved against the scene before querying"
     )
