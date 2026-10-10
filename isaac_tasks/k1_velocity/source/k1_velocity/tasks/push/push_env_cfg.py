@@ -46,7 +46,7 @@ from . import push_mdp as mdp
 
 #: Thickness of the per-env ground patch. Top face at z=0 (the trained standing
 #: height), so the world plane sits one thickness lower as a backstop.
-GROUND_PATCH_THICKNESS = 0.05
+GROUND_PATCH_THICKNESS = mdp.GROUND_PATCH_THICKNESS
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
 from k1_velocity.sim_backend import (
     apply_physics_backend,
@@ -138,11 +138,12 @@ class K1PushSceneCfg(InteractiveSceneCfg):
         ray_alignment="yaw",
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),  # 17x11 = 187 pts
         debug_vis=False,
-        # The patch is listed FIRST and is the real contact surface. If it were missing
-        # here the frozen base's 187-ray privileged obs would measure the backstop 5 cm
-        # below the feet -- no crash, just a systematically wrong terrain height that the
-        # base cannot compensate for, since it is frozen.
-        mesh_prim_paths=["{ENV_REGEX_NS}/ground_patch", "/World/ground"],
+        # RayCaster supports exactly ONE static mesh ("RayCaster currently only supports
+        # one mesh prim"), so it cannot see the per-env patch. It casts onto the backstop,
+        # GROUND_PATCH_THICKNESS below the patch top; the frozen base's scan compensates
+        # via its offset in push_mdp (FrozenBaseVelocityAction), so the base still reads
+        # height above the surface it stands on.
+        mesh_prim_paths=["/World/ground"],
     )
 
 

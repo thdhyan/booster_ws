@@ -157,18 +157,18 @@ def _call_str_arg(node):
     return None
 
 
-def test_height_scanner_sees_the_patch_not_just_the_backstop():
-    """The silent-corruption case: a frozen base reading the wrong surface."""
+def test_height_scanner_compensates_for_the_backstop():
+    """RayCaster takes one static mesh, so it hits /World/ground, a patch-thickness below
+    the real contact surface. The frozen base's scan must add that thickness back."""
     call = _scene_assign("K1PushSceneCfg", "height_scanner")
     paths = ast.literal_eval(_kwargs(call)["mesh_prim_paths"])
-    assert any("ground_patch" in p for p in paths), (
-        "the patch must be in the scanner's mesh_prim_paths; otherwise the frozen base's "
-        "187-ray obs measures the backstop 5 cm below its feet"
+    assert paths == ["/World/ground"], (
+        "RayCaster supports exactly one static mesh; a per-env patch path raises "
+        "NotImplementedError at scene build"
     )
-    idx_patch = next(i for i, p in enumerate(paths) if "ground_patch" in p)
-    idx_world = next(i for i, p in enumerate(paths) if p == "/World/ground")
-    assert idx_patch < idx_world, (
-        "the patch is the real contact surface and should be listed first"
+    assert "offset=0.5 + GROUND_PATCH_THICKNESS" in MDP.read_text(), (
+        "without the offset the frozen base's 187-ray obs measures the backstop 5 cm "
+        "below its feet"
     )
 
 

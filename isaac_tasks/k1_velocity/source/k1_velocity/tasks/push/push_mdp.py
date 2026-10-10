@@ -105,6 +105,9 @@ RIGHT_EE = "right_hand_link"
 PROTO_HALF = 0.5          # 1 m prototype cube
 #: Per-env ground patch prim template; see randomize_ground_friction.
 GROUND_PATCH_PRIM = "{ENV_REGEX_NS}/ground_patch"
+#: Patch thickness; /World/ground (the only mesh the scanner can ray-cast) sits this far
+#: below the patch top the robot stands on.
+GROUND_PATCH_THICKNESS = 0.05
 CORNER_SIGNS = torch.tensor(
     [[sx, sy, sz] for sx in (-1.0, 1.0) for sy in (-1.0, 1.0) for sz in (-1.0, 1.0)],
     dtype=torch.float32,
@@ -175,7 +178,7 @@ def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
     import random as pyrandom
 
     from isaaclab.sim import utils as sim_utils
-    from pxr import Sdf, UsdShade
+    from pxr import Sdf, Usd, UsdPhysics, UsdShade
 
     stage = env.sim.stage
     lo, hi = friction_range
@@ -219,32 +222,50 @@ def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
     # startup and an unconditional print cannot spam.
     print(f"[push] ground patch prims: {len(paths)} (matched {expanded!r})")
 
+    # The spawner binds the physics material to the patch's geometry child with the
+    # "physics" purpose, and PhysX reads friction from UsdPhysics.MaterialAPI attributes on
+    # the MATERIAL prim -- not from shader inputs, and not via the default (all-purpose)
+    # binding, which is empty here and returns an INVALID Material rather than None. That
+    # last detail is what killed the previous version at bound.GetSurfaceShader().
+    #
+    # Each patch gets its OWN material. Replication clones the patch prims but they all
+    # REFERENCE the single material the spawner created, so writing per-material attributes
+    # in place would leave every cell sharing the last value written -- per-env friction
+    # would silently collapse into one global value. Binding a fresh material per patch, on
+    # the physics purpose, is what actually makes the cells independent.
     mus: list[float] = []
     for path in paths:
         prim = stage.GetPrimAtPath(path)
         if not prim.IsValid():
             raise RuntimeError(f"ground patch prim {path!r} is invalid")
-        bound = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()[0]
-        if bound is None:
-            mat_path = Sdf.Path(f"{path}/push_friction")
-            material = UsdShade.Material.Define(stage, mat_path)
-            shader = UsdShade.Shader.Define(stage, mat_path.AppendChild("Shader"))
-            shader.CreateIdAttr("UsdPhysicsMaterial")
-            shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
-            material.CreateSurfaceOutput().ConnectToSource(
-                shader.ConnectableAPI(), "surface"
-            )
-            UsdShade.MaterialBindingAPI.Apply(prim).Bind(material)
-            bound = material
-        shader = bound.GetSurfaceShader()
+
         mu_s = pyrandom.uniform(lo, hi)
         mu_d = pyrandom.uniform(lo, hi)
-        for name, value in (("staticFriction", mu_s), ("dynamicFriction", mu_d),
-                            ("restitution", restitution)):
-            inp = shader.GetInput(name)
-            if inp is not None:
-                inp.Set(value)
+
+        mat_path = Sdf.Path(f"{path}/push_friction")
+        material = UsdShade.Material.Define(stage, mat_path)
+        shader = UsdShade.Shader.Define(stage, mat_path.AppendChild("Shader"))
+        shader.CreateIdAttr("UsdPhysicsMaterial")
+        shader.CreateOutput("surface", Sdf.ValueTypeNames.Token)
+        material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+
+        api = UsdPhysics.MaterialAPI(material)
+        api.CreateStaticFrictionAttr(mu_s)
+        api.CreateDynamicFrictionAttr(mu_d)
+        api.CreateRestitutionAttr(restitution)
+
+        # Rebind on the physics purpose, overriding the shared inherited material.
+        bound_any = False
+        for sub in Usd.PrimRange(prim):
+            if not sub.IsValid():
+                continue
+            UsdShade.MaterialBindingAPI.Apply(sub).Bind(material, "physics")
+            bound_any = True
+        if not bound_any:
+            raise RuntimeError(f"ground patch {path!r} has no sub-prims to bind to")
         mus.append(mu_s)
+    print(f"[push] ground friction: {len(mus)} cells, one material each "
+          f"(per-cell friction requires it)")
     if mus:
         print(f"[push] ground friction: {len(mus)} cells, mu {min(mus):.2f}-{max(mus):.2f} "
               f"(floor {lo} keeps the frozen base standing)")
@@ -965,7 +986,13 @@ class FrozenBaseVelocityAction(ActionTerm):
         leg_pos = robot.data.joint_pos[:, self._leg_ids] - robot.data.default_joint_pos[:, self._leg_ids]
         # joint_vel_rel == raw: default_joint_vel is all-zero in this build
         leg_vel = robot.data.joint_vel[:, self._leg_ids]
-        scan = _height_scan(self._env, sensor_cfg=SceneEntityCfg("height_scanner")).clamp(-1.0, 1.0)
+        # RayCaster takes ONE static mesh, so it hits /World/ground, GROUND_PATCH_THICKNESS
+        # below the patch top. Adding it to the offset gives the height above the surface
+        # the robot actually stands on, which is what the frozen base trained against.
+        scan = _height_scan(
+            self._env, sensor_cfg=SceneEntityCfg("height_scanner"),
+            offset=0.5 + GROUND_PATCH_THICKNESS,
+        ).clamp(-1.0, 1.0)
         # 236 dims above + a 2-dim gait clock = 238, which is what a POST-gait-fix
         # squat export consumes. push_mdp originally assembled 236 to match a
         # pre-gait-fix legacy export; every current squat teacher appends the clock,
