@@ -153,7 +153,7 @@ def _state(env: ManagerBasedRLEnv) -> SimpleNamespace:
 # USD-time DR: per-env size + mass (read back after the built-ins write them)
 # ---------------------------------------------------------------------------
 def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
-                               restitution: float = 0.0) -> None:
+                               restitution: float = 0.0, asset_cfg=None) -> None:
     """Give every env's ground patch its own friction, by editing its bound material.
 
     WHY USD AND NOT randomize_rigid_body_material
@@ -179,8 +179,18 @@ def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
 
     stage = env.sim.stage
     lo, hi = friction_range
+    # Resolve {ENV_REGEX_NS} to concrete per-env paths. Passing the raw template to
+    # find_matching_prim_paths raises "Prim path '{ENV_REGEX_NS}/ground_patch' is not
+    # global" -- the query helper takes an already-expanded path, which is why
+    # randomize_box_geometry goes through asset_cfg.resolve(env.scene) too.
+    if asset_cfg is not None:
+        asset_cfg.resolve(env.scene)
+        paths = list(asset_cfg.prim_paths)
+    else:
+        paths = [f"{p.rstrip('/')}/{GROUND_PATCH_PRIM.rsplit('/', 1)[-1]}"
+                 for p in env.scene.env_prim_paths]
     mus: list[float] = []
-    for path in sim_utils.find_matching_prim_paths(GROUND_PATCH_PRIM):
+    for path in paths:
         prim = stage.GetPrimAtPath(path)
         bound = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()[0]
         if bound is None:

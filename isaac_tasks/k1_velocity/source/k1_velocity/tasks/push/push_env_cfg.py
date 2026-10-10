@@ -337,7 +337,11 @@ class K1PushEventCfg:
         # prestartup: this writes USD, which needs the stage but no rigid view, and must
         # land before PhysX parses friction -- the same reason the box DR is prestartup.
         mode="prestartup",
-        params={"friction_range": (0.7, 1.2), "restitution": 0.0},
+        params={
+            "friction_range": (0.7, 1.2),
+            "restitution": 0.0,
+            "asset_cfg": SceneEntityCfg("ground_patch"),
+        },
     )
     green_alpha = EventTerm(func=mdp.apply_box_green_alpha, mode="startup")
     # per-episode (order matters: pose -> goal -> wrist targets)

@@ -242,3 +242,23 @@ def test_box_annulus_matches_what_the_spacing_assumes():
         "reset_box no longer uses the 1.4 m annulus the spacing arithmetic assumes; "
         "recompute MIN_SAFE_SPACING_M or boxes will interpenetrate again"
     )
+
+def test_ground_friction_resolves_the_env_regex_before_querying():
+    """find_matching_prim_paths needs an EXPANDED path, or it raises.
+
+    Passing the raw template straight through gives
+        ValueError: Prim path '{ENV_REGEX_NS}/ground_patch' is not global
+    which is how the first version of this failed. The patch template is per-env, so the
+    event must resolve it -- the same route randomize_box_geometry uses.
+    """
+    src = ast.unparse(_event_term("randomize_ground_friction"))
+    assert "asset_cfg.resolve(env.scene)" in src, (
+        "the prim path template must be resolved against the scene before querying"
+    )
+    assert "find_matching_prim_paths(GROUND_PATCH_PRIM)" not in src, (
+        "the raw {ENV_REGEX_NS} template must not reach find_matching_prim_paths"
+    )
+    params = _kwargs(_event_term("randomize_ground_friction"))["params"]
+    assert _call_str_arg(_dict_get(params, "asset_cfg")) == "ground_patch", (
+        "the event must pass a SceneEntityCfg for the patch so it can be resolved"
+    )
