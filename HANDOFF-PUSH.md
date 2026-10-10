@@ -21,7 +21,7 @@ are **not** updated by this workstream. Do not edit them from here.
 | Push env video (untrained actor) | ✅ `logs/push_zero/push_env_zero.mp4`, 500/500 frames decodable; base stands (trunk z 0.45–0.57) |
 | Reach **training** | ⏹ stopped 2026-10-10 at user request (~100 it). Push-SG already contains the approach terms, so a separate Reach stage is redundant |
 | Push-SG **training** | ▶️ running since 2026-10-10 15:54, tmux `k1_push` (+ watchdog `k1_watch`), log `$S/push_sg.log`, run `p6_push/2026-10-10_15-54-48_p6_push`; box 0.67–0.76 m, 3–10 kg; reward 45.9 at it 577/6000. it300 play video on Drive (§12) |
-| Carry task (P7) | ▶️ **training** since 2026-10-10 16:36, tmux `k1_carry`, log `$S/carry.log`, run `p7_carry/2026-10-10_16-36-26_p7_carry`, 4096 envs, ~4.2 s/it (~7 h for 6000). Smoke + debug video passed after the box-scale fix `aad6079` — see §11/§12 |
+| Carry task (P7) | ▶️ **training** since 2026-10-10 16:36, tmux `k1_carry`, log `$S/carry.log`, run `p7_carry/2026-10-10_16-36-26_p7_carry`, 4096 envs, ~4.2 s/it (~7 h for 6000); it 203: reward 122, 1.7 goal successes/episode, 0 weld breaks. Smoke + debug video passed after the box-scale fix `aad6079` — see §11/§12 |
 | Push stage / push student | ❌ not started (needs Reach first; no push student task is registered) |
 | Tests | 329 passed, 1 pre-existing failure (`test_deployability`) |
 
@@ -456,11 +456,16 @@ video shows the 0.18×w×0.18 box between the forearms.
 Open risks:
 - weld stability with 8 kg on 14 Nm arms (watch `weld_error` and the `weld_broken`
   termination rate);
-- **goal cube not seen in the re-recorded video** (frames at t=3 s and t=8 s show the
-  robot, box and the panel recorder's magenta/yellow markers, but no red/green cube).
-  The first (broken-box) video did show faint red cubes in the overview, so the
-  marker exists. Next: check it in a play video of a trained checkpoint; if it is
-  still missing, check the cube against the follow/side camera frusta and the 0.3 opacity;
+- **goal cube: visible only without `--headless`.** IsaacLab 3 dispatches
+  `VisualizationMarkers` callbacks from `SimulationContext.update_visualizers`, and only
+  when a marker-capable visualizer is attached; `--headless` attaches none, so the
+  cubes never get positions. Record carry play videos **without `--headless`** (the
+  container has no display, and AppLauncher still renders off-screen). Confirmed in
+  `carry_model_200.mp4`: red cube, turning green while the trunk is inside.
+- the cube renders **opaque**, not faint: `opacity=0.3` on the PreviewSurface is
+  ignored by this render path. Setting `/rtx/translucency/enabled` did nothing
+  (`2911819`, reverted `d8f85c9`). Untried: OmniPBR/OmniGlass MDL material via
+  `MdlFileCfg`, or a wireframe/edge marker instead of a solid cube;
 - the play HUD header says `cmd=none (stand task)` for carry (the panel recorder's
   task heuristic). Cosmetic; the trailing `command (vx,vy,wz)` field is correct.
 
@@ -476,10 +481,11 @@ with `ffprobe -count_frames` and frames were inspected.
 | Clip | Checkpoint | Frames | Drive file id |
 |---|---|---|---|
 | `p6_push_sg_it300_2026-10-10.mp4` | `p6_push/2026-10-10_15-54-48_p6_push/model_300.pt`, `PUSH_BASE_MODE=squat` | 700 | `1epQPCiKQQcpZ9--sA7kuUZlkx_RUcQtn` (poster `1Fa-HVpfHYbdwI2M79DFHP1ttNs4CSMYZ`) |
-| `p7_carry_smoke_untrained_2026-10-10.mp4` | `p7_carry/2026-10-10_16-10-43_p7_carry/model_2.pt` (smoke, untrained) | 500 | `1znMNmwKo_cROberelAz-wVQOzjWgMDKK` |
+| `p7_carry_smoke_untrained_2026-10-10.mp4` | `p7_carry/2026-10-10_16-10-43_p7_carry/model_2.pt` (smoke, untrained; recorded `--headless`, so no goal cube) | 500 | `1znMNmwKo_cROberelAz-wVQOzjWgMDKK` |
+| `p7_carry_model200_2026-10-10.mp4` | `p7_carry/2026-10-10_16-36-26_p7_carry/model_200.pt` (no `--headless`; goal cube visible) | 750 | `11QoC98nUhh0_ZQ21IBpMO3chouKaH5TZ` |
 
 - Drive folder: [Booster videos](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy).
-- Slides: appended as slides 34–35 (`s_p6sg_1010`, `s_p7carry_1010`, layout `p12`,
+- Slides: appended as slides 34–36 (`s_p6sg_1010`, `s_p7carry_1010`, `s_p7c200_1010`, layout `p12`,
   embedded Drive video plus a title text box) to the
   [deck](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit).
 - Local copies: `k1m_out/push_videos/` (gitignored output dir).
