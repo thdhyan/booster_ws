@@ -1,55 +1,74 @@
-"""Probe v3: the push scene build fails, but the CFG is provably fine.
+"""Probe: why does the push scene build fail?
 
-Probe v2 already ruled out the two obvious explanations:
-  * the container's resolver branch order is correct (SensorBaseCfg at 947 precedes
-    AssetBaseCfg at 981);
-  * isinstance(cfg.scene.height_scanner, SensorBaseCfg) is True for BOTH the velocity
-    scene that works and the push scene that fails.
+Runs INSIDE the container and prints:
+  * the container's own resolver dispatch region (the file and branch order actually
+    loaded, not the one in the laptop source tree);
+  * the type of every field on the push scene cfg;
+  * the type of the same field on the velocity scene, which is known to work;
+  * a bisect: build the play env as-is, then again with scene.ground_patch deleted.
 
-So the cfg object is well-typed and the chain is in the right order, yet building the
-env raises
+ORDERING -- this is the part that matters and it cost three failed runs. Isaac/Carbonite
+requires SimulationApp to be instantiated BEFORE any isaaclab import; importing first
+crashes Kit during startup, which shows up only as
 
-    ValueError: Unknown asset config type for height_scanner: RayCasterCfg(...)
+    [crash] 'appState' = 'startup'
+    [crash] 'UptimeSeconds' = '1'
 
-which can only mean the object reaching the `raise` is not the one in the cfg. This
-dumps the resolver source around the raise, the type of every scene field, and then
-bisects: build the env as-is, and if that fails, build it again with ground_patch
-removed. If removing ground_patch fixes it, the patch insertion is the cause and the
-resolver is being handed something other than the declared cfg.
+with a full crash dump and no Python traceback. An earlier version of this probe did the
+imports at module level and created the launcher at the bottom, so it never got as far as
+printing anything. play_record.py gets this right; mirror it exactly.
 """
-import inspect
-import traceback
+import argparse
 
-import isaaclab.scene.interactive_scene as isc
+from isaaclab.app import AppLauncher
 
-SRC = inspect.getsourcefile(isc)
-src = open(SRC).read().splitlines()
-print("PROBE3 file:", SRC)
+parser = argparse.ArgumentParser(description="Probe the push scene resolver.")
+AppLauncher.add_app_launcher_args(parser)
+args_cli = parser.parse_known_args()[0]
 
-# the exact region that decides asset dispatch, including the raise
-start = next(i for i, l in enumerate(src) if "isinstance(asset_cfg, TerrainImporterCfg)" in l)
-print("PROBE3 resolver dispatch region:")
-for i in range(start, min(start + 90, len(src))):
-    line = src[i]
-    if ("isinstance(asset_cfg" in line or "raise ValueError" in line
-            or "_extras" in line or "_sensors[" in line or "for asset_name" in line
-            or "continue" in line):
-        print(f"PROBE3   {i+1}: {line.strip()[:100]}")
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
 
+# ---- everything below runs after SimulationApp exists -------------------------
+import inspect  # noqa: E402
+import traceback  # noqa: E402
+
+import gymnasium as gym  # noqa: E402
+import isaaclab.scene.interactive_scene as isc  # noqa: E402
 import isaaclab_tasks  # noqa: F401,E402
 import booster_train.tasks  # noqa: F401,E402
 import k1_velocity.tasks.velocity  # noqa: F401,E402
 import k1_velocity.tasks.push  # noqa: F401,E402
+from isaaclab.sensors.sensor_base_cfg import SensorBaseCfg  # noqa: E402
 from isaaclab_tasks.utils import load_cfg_from_registry  # noqa: E402
 
-cfg = load_cfg_from_registry("Isaac-Push-SG-K1-Play-v0", "env_cfg_entry_point")
-print("PROBE3 scene fields:")
-for name, val in vars(cfg.scene).items():
-    if name.startswith("_") or callable(val) or val is None:
-        continue
-    print(f"PROBE3   {name}: {type(val).__name__}")
+SRC = inspect.getsourcefile(isc)
+src = open(SRC).read().splitlines()
+print("PROBE file:", SRC)
 
-import gymnasium as gym  # noqa: E402
+start = next(i for i, l in enumerate(src) if "isinstance(asset_cfg, TerrainImporterCfg)" in l)
+print("PROBE resolver dispatch region:")
+for i in range(start, min(start + 90, len(src))):
+    line = src[i]
+    if ("isinstance(asset_cfg" in line or "raise ValueError" in line
+            or "self._extras" in line or "self._sensors[" in line
+            or "for asset_name" in line or line.strip().startswith("continue")):
+        print(f"PROBE   {i+1}: {line.strip()[:100]}")
+
+for task in ("Isaac-Velocity-Rough-K1-v0", "Isaac-Push-SG-K1-Play-v0"):
+    try:
+        c = load_cfg_from_registry(task, "env_cfg_entry_point")
+    except Exception as exc:  # noqa: BLE001
+        print(f"PROBE {task}: cfg load failed {type(exc).__name__}: {exc}")
+        continue
+    print(f"PROBE {task}: scene fields")
+    for name, val in vars(c.scene).items():
+        if name.startswith("_") or callable(val) or val is None:
+            continue
+        mark = ""
+        if isinstance(val, SensorBaseCfg):
+            mark = "  <-- SensorBaseCfg"
+        print(f"PROBE   {name}: {type(val).__name__}{mark}")
 
 
 def attempt(label, mutate=None):
@@ -59,28 +78,29 @@ def attempt(label, mutate=None):
         mutate(c)
     try:
         e = gym.make("Isaac-Push-SG-K1-Play-v0", cfg=c).unwrapped
-        print(f"PROBE3 {label}: BUILD_OK")
+        print(f"PROBE {label}: BUILD_OK")
         e.close()
         return True
     except Exception as exc:  # noqa: BLE001
-        print(f"PROBE3 {label}: {type(exc).__name__}: {str(exc)[:110]}")
-        tb = traceback.format_exc().splitlines()
-        for line in tb[-6:]:
-            print("PROBE3   tb:", line.strip()[:110])
+        print(f"PROBE {label}: {type(exc).__name__}: {str(exc)[:120]}")
+        for line in traceback.format_exc().splitlines()[-5:]:
+            print("PROBE   tb:", line.strip()[:120])
         return False
 
-
-from isaaclab.app import AppLauncher  # noqa: E402
-app = AppLauncher({"headless": True}).app
 
 ok = attempt("as-is")
 if not ok:
     def drop_patch(c):
-        for attr in ("ground_patch",):
-            if hasattr(c.scene, attr):
-                delattr(type(c.scene), attr)
-                print(f"PROBE3 removed scene.{attr}")
+        if hasattr(type(c.scene), "ground_patch"):
+            delattr(type(c.scene), "ground_patch")
+            print("PROBE removed scene.ground_patch")
     ok = attempt("without ground_patch", drop_patch)
+if not ok:
+    def drop_scanner(c):
+        if hasattr(type(c.scene), "height_scanner"):
+            delattr(type(c.scene), "height_scanner")
+            print("PROBE removed scene.height_scanner")
+    ok = attempt("without height_scanner", drop_scanner)
 
-print("PROBE3_DONE")
-app.close()
+print("PROBE_DONE")
+simulation_app.close()
