@@ -7,6 +7,8 @@ captured, and pump Kit with physics disabled.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 
@@ -84,6 +86,13 @@ class PanelCameras:
 class TiledPanelRecorder:
     """Write labelled panels and a status header to one MP4."""
 
+    # quality=5 maps to roughly crf 25 in imageio's ffmpeg writer. The previous 8
+    # (crf ~10) produced a 55 Mbit/s stream -- RTX path-tracing noise is close to
+    # incompressible -- and writing that onto the bind-mounted logs filesystem
+    # corrupted the mdat: the moov index still advertised 700 frames while only 39
+    # decoded, which ffmpeg reports as "Invalid NAL unit size".
+    QUALITY = 5
+
     def __init__(self, path, names, size=(480, 270), cols=2, fps=25):
         import imageio.v2 as imageio
         from PIL import ImageFont
@@ -92,7 +101,14 @@ class TiledPanelRecorder:
         self.names = tuple(names)
         self.size = tuple(size)
         self.cols = cols
-        self.writer = imageio.get_writer(path, fps=fps, codec="libx264", quality=8, macro_block_size=1)
+        self.frames_added = 0
+        # Encode to a container-local path, then move into place on close(). The logs
+        # dir is a bind mount from the host; streaming tens of Mbit/s at it was the
+        # suspected source of the bitstream damage.
+        self.tmp_path = f"/tmp/_panel_{os.getpid()}.mp4"
+        self.writer = imageio.get_writer(
+            self.tmp_path, fps=fps, codec="libx264", quality=self.QUALITY, macro_block_size=1
+        )
         try:
             self.font = ImageFont.load_default(size=16)
         except TypeError:
@@ -121,9 +137,64 @@ class TiledPanelRecorder:
         header = Image.new("RGB", (grid.shape[1], 34), (18, 18, 18))
         ImageDraw.Draw(header).text((8, 8), status[:220], fill=(240, 240, 240), font=self.font)
         self.writer.append_data(np.concatenate([np.asarray(header), grid], axis=0))
+        self.frames_added += 1
 
     def close(self) -> None:
+        """Close, publish, and VERIFY.
+
+        Verification is the point. Reporting success on file existence alone is how a
+        700-frame video that only had 39 decodable frames got announced as VIDEO_OK: the
+        moov atom is written by the muxer regardless of whether the mdat survived, so
+        the file exists and ffprobe reports the right duration either way. Only counting
+        what a decoder can actually pull back distinguishes the two.
+        """
+        import shutil
+
         self.writer.close()
+        shutil.move(self.tmp_path, self.path)
+
+        decodable = self._count_decodable()
+        ok = decodable == self.frames_added
+        print(
+            f"[PANEL_VERIFY] frames_added={self.frames_added} frames_decodable={decodable} "
+            f"{'OK' if ok else 'CORRUPT'} bytes={os.path.getsize(self.path)} {self.path}"
+        )
+        if not ok:
+            print(
+                f"[PANEL_VERIFY] WARNING: only {decodable}/{self.frames_added} frames "
+                "decoded; the mp4 exists but is not reliably playable"
+            )
+
+    def _count_decodable(self) -> int:
+        """Count frames a decoder can actually produce, via ffmpeg if present."""
+        import shutil as _shutil
+        import subprocess
+
+        exe = _shutil.which("ffmpeg")
+        if exe is None:
+            return -1
+        try:
+            proc = subprocess.run(
+                [exe, "-v", "error", "-i", self.path, "-f", "null", "-"],
+                capture_output=True, text=True, timeout=600,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[PANEL_VERIFY] decode check failed: {type(exc).__name__}: {exc}")
+            return -1
+        errs = sum(1 for line in proc.stderr.splitlines() if "error" in line.lower())
+        if errs:
+            print(f"[PANEL_VERIFY] ffmpeg reported {errs} decode error line(s)")
+            return -1
+        probe = subprocess.run(
+            [_shutil.which("ffprobe"), "-v", "error", "-select_streams", "v:0",
+             "-count_frames", "-show_entries", "stream=nb_read_frames",
+             "-of", "csv=p=0", self.path],
+            capture_output=True, text=True, timeout=600,
+        )
+        try:
+            return int(probe.stdout.strip().splitlines()[0])
+        except Exception:  # noqa: BLE001
+            return -1
 
 
 class K1DebugMarkers:

@@ -1,62 +1,87 @@
-"""Probe: why does the push scene's height_scanner fall through the resolver?
+"""Probe v3: the push scene build fails, but the CFG is provably fine.
 
-Runs INSIDE the container and prints, from the container's own IsaacLab:
-  * the branch order of the scene resolver's isinstance chain
-  * the MRO of the height_scanner cfg actually built by K1PushSceneCfg
-  * whether isinstance() agrees with the resolver's SensorBaseCfg class
-  * the same for the v3 velocity scene, which is known to work
+Probe v2 already ruled out the two obvious explanations:
+  * the container's resolver branch order is correct (SensorBaseCfg at 947 precedes
+    AssetBaseCfg at 981);
+  * isinstance(cfg.scene.height_scanner, SensorBaseCfg) is True for BOTH the velocity
+    scene that works and the push scene that fails.
 
-The v3-vs-SG comparison is the point: both declare the same RayCasterCfg, so if one
-resolves and the other does not, the difference is in how the cfg object was built, not
-in the resolver.
+So the cfg object is well-typed and the chain is in the right order, yet building the
+env raises
+
+    ValueError: Unknown asset config type for height_scanner: RayCasterCfg(...)
+
+which can only mean the object reaching the `raise` is not the one in the cfg. This
+dumps the resolver source around the raise, the type of every scene field, and then
+bisects: build the env as-is, and if that fails, build it again with ground_patch
+removed. If removing ground_patch fixes it, the patch insertion is the cause and the
+resolver is being handed something other than the declared cfg.
 """
 import inspect
-import sys
 import traceback
 
 import isaaclab.scene.interactive_scene as isc
 
 SRC = inspect.getsourcefile(isc)
-print("PROBE isaaclab scene:", SRC)
-try:
-    src = open(SRC).read()
-    order = [(i + 1, l.strip()) for i, l in enumerate(src.splitlines())
-             if "isinstance(asset_cfg" in l]
-    print("PROBE resolver branch order:")
-    for ln, l in order:
-        print(f"PROBE   {ln}: {l[:90]}")
-except Exception as exc:
-    print("PROBE could not read resolver:", exc)
+src = open(SRC).read().splitlines()
+print("PROBE3 file:", SRC)
 
-try:
-    from isaaclab.sensors import RayCasterCfg
-    from isaaclab.sensors.sensor_base_cfg import SensorBaseCfg
-    print("PROBE RayCasterCfg module:", RayCasterCfg.__module__)
-    print("PROBE SensorBaseCfg module:", SensorBaseCfg.__module__)
-    print("PROBE RayCasterCfg is SensorBaseCfg:", issubclass(RayCasterCfg, SensorBaseCfg))
-    print("PROBE MRO:", [c.__name__ for c in RayCasterCfg.__mro__][:6])
-except Exception as exc:
-    print("PROBE sensor import failed:", type(exc).__name__, exc)
-    traceback.print_exc()
+# the exact region that decides asset dispatch, including the raise
+start = next(i for i, l in enumerate(src) if "isinstance(asset_cfg, TerrainImporterCfg)" in l)
+print("PROBE3 resolver dispatch region:")
+for i in range(start, min(start + 90, len(src))):
+    line = src[i]
+    if ("isinstance(asset_cfg" in line or "raise ValueError" in line
+            or "_extras" in line or "_sensors[" in line or "for asset_name" in line
+            or "continue" in line):
+        print(f"PROBE3   {i+1}: {line.strip()[:100]}")
 
-# now build the actual scene cfg and inspect the instance the resolver sees
-try:
-    import isaaclab_tasks  # noqa: F401
-    import booster_train.tasks  # noqa: F401
-    import k1_velocity.tasks.velocity  # noqa: F401
-    import k1_velocity.tasks.push  # noqa: F401
-    from isaaclab_tasks.utils import load_cfg_from_registry
+import isaaclab_tasks  # noqa: F401,E402
+import booster_train.tasks  # noqa: F401,E402
+import k1_velocity.tasks.velocity  # noqa: F401,E402
+import k1_velocity.tasks.push  # noqa: F401,E402
+from isaaclab_tasks.utils import load_cfg_from_registry  # noqa: E402
 
-    for task in ("Isaac-Velocity-Rough-K1-v0", "Isaac-Push-SG-K1-Play-v0"):
-        try:
-            cfg = load_cfg_from_registry(task, "env_cfg_entry_point")
-            hs = cfg.scene.height_scanner
-            print(f"PROBE {task}: height_scanner type={type(hs).__name__} module={type(hs).__module__}")
-            print(f"PROBE {task}: is SensorBaseCfg ->", isinstance(hs, __import__(
-                "isaaclab.sensors.sensor_base_cfg", fromlist=["SensorBaseCfg"]).SensorBaseCfg))
-        except Exception as exc:
-            print(f"PROBE {task}: FAILED {type(exc).__name__}: {exc}")
-except Exception as exc:
-    print("PROBE cfg load failed:", type(exc).__name__, exc)
+cfg = load_cfg_from_registry("Isaac-Push-SG-K1-Play-v0", "env_cfg_entry_point")
+print("PROBE3 scene fields:")
+for name, val in vars(cfg.scene).items():
+    if name.startswith("_") or callable(val) or val is None:
+        continue
+    print(f"PROBE3   {name}: {type(val).__name__}")
 
-print("PROBE_DONE")
+import gymnasium as gym  # noqa: E402
+from isaac_tasks.k1_velocity.source.k1_velocity.tasks.push import push_sg_env_cfg as sg  # noqa: E402
+
+
+def attempt(label, mutate=None):
+    c = load_cfg_from_registry("Isaac-Push-SG-K1-Play-v0", "env_cfg_entry_point")
+    c.scene.num_envs = 2
+    if mutate is not None:
+        mutate(c)
+    try:
+        e = gym.make("Isaac-Push-SG-K1-Play-v0", cfg=c).unwrapped
+        print(f"PROBE3 {label}: BUILD_OK")
+        e.close()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"PROBE3 {label}: {type(exc).__name__}: {str(exc)[:110]}")
+        tb = traceback.format_exc().splitlines()
+        for line in tb[-6:]:
+            print("PROBE3   tb:", line.strip()[:110])
+        return False
+
+
+from isaaclab.app import AppLauncher  # noqa: E402
+app = AppLauncher({"headless": True}).app
+
+ok = attempt("as-is")
+if not ok:
+    def drop_patch(c):
+        for attr in ("ground_patch",):
+            if hasattr(c.scene, attr):
+                delattr(type(c.scene), attr)
+                print(f"PROBE3 removed scene.{attr}")
+    ok = attempt("without ground_patch", drop_patch)
+
+print("PROBE3_DONE")
+app.close()
