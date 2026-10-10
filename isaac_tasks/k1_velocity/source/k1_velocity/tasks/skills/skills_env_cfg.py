@@ -223,7 +223,7 @@ class K1BallTrackResidualPlayEnvCfg(K1BallTrackResidualEnvCfg):
         self.scene.num_envs = 4
         self.events.push_robot = None
         # play starts at step 0: give the ball its full roll speed right away
-        self.curriculum.ball_speed.params = {"start_step": 0, "end_step": 1}
+        self.curriculum.ball_speed.params = {"start_step": -1, "end_step": 0}
 
 
 @configclass
