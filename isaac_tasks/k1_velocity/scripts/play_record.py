@@ -55,6 +55,12 @@ parser.add_argument("--disable_jit", action="store_true")
 parser.add_argument("--panel_video", action="store_true",
                     help="write a labelled overview/top-down/follow/side debug panel instead of the HUD clip")
 parser.add_argument("--panel_fps", type=int, default=25)
+parser.add_argument("--panel_size", type=int, nargs=2, default=(1920, 1080), metavar=("W", "H"),
+                    help="size of EACH debug panel (default 1080p; the 2x2 tile is twice that)")
+parser.add_argument("--panel_spp", type=int, default=8,
+                    help="RTX real-time path tracer samples per pixel for the panels")
+parser.add_argument("--panel_subframes", type=int, default=4,
+                    help="Kit updates per captured frame so the denoiser converges (less grain)")
 parser.add_argument("--keyboard", action="store_true",
                     help="drive the command from the keyboard (W/S/A/D/Q/E, Space stop, "
                          "Esc quit) while recording video + trace")
@@ -80,7 +86,7 @@ import torch  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 import imageio.v2 as imageio  # noqa: E402
 
-from panel_video import K1DebugMarkers, PanelCameras, TiledPanelRecorder, pump_app  # noqa: E402
+from panel_video import K1DebugMarkers, PanelCameras, TiledPanelRecorder, pump_app, set_clean_render  # noqa: E402
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner  # noqa: E402
 
@@ -316,10 +322,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     if args_cli.panel_video:
         if not args_cli.video_out:
             raise ValueError("--panel_video requires --video_out")
-        panel_cams = PanelCameras()
+        set_clean_render(args_cli.panel_spp)
+        panel_cams = PanelCameras(size=tuple(args_cli.panel_size))
         markers = K1DebugMarkers()
         panel_recorder = TiledPanelRecorder(
-            args_cli.video_out, panel_cams.names, fps=args_cli.panel_fps
+            args_cli.video_out, panel_cams.names, size=tuple(args_cli.panel_size), fps=args_cli.panel_fps
         )
         print(f"[INFO] panel recording -> {args_cli.video_out}")
     env = RslRlVecEnvWrapper(gym_env)
@@ -468,7 +475,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             if panel_recorder is not None:
                 markers.update(base_env, robot, args_cli.task)
                 panel_cams.set_views(_panel_views())
-                pump_app()
+                pump_app(args_cli.panel_subframes)
                 images = {name: panel_cams.read(name) for name in panel_cams.names}
                 panel_recorder.add(images, _panel_status(n, float(rew[0]), float(ep_reward[0])))
                 frames_written += 1

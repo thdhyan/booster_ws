@@ -12,22 +12,37 @@ import os
 import numpy as np
 
 
-def pump_app() -> None:
-    """Update Kit once without advancing physics."""
+def pump_app(subframes: int = 1) -> None:
+    """Update Kit ``subframes`` times without advancing physics.
+
+    Extra updates let the real-time path tracer's temporal denoiser accumulate
+    on the current pose, which is what removes the grain from the panels.
+    """
     import carb
     import omni.kit.app
 
     settings = carb.settings.get_settings()
     previous = settings.get("/app/player/playSimulations")
     settings.set_bool("/app/player/playSimulations", False)
-    omni.kit.app.get_app().update()
+    for _ in range(max(1, int(subframes))):
+        omni.kit.app.get_app().update()
     settings.set_bool("/app/player/playSimulations", bool(previous))
+
+
+def set_clean_render(spp: int = 8) -> None:
+    """Raise samples per pixel and keep the denoiser on for clear debug videos."""
+    import carb
+
+    settings = carb.settings.get_settings()
+    settings.set_int("/rtx/rtpt/spp", int(spp))
+    settings.set_bool("/rtx/newDenoiser/enabled", True)
+    settings.set_bool("/rtx/rtpt/fireflyFilter/enabled", True)
 
 
 class PanelCameras:
     """Replicator RGB cameras posed from world-space eye/target pairs."""
 
-    def __init__(self, names=("overview", "top_down", "follow", "side"), size=(480, 270), focal_length=16.0):
+    def __init__(self, names=("overview", "top_down", "follow", "side"), size=(1920, 1080), focal_length=16.0):
         import omni.replicator.core as rep
         import omni.usd
         from pxr import Gf, UsdGeom
@@ -93,7 +108,7 @@ class TiledPanelRecorder:
     # decoded, which ffmpeg reports as "Invalid NAL unit size".
     QUALITY = 5
 
-    def __init__(self, path, names, size=(480, 270), cols=2, fps=25):
+    def __init__(self, path, names, size=(1920, 1080), cols=2, fps=25):
         import imageio.v2 as imageio
         from PIL import ImageFont
 
@@ -105,12 +120,16 @@ class TiledPanelRecorder:
         # Encode to a container-local path, then move into place on close(). The logs
         # dir is a bind mount from the host; streaming tens of Mbit/s at it was the
         # suspected source of the bitstream damage.
-        self.tmp_path = f"/tmp/_panel_{os.getpid()}.mp4"
+        import tempfile
+
+        self.tmp_path = os.path.join(tempfile.gettempdir(), f"_panel_{os.getpid()}.mp4")
         self.writer = imageio.get_writer(
             self.tmp_path, fps=fps, codec="libx264", quality=self.QUALITY, macro_block_size=1
         )
+        # label/header text scales with the panel height (16 px at 270 p)
+        self.font_px = max(16, self.size[1] * 16 // 270)
         try:
-            self.font = ImageFont.load_default(size=16)
+            self.font = ImageFont.load_default(size=self.font_px)
         except TypeError:
             self.font = ImageFont.load_default()
 
@@ -126,16 +145,18 @@ class TiledPanelRecorder:
                 image = np.asarray(image[:, :, :3], dtype=np.uint8)
             image = Image.fromarray(image).resize(self.size)
             draw = ImageDraw.Draw(image)
-            draw.rectangle((0, 0, 12 * len(name) + 16, 24), fill=(0, 0, 0))
-            draw.text((6, 4), name, fill=(255, 255, 255), font=self.font)
+            f = self.font_px
+            draw.rectangle((0, 0, int(0.75 * f * len(name)) + f, int(1.5 * f)), fill=(0, 0, 0))
+            draw.text((f // 3, f // 4), name, fill=(255, 255, 255), font=self.font)
             cells.append(np.asarray(image))
 
         while len(cells) % self.cols:
             cells.append(np.zeros((self.size[1], self.size[0], 3), dtype=np.uint8))
         rows = [np.concatenate(cells[i:i + self.cols], axis=1) for i in range(0, len(cells), self.cols)]
         grid = np.concatenate(rows, axis=0)
-        header = Image.new("RGB", (grid.shape[1], 34), (18, 18, 18))
-        ImageDraw.Draw(header).text((8, 8), status[:220], fill=(240, 240, 240), font=self.font)
+        f = self.font_px
+        header = Image.new("RGB", (grid.shape[1], 2 * f + 2), (18, 18, 18))
+        ImageDraw.Draw(header).text((f // 2, f // 2), status[:220], fill=(240, 240, 240), font=self.font)
         self.writer.append_data(np.concatenate([np.asarray(header), grid], axis=0))
         self.frames_added += 1
 
@@ -251,11 +272,24 @@ class K1DebugMarkers:
         boundary.CreateDisplayColorAttr([Gf.Vec3f(0.2, 0.5, 1.0)])
         boundary.CreateDisplayOpacityAttr([0.7])
         self.boundary = boundary
+        # Goal: wireframe of the push box's goal pose (12 edges) or, for carry,
+        # a ring at the success radius. Points are rewritten each update.
+        goal = UsdGeom.BasisCurves.Define(self._stage, "/Visuals/K1DebugMarkers/goal")
+        goal.CreateTypeAttr(UsdGeom.Tokens.linear)
+        goal.CreateWidthsAttr([0.025])
+        goal.CreateDisplayColorAttr([Gf.Vec3f(0.1, 1.0, 0.2)])
+        goal.CreateDisplayOpacityAttr([0.8])
+        goal.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+        self.goal = goal
+        self.goal_centre = self._sphere("goal_centre", Gf.Vec3f(0.1, 1.0, 0.2))
+        self.goal_centre.GetRadiusAttr().Set(0.05)
+        UsdGeom.Imageable(self.goal_centre).MakeInvisible()
         self._xforms = {
             "robot": UsdGeom.Xformable(self.robot),
             "target": UsdGeom.Xformable(self.target),
             "estimate": UsdGeom.Xformable(self.estimate),
             "boundary": UsdGeom.Xformable(boundary),
+            "goal_centre": UsdGeom.Xformable(self.goal_centre),
         }
         del root
 
@@ -272,6 +306,54 @@ class K1DebugMarkers:
         xform = self._xforms[name]
         xform.ClearXformOpOrder()
         xform.AddTranslateOp().Set(self._Gf.Vec3d(*[float(v) for v in position]))
+
+    def _show_goal(self, points, counts, centre) -> None:
+        from pxr import UsdGeom
+
+        Gf, Vt = self._Gf, self._Vt
+        self.goal.GetPointsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*[float(v) for v in p]) for p in points]))
+        self.goal.GetCurveVertexCountsAttr().Set(Vt.IntArray(counts))
+        UsdGeom.Imageable(self.goal).MakeVisible()
+        UsdGeom.Imageable(self.goal_centre).MakeVisible()
+        self._translate("goal_centre", centre)
+
+    def _update_goal(self, base_env):
+        """Draw the task goal if the env has one; return a header string or ''."""
+        push = getattr(base_env, "push_state", None)
+        if push is not None:
+            pos = push.goal_pos[0].detach().cpu().numpy()
+            x, y, z, w = (float(v) for v in push.goal_quat[0].detach().cpu().numpy())  # xyzw
+            half = push.half_extents[0].detach().cpu().numpy()
+            rot = np.array([
+                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+            ])
+            signs = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+            corners = pos + (signs * half) @ rot.T
+            edges = [(a, b) for a in range(8) for b in range(a + 1, 8)
+                     if int(np.abs(signs[a] - signs[b]).sum()) == 2]
+            self._show_goal([corners[i] for e in edges for i in e], [2] * len(edges), pos)
+            box_xy = None
+            try:
+                box_pos = base_env.scene["box"].data.root_pos_w
+                box_xy = getattr(box_pos, "torch", box_pos)[0, :2].detach().cpu().numpy()
+            except Exception:
+                pass
+            dist = "" if box_xy is None else f" box->goal={float(np.linalg.norm(pos[:2] - box_xy)):.2f}m"
+            return f"goal ({pos[0]:+.2f},{pos[1]:+.2f}){dist}"
+        try:
+            term = base_env.command_manager.get_term("base_velocity")
+        except Exception:
+            term = None
+        if term is not None and hasattr(term, "goal_pos_w"):
+            pos = term.goal_pos_w[0].detach().cpu().numpy()
+            radius = float(getattr(term.cfg, "success_radius", 0.25))
+            angles = np.linspace(0.0, 2.0 * np.pi, 33)
+            ring = [pos + np.array([radius * np.cos(a), radius * np.sin(a), 0.02]) for a in angles]
+            self._show_goal(ring, [len(ring)], pos + np.array([0.0, 0.0, 0.05]))
+            return f"goal ({pos[0]:+.2f},{pos[1]:+.2f}) dist={float(term.goal_dist[0]):.2f}m"
+        return ""
 
     def update(self, base_env, robot, task: str) -> dict:
         """Update markers and return status/knowledge fields for the header."""
@@ -302,4 +384,7 @@ class K1DebugMarkers:
                 pass
         self._translate("target", target)
         self._translate("estimate", target + np.array([0.0, 0.0, 0.12]))
+        goal = self._update_goal(base_env)
+        if goal:
+            knowledge = f"{knowledge} | {goal}"
         return {"target": target, "knowledge": knowledge, "task": task}
