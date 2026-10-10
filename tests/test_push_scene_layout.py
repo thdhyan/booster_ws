@@ -243,27 +243,43 @@ def test_box_annulus_matches_what_the_spacing_assumes():
         "recompute MIN_SAFE_SPACING_M or boxes will interpenetrate again"
     )
 
-def test_ground_friction_builds_paths_without_scene_entity_cfg():
-    """find_matching_prim_paths needs an EXPANDED path; the template cannot go in raw.
+def test_ground_friction_resolves_patch_prims_from_the_stage():
+    """The patch paths must come from the stage, not from an assumption about the layout.
 
-    Passing the raw template gives
-        ValueError: Prim path '{ENV_REGEX_NS}/ground_patch' is not global
+    Three formulations have been tried and two are known broken:
 
-    SceneEntityCfg is NOT the fix: resolve() only populates prim_paths for articulated and
-    rigid targets, so a static AssetBaseCfg patch raises
-        AttributeError: 'SceneEntityCfg' object has no attribute 'prim_paths'
-    which is what the first attempt at this fix did. Paths are built from
-    env_prim_paths -- the origin of every cell, which is what the template hangs off.
+    * ``find_matching_prim_paths(GROUND_PATCH_PRIM)`` with the raw macro raises
+      ``ValueError: Prim path '{ENV_REGEX_NS}/ground_patch' is not global`` -- the query
+      helper takes an already-expanded expression.
+    * building paths from ``env.scene.env_prim_paths`` gets past that, but every prim comes
+      back invalid and the first schema call raises
+      ``RuntimeError: Accessed schema on invalid prim``.
+    * ``SceneEntityCfg.resolve`` does not populate ``prim_paths`` for a static
+      ``AssetBaseCfg`` at all -- ``AttributeError``.
+
+    The cause is that ``InteractiveScene`` does not spawn an ``AssetBaseCfg`` at
+    ``asset_cfg.prim_path``. It spawns at ``asset_cfg.spawn.spawn_path`` and only then
+    calls ``cloner.queue_replication()``. Nothing ties the two together, so any hardcoded
+    layout is a guess.
+
+    This guard pins the CONSEQUENCE -- the macro is expanded and the stage is queried --
+    rather than one particular call, because the correct mechanism is not the only way to
+    satisfy it. The raw template must never reach the query.
     """
     fn = next(n for n in ast.walk(ast.parse(MDP.read_text()))
               if isinstance(n, ast.FunctionDef) and n.name == "randomize_ground_friction")
     src = ast.unparse(fn)
-    assert "env.scene.env_prim_paths" in src, (
-        "the per-env paths must be expanded from env_prim_paths"
+    assert "expand_env_regex_ns(GROUND_PATCH_PRIM)" in src, (
+        "the {ENV_REGEX_NS} macro must be expanded before querying; the raw template "
+        "raises 'Prim path ... is not global'"
     )
     assert "find_matching_prim_paths(GROUND_PATCH_PRIM)" not in src, (
         "the raw {ENV_REGEX_NS} template must not reach find_matching_prim_paths"
     )
     assert "asset_cfg.resolve" not in src, (
         "SceneEntityCfg.resolve does not populate prim_paths for a static AssetBaseCfg"
+    )
+    assert "prim.IsValid()" in src, (
+        "an invalid prim must be reported by name rather than surfacing later as "
+        "'Accessed schema on invalid prim' from some unrelated schema call"
     )

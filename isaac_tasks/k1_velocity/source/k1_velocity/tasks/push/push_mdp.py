@@ -174,26 +174,50 @@ def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
     """
     import random as pyrandom
 
+    from isaaclab.cloner.cloner_cfg import expand_env_regex_ns
     from isaaclab.sim import utils as sim_utils
     from pxr import Sdf, UsdShade
 
     stage = env.sim.stage
     lo, hi = friction_range
-    # Resolve {ENV_REGEX_NS} to concrete per-env paths. Passing the raw template to
-    # find_matching_prim_paths raises "Prim path '{ENV_REGEX_NS}/ground_patch' is not
-    # global" -- the query helper takes an already-expanded path, which is why
-    # randomize_box_geometry goes through asset_cfg.resolve(env.scene) too.
-    # Built from env_prim_paths rather than SceneEntityCfg: resolve() does NOT populate
-    # prim_paths for a static AssetBaseCfg (it only does so for articulated/rigid
-    # targets), so the cfg route raises
-    #     AttributeError: 'SceneEntityCfg' object has no attribute 'prim_paths'
-    # env_prim_paths is the env origin of every cell, which is exactly what the patch
-    # template hangs off.
-    leaf = GROUND_PATCH_PRIM.rsplit("/", 1)[-1]
-    paths = [f"{str(p).rstrip('/')}/{leaf}" for p in env.scene.env_prim_paths]
+
+    # Ask the STAGE where the patches actually are, instead of assuming they sit at
+    # {env_prim}/ground_patch.
+    #
+    # Two earlier attempts both encoded that assumption and both were wrong:
+    #   * find_matching_prim_paths(GROUND_PATCH_PRIM) with the raw macro raises
+    #       ValueError: Prim path '{ENV_REGEX_NS}/ground_patch' is not global
+    #     because the query helper takes an already-expanded expression.
+    #   * building the paths from env.scene.env_prim_paths gets past that, but yields
+    #     invalid prims, and the first schema call then dies with
+    #       RuntimeError: Accessed schema on invalid prim
+    #
+    # The reason the assumption fails: InteractiveScene does NOT spawn an AssetBaseCfg at
+    # asset_cfg.prim_path. It spawns at
+    #     asset_cfg.spawn.func(asset_cfg.spawn.spawn_path, ...)
+    # and only afterwards calls cloner.queue_replication(asset_cfg) to fan the result out
+    # across envs. So spawn.spawn_path -- not prim_path -- is what the resolver honours,
+    # and nothing guarantees the two coincide.
+    #
+    # Expanding the macro and querying the stage is therefore the only formulation that
+    # cannot drift from where the spawner actually put the geometry.
+    expanded = expand_env_regex_ns(GROUND_PATCH_PRIM)
+    paths = sim_utils.find_matching_prim_paths(expanded, stage)
+    if not paths:
+        raise RuntimeError(
+            f"randomize_ground_friction found no prim matching {expanded!r}. The "
+            f"per-env ground patch is not where the scene cfg says it is, so per-env "
+            f"friction cannot be written. Check K1PushSceneCfg.ground_patch."
+        )
+    # Friction is fixed for the whole run (see the docstring), so this event fires once at
+    # startup and an unconditional print cannot spam.
+    print(f"[push] ground patch prims: {len(paths)} (matched {expanded!r})")
+
     mus: list[float] = []
     for path in paths:
         prim = stage.GetPrimAtPath(path)
+        if not prim.IsValid():
+            raise RuntimeError(f"ground patch prim {path!r} is invalid")
         bound = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()[0]
         if bound is None:
             mat_path = Sdf.Path(f"{path}/push_friction")
