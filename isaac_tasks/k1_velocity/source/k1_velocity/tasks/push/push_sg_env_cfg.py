@@ -95,3 +95,30 @@ class K1PushSGEnvCfg(base.K1PushEnvCfg):
 @configclass
 class K1PushReachSGEnvCfg(base.K1PushReachEnvCfg):
     rewards: K1PushReachSGRewardsCfg = K1PushReachSGRewardsCfg()
+
+@configclass
+class K1PushSGPlayEnvCfg(K1PushSGEnvCfg):
+    """Small-env, no-corruption variant for rendering and for zero-actor smoke runs.
+
+    Deliberately does NOT drop the curriculum's siblings: the scene, the frozen-base
+    wiring, the per-env ground patches and the 10-dim action layout are all identical to
+    the training cfg, so a video recorded here shows the environment the policy will
+    actually be trained in rather than a simplified stand-in.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.teacher.enable_corruption = False
+        self.curriculum = None
+
+
+@configclass
+class K1PushReachSGPlayEnvCfg(K1PushReachSGEnvCfg):
+    """Reach-stage play variant; see K1PushSGPlayEnvCfg."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.teacher.enable_corruption = False
+        self.curriculum = None

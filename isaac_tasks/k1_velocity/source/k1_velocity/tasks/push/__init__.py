@@ -67,3 +67,27 @@ gym.register(
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushPPORunnerCfg",
     },
 )
+
+
+# Play variants: small env count, no observation corruption, no curriculum. Used to
+# render the environment and to run it with an UNTRAINED actor, so the scene can be
+# verified before any training exists.
+gym.register(
+    id="Isaac-Push-SG-K1-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.push.push_sg_env_cfg:K1PushSGPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-Push-Reach-SG-K1-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.push.push_sg_env_cfg:K1PushReachSGPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushReachPPORunnerCfg",
+    },
+)
