@@ -20,8 +20,8 @@ are **not** updated by this workstream. Do not edit them from here.
 | Push env — **builds** | ✅ verified in-sim 2026-10-10 (`6834137`), 4096 envs, 3.6 s/iter |
 | Push env video (untrained actor) | ✅ `logs/push_zero/push_env_zero.mp4`, 500/500 frames decodable; base stands (trunk z 0.45–0.57) |
 | Reach **training** | ⏹ stopped 2026-10-10 at user request (~100 it). Push-SG already contains the approach terms, so a separate Reach stage is redundant |
-| Push-SG **training** | ▶️ running since 2026-10-10 15:54, tmux `k1_push` (+ watchdog `k1_watch`), log `$S/push_sg.log`; box 0.67–0.76 m, 3–10 kg; reward −1.9 → 37 by it 20 |
-| Carry task (P7) | 🛠 built `447c945`, smoke test pending — see §11 |
+| Push-SG **training** | ▶️ running since 2026-10-10 15:54, tmux `k1_push` (+ watchdog `k1_watch`), log `$S/push_sg.log`, run `p6_push/2026-10-10_15-54-48_p6_push`; box 0.67–0.76 m, 3–10 kg; reward 45.9 at it 577/6000. it300 play video on Drive (§12) |
+| Carry task (P7) | ▶️ **training** since 2026-10-10 16:36, tmux `k1_carry`, log `$S/carry.log`, run `p7_carry/2026-10-10_16-36-26_p7_carry`, 4096 envs, ~4.2 s/it (~7 h for 6000). Smoke + debug video passed after the box-scale fix `aad6079` — see §11/§12 |
 | Push stage / push student | ❌ not started (needs Reach first; no push student task is registered) |
 | Tests | 329 passed, 1 pre-existing failure (`test_deployability`) |
 
@@ -437,12 +437,58 @@ faint red/green alpha cube.
 | Decoupled actor | `tasks/carry/decoupled_policy.py` | `SplitMLP`: legs MLP→12, arms MLP→8, both from the full obs, trained jointly by one PPO; JIT export unchanged. `tests/test_carry_decoupled_policy.py` |
 | Runner | `tasks/carry/agents/rsl_rl_ppo_cfg.py` | experiment `p7_carry`, teacher obs group (incl. privileged box width/mass) |
 
-Launch (after smoke + debug video):
+Launch (running since 2026-10-10 16:36, run `2026-10-10_16-36-26_p7_carry`):
 
 ```bash
 K1_TRAIN_SCRIPT=run_unbuffered.py K1_GPU=1 ~/run_k1_train.sh --task Isaac-Carry-K1-v0 \
   --num_envs 4096 --max_iterations 6000 --headless 2>&1 | tee $S/carry.log
 ```
 
-Open risks: weld stability with 8 kg on 14 Nm arms (watch `weld_error` and the
-`weld_broken` termination rate); the goal cube needs a rendered frame check.
+Smoke test (64 envs, 3 it) passed: box DR 0.25–0.40 m / 1.0–7.9 kg, `DecoupledMLPModel`
+built, `weld_error` ≈ −3e-4, `weld_broken` 0. First full-run iterations: same weld numbers.
+
+**Bug fixed (`aad6079`):** the first debug video showed every box at the 1 m prototype
+size, swallowing the robot. The spawner's `<box>/geometry` prim is typeless (not
+Xformable), so the scale op authored there was ignored. `spawn_carry_box` now scales
+`<box>/geometry/mesh` (the Cube, which already has `xformOp:scale`). Re-recorded
+video shows the 0.18×w×0.18 box between the forearms.
+
+Open risks:
+- weld stability with 8 kg on 14 Nm arms (watch `weld_error` and the `weld_broken`
+  termination rate);
+- **goal cube not seen in the re-recorded video** (frames at t=3 s and t=8 s show the
+  robot, box and the panel recorder's magenta/yellow markers, but no red/green cube).
+  The first (broken-box) video did show faint red cubes in the overview, so the
+  marker exists. Next: check it in a play video of a trained checkpoint; if it is
+  still missing, check the cube against the follow/side camera frusta and the 0.3 opacity;
+- the play HUD header says `cmd=none (stand task)` for carry (the panel recorder's
+  task heuristic). Cosmetic; the trailing `command (vx,vy,wz)` field is correct.
+
+---
+
+## 12. Videos delivered (2026-10-10)
+
+Recorded on zz-bw with `play_record.py --panel_video --label` (4 panels: overview,
+top_down, follow, side, plus status header). The container's `PANEL_VERIFY` prints
+`UNCHECKED` (its frame counter hits `IndexError`), so the files were checked locally
+with `ffprobe -count_frames` and frames were inspected.
+
+| Clip | Checkpoint | Frames | Drive file id |
+|---|---|---|---|
+| `p6_push_sg_it300_2026-10-10.mp4` | `p6_push/2026-10-10_15-54-48_p6_push/model_300.pt`, `PUSH_BASE_MODE=squat` | 700 | `1epQPCiKQQcpZ9--sA7kuUZlkx_RUcQtn` (poster `1Fa-HVpfHYbdwI2M79DFHP1ttNs4CSMYZ`) |
+| `p7_carry_smoke_untrained_2026-10-10.mp4` | `p7_carry/2026-10-10_16-10-43_p7_carry/model_2.pt` (smoke, untrained) | 500 | `1znMNmwKo_cROberelAz-wVQOzjWgMDKK` |
+
+- Drive folder: [Booster videos](https://drive.google.com/drive/folders/1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy).
+- Slides: appended as slides 34–35 (`s_p6sg_1010`, `s_p7carry_1010`, layout `p12`,
+  embedded Drive video plus a title text box) to the
+  [deck](https://docs.google.com/presentation/d/1KamnVS6DEQMrtXbk9z8Mp5qdG9_XTeqRJZTkRXMexyI/edit).
+- Local copies: `k1m_out/push_videos/` (gitignored output dir).
+- **Upload route:** Composio's `GOOGLEDRIVE_UPLOAD_FILE` caps at 5 MB. Use the laptop's
+  rclone remote instead: `rclone copyto <mp4> gdrive-thakk100:<name> --drive-root-folder-id 1TDRzuMYN_mFZVrJqN8DiTtwwRT_D5EQy`
+  (`gdrive-dhyan` is not configured on the laptop). Slides go through Composio
+  `GOOGLESLIDES_PRESENTATIONS_BATCH_UPDATE` (`createSlide` + `createShape` TEXT_BOX +
+  `createVideo` source DRIVE, guarded by `requiredRevisionId`). Layout `p12` has no
+  TITLE placeholder.
+
+Next videos: Push-SG at a later checkpoint (e.g. model_1500) and carry at ~model_1000,
+uploaded the same way.
