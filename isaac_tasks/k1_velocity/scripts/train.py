@@ -21,6 +21,7 @@ Usage (from booster_ws root, with venv-isaac active):
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import re
 import sys
 import os
 
@@ -228,7 +229,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
         assert os.path.basename(ckpt).startswith("model_"), f"unexpected ckpt name: {ckpt}"
         agent_cfg.resume = True
         agent_cfg.load_run = os.path.relpath(os.path.dirname(ckpt), log_root_path)
-        agent_cfg.load_checkpoint = os.path.splitext(os.path.basename(ckpt))[0]
+        # get_checkpoint_path re.match()es this against the run's files and takes the
+        # last sorted hit, so a bare "model_100" also matches model_1000.pt: anchor it.
+        agent_cfg.load_checkpoint = re.escape(os.path.basename(ckpt)) + "$"
         print(f"[INFO]: RESUME from {ckpt} (run={agent_cfg.load_run}, ckpt={agent_cfg.load_checkpoint})")
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     print(f"Exact experiment name requested from command line: {log_dir}")
