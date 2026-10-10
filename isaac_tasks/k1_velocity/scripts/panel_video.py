@@ -128,6 +128,11 @@ class TiledPanelRecorder:
         )
         # label/header text scales with the panel height (16 px at 270 p)
         self.font_px = max(16, self.size[1] * 16 // 270)
+        self.header_px = max(16, self.size[1] * 10 // 270)
+        try:
+            self.header_font = ImageFont.load_default(size=self.header_px)
+        except TypeError:
+            self.header_font = ImageFont.load_default()
         try:
             self.font = ImageFont.load_default(size=self.font_px)
         except TypeError:
@@ -154,9 +159,16 @@ class TiledPanelRecorder:
             cells.append(np.zeros((self.size[1], self.size[0], 3), dtype=np.uint8))
         rows = [np.concatenate(cells[i:i + self.cols], axis=1) for i in range(0, len(cells), self.cols)]
         grid = np.concatenate(rows, axis=0)
-        f = self.font_px
-        header = Image.new("RGB", (grid.shape[1], 2 * f + 2), (18, 18, 18))
-        ImageDraw.Draw(header).text((f // 2, f // 2), status[:220], fill=(240, 240, 240), font=self.font)
+        # wrap the status over as many lines as it needs (glyphs are ~0.55 em wide)
+        import textwrap
+
+        f = self.header_px
+        lines = textwrap.wrap(status, width=max(40, int(grid.shape[1] / (0.55 * f)))) or [""]
+        height = (len(lines) * int(1.25 * f) + f) // 2 * 2   # even, for yuv420p
+        header = Image.new("RGB", (grid.shape[1], height), (18, 18, 18))
+        draw = ImageDraw.Draw(header)
+        for i, line in enumerate(lines):
+            draw.text((f // 2, f // 2 + i * int(1.25 * f)), line, fill=(240, 240, 240), font=self.header_font)
         self.writer.append_data(np.concatenate([np.asarray(header), grid], axis=0))
         self.frames_added += 1
 
