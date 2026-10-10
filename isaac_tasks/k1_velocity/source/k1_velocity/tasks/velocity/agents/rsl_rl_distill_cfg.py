@@ -40,12 +40,30 @@ class K1VelocityDistillRunnerCfg(RslRlDistillationRunnerCfg):
         hidden_dims=[512, 256, 128],
         activation="elu",
         obs_normalization=False,
+        # BOTH models need a distribution, and omitting it is what made distillation
+        # look impossible in this rsl_rl build. MLPModel only creates `self.distribution`
+        # when distribution_cfg is given (mlp_model.py: "if distribution_cfg is not
+        # None: ... else: self.distribution = None"). With it absent the models are
+        # deterministic, and BOTH symptoms follow from that single fact:
+        #   * loading a PPO teacher checkpoint fails with
+        #       Unexpected key(s) in state_dict: "distribution.log_std_param"
+        #     because the deterministic model has nowhere to put the head;
+        #   * the distillation loss reads the teacher's action std and raises
+        #       AttributeError: 'MLPModel' object has no attribute 'output_std'
+        #     because output_std is `self.distribution.std`.
+        # So the two errors are NOT a version incompatibility -- they are one missing
+        # cfg field, and the PPO runner's own actor already sets it (init_std=1.0).
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0, std_type="log"),
     )
     teacher = RslRlMLPModelCfg(
         # input: 48 proprio + 187 height scan + 2 phase clock = 237 (must equal teacher env)
         hidden_dims=[512, 256, 128],
         activation="elu",
         obs_normalization=False,
+        # MUST mirror the PPO actor exactly, including init_std: the checkpoint being
+        # distilled was trained with this head, and a differing init_std changes the
+        # initial log_std the weights are loaded into.
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0, std_type="log"),
     )
     algorithm = RslRlDistillationAlgorithmCfg(
         num_learning_epochs=5,
