@@ -43,6 +43,10 @@ from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from . import push_mdp as mdp
+
+#: Thickness of the per-env ground patch. Top face at z=0 (the trained standing
+#: height), so the world plane sits one thickness lower as a backstop.
+GROUND_PATCH_THICKNESS = 0.05
 from booster_train.assets.robots.booster import BOOSTER_K1_CFG
 from k1_velocity.sim_backend import (
     apply_physics_backend,
@@ -69,6 +73,7 @@ class K1PushSceneCfg(InteractiveSceneCfg):
     # DIAG_FAILED_BASE_STILL_FALLS done_rate=0.0425).
     ground = AssetBaseCfg(
         prim_path="/World/ground",
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -GROUND_PATCH_THICKNESS)),
         spawn=sim_utils.GroundPlaneCfg(
             physics_material=sim_utils.RigidBodyMaterialCfg(
                 friction_combine_mode="multiply",
@@ -78,9 +83,36 @@ class K1PushSceneCfg(InteractiveSceneCfg):
             )
         ),
     )
+    # The WORLD ground is only a backstop now. Per-env friction lives on
+    # `ground_patch`, whose TOP surface sits at z=0 -- the height the frozen base was
+    # trained standing at -- with the world plane dropped 5 cm below so the patch is
+    # unambiguously the contact surface rather than z-fighting with it.
+    #
+    # It must be dropped, not left coincident: two colliders sharing a plane make the
+    # resolved contact normal depend on the solver, and the base is a frozen policy that
+    # cannot compensate for a contact that jitters between episodes.
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(intensity=750.0, color=(0.9, 0.9, 0.9)),
+    )
+    # Per-env ground, so each cell can carry its own friction. Sized to the env cell
+    # (see the env_spacing note in __post_init__) and static, but kept as a RigidObject
+    # so it has a rigid view the standard material randomizer can write through.
+    ground_patch = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/ground_patch",
+        spawn=sim_utils.CuboidCfg(
+            size=(7.9, 7.9, GROUND_PATCH_THICKNESS),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="multiply",
+                restitution_combine_mode="multiply",
+                static_friction=1.0,
+                dynamic_friction=1.0,
+            ),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(0.0, 0.0, -GROUND_PATCH_THICKNESS * 0.5)
+        ),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(fixed=True),
     )
     robot: ArticulationCfg = BOOSTER_K1_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     box = RigidObjectCfg(
@@ -102,7 +134,11 @@ class K1PushSceneCfg(InteractiveSceneCfg):
         ray_alignment="yaw",
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),  # 17x11 = 187 pts
         debug_vis=False,
-        mesh_prim_paths=["/World/ground"],
+        # The patch is listed FIRST and is the real contact surface. If it were missing
+        # here the frozen base's 187-ray privileged obs would measure the backstop 5 cm
+        # below the feet -- no crash, just a systematically wrong terrain height that the
+        # base cannot compensate for, since it is frozen.
+        mesh_prim_paths=["{ENV_REGEX_NS}/ground_patch", "/World/ground"],
     )
 
 
@@ -279,6 +315,30 @@ class K1PushEventCfg:
             "num_buckets": 32,
         },
     )
+    # Per-env GROUND friction, so each cell has its own surface. Separate from the
+    # robot-material randomizer above, which varies the robot's own friction and
+    # therefore the pair -- two different knobs for two different halves of
+    # (mu_robot, mu_ground).
+    #
+    # LOWER BOUND 0.7, NOT THE REFERENCE'S 0.3. push_env_cfg's ground comment records a
+    # measured failure at the GroundPlaneCfg default of 0.5: the frozen base stood at
+    # home@cmd=0 but fell in ~17 steps in this scene (chain2 DIAG_FAILED_BASE_STILL_FALLS,
+    # done_rate=0.0425). The base is FROZEN, so it cannot adapt to a slicker floor -- it
+    # just falls, and the push policy inherits that as an unrecoverable early
+    # termination. Widening the range downward would buy robustness we cannot pay for
+    # until the base is trainable again, so the floor is kept where the base is known to
+    # stand. Exposed as cfg.ground_friction_range to widen deliberately.
+    randomize_ground_friction = EventTerm(
+        func=mdp.vmdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("ground_patch"),
+            "static_friction_range": (0.7, 1.2),
+            "dynamic_friction_range": (0.7, 1.2),
+            "restitution_range": (0.0, 0.02),
+            "num_buckets": 16,
+        },
+    )
     green_alpha = EventTerm(func=mdp.apply_box_green_alpha, mode="startup")
     # per-episode (order matters: pose -> goal -> wrist targets)
     reset_scene = EventTerm(func=mdp.vmdp.reset_scene_to_default, mode="reset")
@@ -331,6 +391,29 @@ class K1PushEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 4
         self.episode_length_s = 20.0
         self.sim.render_interval = self.decimation
+        # ENV PITCH 2.5 -> 8.0 m. The old value let neighbouring boxes interpenetrate.
+        #
+        # Arithmetic: reset_box spawns the box in an annulus r in [0.9, 1.4] m with FULL
+        # direction, and randomize_box_geometry scales the 1.0 m prototype 0.7-1.5x, so a
+        # box reaches 1.4 m from its env origin with a half-extent up to 0.75 m. With env
+        # origins 2.5 m apart, two boxes on the line between adjacent envs land
+        # 2.5 - 2.8 = -0.3 m apart at their CENTRES: overlapping by 0.3 m plus 1.5 m of
+        # combined extent. That corrupts the task twice -- the box being pushed is merged
+        # with a neighbour's, and every corner/goal reward is measured against geometry
+        # another env is also pushing.
+        #
+        # 8.0 m clears it with margin (8 - 2.8 = 5.2 m between the furthest centres) and
+        # matches the Push-Things reference, which uses the same 8 m for the same reason.
+        # The cost is stage memory, not physics: the gap between patches is empty air.
+        self.scene.env_spacing = 8.0
+        # See randomize_ground_friction: the lower bound is held at 0.7 because a slicker
+        # floor was measured to drop the FROZEN base. Widen deliberately, not by accident.
+        self.ground_friction_range = (0.7, 1.2)
+        self.scene.ground_patch.spawn.size = (
+            self.scene.env_spacing - 0.1,
+            self.scene.env_spacing - 0.1,
+            GROUND_PATCH_THICKNESS,
+        )
         # frozen-base obs parity: the height scanner must tick once per
         # control step, exactly like the velocity env the teacher trained in
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
