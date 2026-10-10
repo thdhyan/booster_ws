@@ -183,12 +183,14 @@ def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
     # find_matching_prim_paths raises "Prim path '{ENV_REGEX_NS}/ground_patch' is not
     # global" -- the query helper takes an already-expanded path, which is why
     # randomize_box_geometry goes through asset_cfg.resolve(env.scene) too.
-    if asset_cfg is not None:
-        asset_cfg.resolve(env.scene)
-        paths = list(asset_cfg.prim_paths)
-    else:
-        paths = [f"{p.rstrip('/')}/{GROUND_PATCH_PRIM.rsplit('/', 1)[-1]}"
-                 for p in env.scene.env_prim_paths]
+    # Built from env_prim_paths rather than SceneEntityCfg: resolve() does NOT populate
+    # prim_paths for a static AssetBaseCfg (it only does so for articulated/rigid
+    # targets), so the cfg route raises
+    #     AttributeError: 'SceneEntityCfg' object has no attribute 'prim_paths'
+    # env_prim_paths is the env origin of every cell, which is exactly what the patch
+    # template hangs off.
+    leaf = GROUND_PATCH_PRIM.rsplit("/", 1)[-1]
+    paths = [f"{str(p).rstrip('/')}/{leaf}" for p in env.scene.env_prim_paths]
     mus: list[float] = []
     for path in paths:
         prim = stage.GetPrimAtPath(path)

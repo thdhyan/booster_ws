@@ -243,25 +243,27 @@ def test_box_annulus_matches_what_the_spacing_assumes():
         "recompute MIN_SAFE_SPACING_M or boxes will interpenetrate again"
     )
 
-def test_ground_friction_resolves_the_env_regex_before_querying():
-    """find_matching_prim_paths needs an EXPANDED path, or it raises.
+def test_ground_friction_builds_paths_without_scene_entity_cfg():
+    """find_matching_prim_paths needs an EXPANDED path; the template cannot go in raw.
 
-    Passing the raw template straight through gives
+    Passing the raw template gives
         ValueError: Prim path '{ENV_REGEX_NS}/ground_patch' is not global
-    which is how the first version of this failed. The patch template is per-env, so the
-    event must resolve it -- the same route randomize_box_geometry uses.
+
+    SceneEntityCfg is NOT the fix: resolve() only populates prim_paths for articulated and
+    rigid targets, so a static AssetBaseCfg patch raises
+        AttributeError: 'SceneEntityCfg' object has no attribute 'prim_paths'
+    which is what the first attempt at this fix did. Paths are built from
+    env_prim_paths -- the origin of every cell, which is what the template hangs off.
     """
-    # The resolve happens in the FUNCTION, not the event term, so read the function.
     fn = next(n for n in ast.walk(ast.parse(MDP.read_text()))
               if isinstance(n, ast.FunctionDef) and n.name == "randomize_ground_friction")
     src = ast.unparse(fn)
-    assert "asset_cfg.resolve(env.scene)" in src, (
-        "the prim path template must be resolved against the scene before querying"
+    assert "env.scene.env_prim_paths" in src, (
+        "the per-env paths must be expanded from env_prim_paths"
     )
     assert "find_matching_prim_paths(GROUND_PATCH_PRIM)" not in src, (
         "the raw {ENV_REGEX_NS} template must not reach find_matching_prim_paths"
     )
-    params = _kwargs(_event_term("randomize_ground_friction"))["params"]
-    assert _call_str_arg(_dict_get(params, "asset_cfg")) == "ground_patch", (
-        "the event must pass a SceneEntityCfg for the patch so it can be resolved"
+    assert "asset_cfg.resolve" not in src, (
+        "SceneEntityCfg.resolve does not populate prim_paths for a static AssetBaseCfg"
     )
