@@ -27,4 +27,5 @@ def register_tasks() -> list[str]:
     import k1_velocity.tasks.head  # noqa: F401 — registers P3 head-tracking task family
     import k1_velocity.tasks.push  # noqa: F401 — registers P6 box-push task family
     import k1_velocity.tasks.carry  # noqa: F401 — registers P7 box-carry task family
+    import k1_velocity.tasks.skills  # noqa: F401 — registers P8/P9 residual skills (ball track, kick)
     return []
