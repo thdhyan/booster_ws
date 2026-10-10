@@ -142,6 +142,7 @@ import k1_velocity.tasks.kick  # noqa: F401 — P4 kick family (teacher/student)
 import k1_velocity.tasks.head  # noqa: F401 — P3 head-tracking family (detection-based)
 import k1_velocity.tasks.push  # noqa: F401 — P6 box-push family
 import k1_velocity.tasks.carry  # noqa: F401 — P7 box-carry family
+import k1_velocity.tasks.skills  # noqa: F401 — P8/P9 residual skills (ball track, kick)
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
