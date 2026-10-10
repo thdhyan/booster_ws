@@ -146,3 +146,35 @@ def test_the_two_ppo_actors_deliberately_differ():
         f"the privileged actor's std_type changed to {ast.literal_eval(kw['std_type'])!r}; "
         "the distill teacher is pinned to it and would silently reinterpret log_std"
     )
+
+# ------------------------------------------------- squat teacher needs its own task
+
+
+def test_squat_distill_task_is_registered_separately():
+    """238 vs 237: sharing the velocity distill env fails with a size mismatch.
+
+    The squat command appends H* (commanded trunk height) to the observation, so the
+    squat teacher is 238-dim where the velocity teacher is 237. The runner cfg infers
+    the input width from the env, so distilling a squat checkpoint through
+    Isaac-Velocity-Distill-K1-v0 raises
+        size mismatch for mlp.0.weight: checkpoint [512, 238], model [512, 237]
+    """
+    reg = (_ROOT / "isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/__init__.py").read_text()
+    assert 'id="Isaac-Velocity-Squat-K1-Distill-v0"' in reg
+    block = reg.split('id="Isaac-Velocity-Squat-K1-Distill-v0"', 1)[1].split("gym.register", 1)[0]
+    assert "K1VelocitySquatDistillEnvCfg" in block, (
+        "the squat distill task must use the SQUAT env cfg, not the velocity one"
+    )
+    # and it must NOT point at the plain velocity distill cfg
+    assert "K1VelocityDistillEnvCfg" not in block
+
+
+def test_squat_distill_env_extends_the_squat_env_not_the_velocity_one():
+    src = (_ROOT / "isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/"
+           "velocity_env_distill.py").read_text()
+    assert "class K1VelocitySquatDistillEnvCfg(K1VelocitySquatEnvCfg)" in src, (
+        "the squat distill env must inherit the squat cfg so the student is distilled "
+        "against the same terrain/commands/rewards its teacher trained on"
+    )
+    body = src.split("class K1VelocitySquatDistillEnvCfg", 1)[1]
+    assert "history_length" in body, "the student still needs its 10-step history stack"

@@ -119,3 +119,17 @@ gym.register(
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.squat_ppo_cfg:K1SquatPPOTeacherRunnerCfg",
     },
 )
+
+
+# Squat teacher -> deployable student. Separate from Isaac-Velocity-Distill-K1-v0 because
+# the squat teacher's obs is 238-dim (H* appended to the command) and the velocity one is
+# 237; sharing an env cfg fails with a size mismatch at the first policy call.
+gym.register(
+    id="Isaac-Velocity-Squat-K1-Distill-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.velocity.velocity_env_distill:K1VelocitySquatDistillEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.rsl_rl_distill_cfg:K1VelocityDistillRunnerCfg",
+    },
+)
