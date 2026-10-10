@@ -145,7 +145,7 @@ def _find_body_prim(stage, root_path: str, name: str) -> str:
 def spawn_carry_box(env, env_ids, width_range: tuple[float, float], mass_range: tuple[float, float]) -> None:
     """prestartup: per-env box width + mass and the two wrist FixedJoints (USD).
 
-    Width scales the box's ``geometry`` child, NOT the rigid-body root, so the weld
+    Width scales the box's ``geometry/mesh`` child, NOT the rigid-body root, so the weld
     frames authored on the root stay in metres. PhysX parses the joints once at
     play, which is why this runs before it, like push's randomize_box_geometry.
     """
@@ -162,12 +162,14 @@ def spawn_carry_box(env, env_ids, width_range: tuple[float, float], mass_range: 
         m = float(rng.uniform(*mass_range))
         geo = carry_geometry(w)
 
-        geom = UsdGeom.Xformable(stage.GetPrimAtPath(path + "/geometry"))
-        scale = stage.GetPrimAtPath(path + "/geometry").GetAttribute("xformOp:scale")
+        # the spawner's ``geometry`` parent is typeless (not Xformable, so a scale op
+        # there is ignored); the Cube under it already carries xformOp:scale
+        mesh = stage.GetPrimAtPath(path + "/geometry/mesh")
+        scale = mesh.GetAttribute("xformOp:scale")
         if scale and scale.IsValid():
             scale.Set(Gf.Vec3f(BOX_DEPTH, w, BOX_HEIGHT))
         else:
-            geom.AddScaleOp().Set(Gf.Vec3f(BOX_DEPTH, w, BOX_HEIGHT))
+            UsdGeom.Xformable(mesh).AddScaleOp().Set(Gf.Vec3f(BOX_DEPTH, w, BOX_HEIGHT))
 
         mass_api = UsdPhysics.MassAPI.Apply(stage.GetPrimAtPath(path))
         mass_api.CreateMassAttr().Set(m)
