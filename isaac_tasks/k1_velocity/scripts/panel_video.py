@@ -157,6 +157,7 @@ class TiledPanelRecorder:
         print(f"[PANEL_VERIFY] pre-move  frames_added={self.frames_added} "
               f"decodable={pre} bytes={os.path.getsize(self.tmp_path)}")
 
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         shutil.move(self.tmp_path, self.path)
         post = self._count_decodable(self.path)
 
