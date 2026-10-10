@@ -27,7 +27,7 @@ checking which side of zero the function returns.
 from __future__ import annotations
 
 from isaaclab.managers import RewardTermCfg as RewTerm
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass  # NOT "from isaaclab.utils import": that binds the MODULE
 
 from . import push_env_cfg as base
 from . import push_rewards_sg as sg

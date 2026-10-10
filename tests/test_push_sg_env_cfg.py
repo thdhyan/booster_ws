@@ -167,3 +167,37 @@ def test_env_cfgs_subclass_the_v3_ones():
     src = SG_CFG.read_text()
     assert "class K1PushSGEnvCfg(base.K1PushEnvCfg)" in src
     assert "class K1PushReachSGEnvCfg(base.K1PushReachEnvCfg)" in src
+
+# ------------------------------------------------------------------ import-time
+
+
+def test_sg_cfg_imports_configclass_the_way_the_working_sibling_does():
+    """Import-time guard: `@configclass` on a module raises TypeError.
+
+    ``from isaaclab.utils import configclass`` binds the MODULE, not the decorator, so
+    the class body dies with
+
+        TypeError: 'module' object is not callable
+
+    py_compile cannot see this and neither can an AST test -- every other test in this
+    file is static, so nothing imported the module and the error only surfaced when Isaac
+    loaded the play task on the box. This compares the import against push_env_cfg, which
+    is known to work.
+    """
+    sg = SG_CFG.read_text()
+    base = BASE_CFG.read_text()
+    good = "from isaaclab.utils.configclass import configclass"
+    assert good in base, "the sibling's import form changed; re-check this guard"
+    assert good in sg, (
+        "push_sg_env_cfg must import configclass the same way push_env_cfg does; "
+        "'from isaaclab.utils import configclass' binds the module and @configclass then "
+        "raises TypeError at import time"
+    )
+
+
+def test_sg_cfg_registers_the_push_family_for_hydra_resolution():
+    """hydra_task_config -> load_cfg_from_registry imports the cfg module by string path."""
+    init = (_ROOT / "isaac_tasks/k1_velocity/source/k1_velocity/tasks/push/__init__.py")
+    src = init.read_text()
+    for cls in ("K1PushSGPlayEnvCfg", "K1PushReachSGPlayEnvCfg"):
+        assert f"push_sg_env_cfg:{cls}" in src, f"{cls} is registered but unreachable by path"
