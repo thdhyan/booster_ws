@@ -269,7 +269,7 @@ def test_ground_friction_resolves_patch_prims_from_the_stage():
     fn = next(n for n in ast.walk(ast.parse(MDP.read_text()))
               if isinstance(n, ast.FunctionDef) and n.name == "randomize_ground_friction")
     src = ast.unparse(fn)
-    assert "expand_env_regex_ns(GROUND_PATCH_PRIM)" in src, (
+    assert "GROUND_PATCH_PRIM.format(ENV_REGEX_NS=" in src, (
         "the {ENV_REGEX_NS} macro must be expanded before querying; the raw template "
         "raises 'Prim path ... is not global'"
     )
@@ -278,6 +278,13 @@ def test_ground_friction_resolves_patch_prims_from_the_stage():
     )
     assert "asset_cfg.resolve" not in src, (
         "SceneEntityCfg.resolve does not populate prim_paths for a static AssetBaseCfg"
+    )
+    assert "from isaaclab.cloner.cloner_cfg import expand_env_regex_ns" not in src, (
+        "expand_env_regex_ns exists in the laptop's IsaacLab checkout but NOT in the "
+        "container's, and the container is what runs training. Verified in-sim as "
+        "ImportError: cannot import name 'expand_env_regex_ns' from "
+        "'isaaclab.cloner.cloner_cfg'. Use InteractiveScene.env_regex_ns instead -- it "
+        "is a public property on every build."
     )
     assert "prim.IsValid()" in src, (
         "an invalid prim must be reported by name rather than surfacing later as "

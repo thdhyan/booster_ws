@@ -174,7 +174,6 @@ def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
     """
     import random as pyrandom
 
-    from isaaclab.cloner.cloner_cfg import expand_env_regex_ns
     from isaaclab.sim import utils as sim_utils
     from pxr import Sdf, UsdShade
 
@@ -201,13 +200,20 @@ def randomize_ground_friction(env, env_ids, friction_range=(0.7, 1.2),
     #
     # Expanding the macro and querying the stage is therefore the only formulation that
     # cannot drift from where the spawner actually put the geometry.
-    expanded = expand_env_regex_ns(GROUND_PATCH_PRIM)
+    # This IsaacLab build has no cloner_cfg.expand_env_regex_ns; expand the macro the
+    # same way InteractiveScene does for its own cfgs, via its public env_regex_ns
+    # property (which yields '/World/envs/env_[^/]+').
+    expanded = GROUND_PATCH_PRIM.format(ENV_REGEX_NS=env.scene.env_regex_ns)
     paths = sim_utils.find_matching_prim_paths(expanded, stage)
     if not paths:
+        # Report what IS under the first env, so the next failure is self-diagnosing
+        # rather than sending us back to guessing at the layout.
+        first_env = env.scene.env_prim_paths[0] if env.scene.env_prim_paths else None
+        siblings = sorted(p.GetName() for p in stage.Traverse(first_env)) if first_env else []
         raise RuntimeError(
-            f"randomize_ground_friction found no prim matching {expanded!r}. The "
-            f"per-env ground patch is not where the scene cfg says it is, so per-env "
-            f"friction cannot be written. Check K1PushSceneCfg.ground_patch."
+            f"randomize_ground_friction found no prim matching {expanded!r}. The per-env "
+            f"ground patch is not where the scene cfg says it is, so per-env friction "
+            f"cannot be written. Prims directly under {first_env}: {siblings[:24]}"
         )
     # Friction is fixed for the whole run (see the docstring), so this event fires once at
     # startup and an unconditional print cannot spam.
