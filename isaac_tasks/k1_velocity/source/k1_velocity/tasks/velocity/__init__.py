@@ -133,3 +133,16 @@ gym.register(
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.rsl_rl_distill_cfg:K1VelocityDistillRunnerCfg",
     },
 )
+
+
+# Render the squat STUDENT. Without this the only squat distill task is the training
+# one, so there is no way to produce a clip of the student at all.
+gym.register(
+    id="Isaac-Velocity-Squat-K1-Distill-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.velocity.velocity_env_distill:K1VelocitySquatDistillPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.rsl_rl_distill_cfg:K1VelocityDistillRunnerCfg",
+    },
+)

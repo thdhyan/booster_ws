@@ -56,3 +56,23 @@ class K1VelocitySquatDistillEnvCfg(K1VelocitySquatEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.observations.policy.history_length = STUDENT_HISTORY_LEN
+
+
+@configclass
+class K1VelocitySquatDistillPlayEnvCfg(K1VelocitySquatDistillEnvCfg):
+    """Play/render variant of the squat distillation env, so the STUDENT can be shown.
+
+    There was no way to render the squat student at all: the only squat distill task is
+    the training one, which carries observation corruption and a full env count. The
+    question "what does the student actually do" was unanswerable without this.
+
+    The history stacking is inherited untouched -- the student's 500-dim input is 10
+    stacked 50-dim frames, so disabling corruption here does NOT change the student's
+    input width. Only the training-time sensor noise is removed, which is what makes the
+    clip legible.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.policy.enable_corruption = False
