@@ -39,6 +39,7 @@ import isaaclab_tasks  # noqa: F401,E402
 import booster_train.tasks  # noqa: F401,E402
 import k1_velocity.tasks.velocity  # noqa: F401,E402
 import k1_velocity.tasks.push  # noqa: F401,E402
+import k1_velocity.tasks.carry  # noqa: F401 — P7 box-carry family
 from isaaclab.sensors.sensor_base_cfg import SensorBaseCfg  # noqa: E402
 from isaaclab_tasks.utils import load_cfg_from_registry  # noqa: E402
 

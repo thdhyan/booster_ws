@@ -19,7 +19,9 @@ are **not** updated by this workstream. Do not edit them from here.
 | Squat teacher TorchScript (push base) | ✅ `k1_squat_base.pt`, 1.17 MB, verified 238→12 |
 | Push env — **builds** | ✅ verified in-sim 2026-10-10 (`6834137`), 4096 envs, 3.6 s/iter |
 | Push env video (untrained actor) | ✅ `logs/push_zero/push_env_zero.mp4`, 500/500 frames decodable; base stands (trunk z 0.45–0.57) |
-| Reach **training** | ▶️ running since 2026-10-10 14:45, tmux `k1_reach`, run `p6_push_reach/2026-10-10_14-45-53_p6_push_reach`, log `$S/push_reach.log` |
+| Reach **training** | ⏹ stopped 2026-10-10 at user request (~100 it). Push-SG already contains the approach terms, so a separate Reach stage is redundant |
+| Push-SG **training** | ▶️ running since 2026-10-10 15:54, tmux `k1_push` (+ watchdog `k1_watch`), log `$S/push_sg.log`; box 0.67–0.76 m, 3–10 kg; reward −1.9 → 37 by it 20 |
+| Carry task (P7) | 🛠 built `447c945`, smoke test pending — see §11 |
 | Push stage / push student | ❌ not started (needs Reach first; no push student task is registered) |
 | Tests | 329 passed, 1 pre-existing failure (`test_deployability`) |
 
@@ -417,3 +419,30 @@ the action's velocity slice.
 Reference repo for the SG terms: `~/Projects/ebasa/Push-Things`, branch `dhyan/obs_groups`.
 It has `gated_*` rewards, **not** the 7 SG terms, and no K1 config — the port is
 hand-written and self-contained, with no dependency on that repo.
+
+---
+
+## 11. Carry task (P7) — `Isaac-Carry-K1-v0` / `Isaac-Carry-K1-Play-v0`
+
+User request (2026-10-10): box fixed between both forearm stubs, changeable width,
+decoupled WBC trained with different box masses, walking to a goal; goal shown as a
+faint red/green alpha cube.
+
+| Piece | Where | Notes |
+|---|---|---|
+| Hold pose + weld geometry | `tasks/carry/carry_mdp.py` | IK table per width solves the **stub tip** (0.20 m along hand-link ±y), not the hand origin (that sits on the elbow axis). Mirror = `(1,-1,1,-1)`. Tested vs URDF: `tests/test_carry_geometry.py` |
+| Box + welds | `spawn_carry_box` (prestartup) | per-env width U(0.25,0.40) m, mass U(1,8) kg, 0.18×w×0.18 m, no collider; two `UsdPhysics.FixedJoint`s box↔hand links, `excludeFromArticulation` |
+| Goal command | `tasks/carry/carry_command.py` | registered as `base_velocity` (subclass of UniformVelocityCommand) so gait rewards keep working; derives (vx,vy,wz) toward the goal; goal 1–4 m any direction; success = within 0.25 m for 1 s → +20 and a new goal; cube 0.5 m, opacity 0.3, red → green while inside |
+| Env | `tasks/carry/carry_env_cfg.py` | velocity env + flat plane, no height scan, env_spacing 10 m, arm `arm_pos` action (scale 0.25 around the hold pose), arm gains 40/2 Nm/rad (R14 default ≈4 can't hold a box) |
+| Decoupled actor | `tasks/carry/decoupled_policy.py` | `SplitMLP`: legs MLP→12, arms MLP→8, both from the full obs, trained jointly by one PPO; JIT export unchanged. `tests/test_carry_decoupled_policy.py` |
+| Runner | `tasks/carry/agents/rsl_rl_ppo_cfg.py` | experiment `p7_carry`, teacher obs group (incl. privileged box width/mass) |
+
+Launch (after smoke + debug video):
+
+```bash
+K1_TRAIN_SCRIPT=run_unbuffered.py K1_GPU=1 ~/run_k1_train.sh --task Isaac-Carry-K1-v0 \
+  --num_envs 4096 --max_iterations 6000 --headless 2>&1 | tee $S/carry.log
+```
+
+Open risks: weld stability with 8 kg on 14 Nm arms (watch `weld_error` and the
+`weld_broken` termination rate); the goal cube needs a rendered frame check.

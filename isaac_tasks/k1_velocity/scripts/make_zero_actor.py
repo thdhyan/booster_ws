@@ -74,6 +74,7 @@ import isaaclab_tasks  # noqa: F401,E402
 import booster_train.tasks  # noqa: F401,E402
 import k1_velocity.tasks.velocity  # noqa: F401,E402
 import k1_velocity.tasks.push  # noqa: F401,E402 — P6 push family
+import k1_velocity.tasks.carry  # noqa: F401 — P7 box-carry family
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")

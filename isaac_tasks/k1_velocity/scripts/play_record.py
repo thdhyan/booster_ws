@@ -96,6 +96,7 @@ import k1_velocity.tasks.partial  # noqa: F401,E402 — partial-control (legs+he
 import k1_velocity.tasks.kick  # noqa: F401,E402 — kick family (harmless if unused)
 import k1_velocity.tasks.head  # noqa: F401,E402 — P3 head-tracking family (harmless if unused)
 import k1_velocity.tasks.push  # noqa: F401,E402 — P6 box-push family (harmless if unused)
+import k1_velocity.tasks.carry  # noqa: F401 — P7 box-carry family
 
 
 def _parse_vec3(text: str) -> tuple[float, float, float] | None:
