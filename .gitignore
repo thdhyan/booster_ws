@@ -66,3 +66,10 @@ real_robot/bags/
 # VR teleop: HMD-Poser weights and SMPL-X-derived body files (licensed, never commit)
 assets/hmd_poser/
 assets/body_models/
+
+# Rendered debug videos and traces: hundreds of MB, and GitHub hard-rejects any single
+# file over 100 MB. One commit slipped a 206 MB mp4 in via `git add -A isaac_tasks/`
+# and the push came back "pre-receive hook declined". These are build artefacts, not source.
+isaac_tasks/k1_velocity/videos/
+*.mp4
+*.npz

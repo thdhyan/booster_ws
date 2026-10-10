@@ -50,7 +50,6 @@ for name, val in vars(cfg.scene).items():
     print(f"PROBE3   {name}: {type(val).__name__}")
 
 import gymnasium as gym  # noqa: E402
-from isaac_tasks.k1_velocity.source.k1_velocity.tasks.push import push_sg_env_cfg as sg  # noqa: E402
 
 
 def attempt(label, mutate=None):
