@@ -48,3 +48,9 @@ class K1PushPPORunnerCfg(K1PushReachPPORunnerCfg):
     max_iterations = 3000
     experiment_name = "p6_push"
     run_name = "p6_push"
+
+    def __post_init__(self):
+        # Actions are clamped to +-1 in FrozenBaseVelocityAction, so a wider std costs
+        # nothing and the entropy bonus drove it 0.8 -> 3.2 (2026-10-10 run, reward
+        # 125 -> 32, goal never reached). No entropy bonus for this stage.
+        self.algorithm.entropy_coef = 0.0
