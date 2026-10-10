@@ -702,10 +702,10 @@ def box_spin_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 
 def wrist_target_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """-mean ||wrist_pos_base - commanded target|| (both wrists)."""
+    """-max ||wrist_pos_base - commanded target|| over the two wrists (both must track)."""
     pos_bf = wrist_positions_base(env)
     tgt = env.command_manager.get_term("wrist_target").command.reshape(-1, 2, 3)
-    return -(pos_bf - tgt).norm(dim=-1).mean(-1)
+    return -(pos_bf - tgt).norm(dim=-1).max(-1).values
 
 
 def wrist_box_gap(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -731,7 +731,10 @@ def wrist_box_gap(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 
 def wrist_box_proximity(env: ManagerBasedRLEnv, coarse: float = 0.30, fine: float = 0.05) -> torch.Tensor:
-    """two-scale exp(-mean wrist-to-box gap / scale), summed (0..2).
+    """two-scale exp(-max wrist-to-box gap / scale), summed (0..2).
+
+    Scored on the FARTHER wrist: with the mean, one wrist on the box earned most of
+    the reward and the reach policy learned to use one arm.
 
     Fix A7: v2's single 0.08 m scale had ~zero gradient beyond ~8 cm (no
     coarse approach pull); the 0.30 m term pulls the wrist across open space
@@ -739,7 +742,7 @@ def wrist_box_proximity(env: ManagerBasedRLEnv, coarse: float = 0.30, fine: floa
     each wrist to the box surface (0 inside), computed in the BOX frame so
     the clamp uses the true half-extents regardless of yaw.
     """
-    g = wrist_box_gap(env).mean(-1)
+    g = wrist_box_gap(env).max(-1).values
     return torch.exp(-g / coarse) + torch.exp(-g / fine)
 
 

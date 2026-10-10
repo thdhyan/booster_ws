@@ -71,7 +71,7 @@ class K1PushSGRewardsCfg(base.K1PushRewardsCfg):
 class K1PushReachSGRewardsCfg(K1PushSGRewardsCfg):
     """Reach stage for the SG set: approach only, no push shaping.
 
-    The box is heavy (8 kg nominal, 0.7-1.5x DR) so bumping it cannot slide it to the
+    The box is the heavier reach range (6-12 kg) so bumping it cannot slide it to the
     0.3+ m goal, which makes the success machinery inert here and keeps this stage
     purely about walking up and putting the hands on the box face.
     """
@@ -95,6 +95,12 @@ class K1PushSGEnvCfg(base.K1PushEnvCfg):
 @configclass
 class K1PushReachSGEnvCfg(base.K1PushReachEnvCfg):
     rewards: K1PushReachSGRewardsCfg = K1PushReachSGRewardsCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        # K1PushReachEnvCfg.__post_init__ assigns the v3 reach rewards, which silently
+        # replaced the SG set: runs of this task logged no approach_object/fast_approach.
+        self.rewards = K1PushReachSGRewardsCfg()
 
 @configclass
 class K1PushSGPlayEnvCfg(K1PushSGEnvCfg):

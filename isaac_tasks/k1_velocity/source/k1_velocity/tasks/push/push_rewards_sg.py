@@ -109,7 +109,8 @@ def approach_object_recip(env, d_min: float = 0.40) -> torch.Tensor:
     with an arm the whole approach spans about one arm's reach, so a 2 m scale is
     nearly flat over the region the term is supposed to shape.
     """
-    return recip(wrist_box_gap(env).mean(-1), d_min)
+    # max, not mean: scored on the FARTHER wrist, so one arm on the box earns little.
+    return recip(wrist_box_gap(env).max(-1).values, d_min)
 
 
 def fast_approach(env, contact_dist: float = 0.60) -> torch.Tensor:
@@ -119,7 +120,7 @@ def fast_approach(env, contact_dist: float = 0.60) -> torch.Tensor:
     swinging the arms in free space away from the box.
     """
     st = _state(env)
-    gap = wrist_box_gap(env).mean(-1)
+    gap = wrist_box_gap(env).max(-1).values   # farther wrist (both arms must close)
     prev = getattr(st, "sg_prev_gap", None)
     if prev is None or prev.shape != gap.shape:
         st.sg_prev_gap = gap.clone()

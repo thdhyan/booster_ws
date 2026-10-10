@@ -3,8 +3,8 @@
 Two ids share this cfg:
   Isaac-Push-Reach-K1-v0 : walk up + extend wrists to contact (heavy box, no
                            push rewards) -> warm-start for the push task.
-  Isaac-Push-K1-v0       : full corner-goal pushing (box DR 0.7-1.5x size,
-                           3-25 kg, friction 0.3-1.2; FIXED randomized goal:
+  Isaac-Push-K1-v0       : full corner-goal pushing (box edge 0.67-0.76 m,
+                           3-10 kg, friction 0.7-1.2; FIXED randomized goal:
                            distance 0.3 -> 1.5 m + yaw +-30 -> +-180 deg on
                            phased curricula).
 
@@ -122,7 +122,7 @@ class K1PushSceneCfg(InteractiveSceneCfg):
     box = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/box",
         spawn=sim_utils.CuboidCfg(
-            size=(1.0, 1.0, 1.0),  # prototype; per-env scale 0.7-1.5x
+            size=(1.0, 1.0, 1.0),  # prototype; per-env scale 0.665-0.76x
             mass_props=sim_utils.MassPropertiesCfg(mass=8.0),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
@@ -305,7 +305,8 @@ class K1PushEventCfg:
     randomize_box_geometry = EventTerm(
         func=mdp.randomize_box_geometry,
         mode="prestartup",
-        params={"scale_range": (0.7, 1.5), "mass_range": (3.0, 25.0)},
+        # edge 0.7-0.8x the robot's ~0.95 m height (1 m prototype cube); robot is ~19 kg
+        params={"scale_range": (0.665, 0.76), "mass_range": (3.0, 10.0)},
     )
     randomize_friction = EventTerm(
         func=mdp.vmdp.randomize_rigid_body_material,
@@ -463,9 +464,9 @@ class K1PushEnvCfg(ManagerBasedRLEnvCfg):
 
 @configclass
 class K1PushReachEnvCfg(K1PushEnvCfg):
-    """Reach stage: same world, heavy box (12-25 kg), reach-only rewards."""
+    """Reach stage: same world, heavier box (6-12 kg), reach-only rewards."""
 
     def __post_init__(self):
         super().__post_init__()
         self.rewards = K1PushReachRewardsCfg()
-        self.events.randomize_box_geometry.params["mass_range"] = (12.0, 25.0)
+        self.events.randomize_box_geometry.params["mass_range"] = (6.0, 12.0)
