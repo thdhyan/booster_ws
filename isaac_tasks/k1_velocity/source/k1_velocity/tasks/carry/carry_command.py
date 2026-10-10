@@ -15,6 +15,9 @@ see carry_mdp.goal_command_obs), so it can learn to deviate from the derived
 velocity when carrying heavy boxes.
 
 Success: trunk within ``success_radius`` of the goal for ``dwell_time`` seconds.
+A ``stand_prob`` share of goals are stand goals: radius 0 (the robot's own spot),
+held for ``stand_time``; they pay no goal_reached bonus (carry_tiers.reach_scale).
+The max goal radius is ``max_radius``, owned by carry_mdp.goal_radius_curriculum.
 Then ``just_reached`` is raised for one step (the reward at the next env step
 reads it, because rewards are computed before the command manager) and a new
 goal is drawn around the robot's current position.
@@ -45,6 +48,10 @@ class GoalCarryCommand(UniformVelocityCommand):
         self.goal_pos_b = torch.zeros(n, 2, device=dev)
         self.goal_dist = torch.zeros(n, device=dev)
         self.dwell = torch.zeros(n, device=dev)
+        self.dwell_needed = torch.full((n,), cfg.dwell_time, device=dev)
+        self.goal_r = torch.zeros(n, device=dev)
+        self.reached_r = torch.zeros(n, device=dev)   # radius of the goal reached this step
+        self.max_radius = float(cfg.goal_radius_range[1])
         self.just_reached = torch.zeros(n, dtype=torch.bool, device=dev)
         self.metrics["goal_dist"] = torch.zeros(n, device=dev)
         self.metrics["successes"] = torch.zeros(n, device=dev)
@@ -60,7 +67,14 @@ class GoalCarryCommand(UniformVelocityCommand):
 
     def _sample_goal(self, env_ids: torch.Tensor):
         k = len(env_ids)
-        r = torch.empty(k, device=self.device).uniform_(*self.cfg.goal_radius_range)
+        lo = min(self.cfg.goal_radius_range[0], self.max_radius)
+        r = torch.empty(k, device=self.device).uniform_(lo, self.max_radius)
+        stand = torch.rand(k, device=self.device) < self.cfg.stand_prob
+        r = torch.where(stand, torch.zeros_like(r), r)
+        self.goal_r[env_ids] = r
+        self.dwell_needed[env_ids] = torch.where(
+            stand, torch.full_like(r, self.cfg.stand_time), torch.full_like(r, self.cfg.dwell_time)
+        )
         a = torch.empty(k, device=self.device).uniform_(-math.pi, math.pi)
         root = self.robot.data.root_pos_w.torch[env_ids]
         self.goal_pos_w[env_ids, 0] = root[:, 0] + r * torch.cos(a)
@@ -90,9 +104,10 @@ class GoalCarryCommand(UniformVelocityCommand):
         self._refresh_goal_b()
         inside = self.goal_dist < self.cfg.success_radius
         self.dwell = torch.where(inside, self.dwell + self._env.step_dt, torch.zeros_like(self.dwell))
-        done = (self.dwell >= self.cfg.dwell_time).nonzero().flatten()
+        done = (self.dwell >= self.dwell_needed).nonzero().flatten()
         if len(done) > 0:
             self.just_reached[done] = True
+            self.reached_r[done] = self.goal_r[done]
             self.metrics["successes"][done] += 1.0
             self._sample_goal(done)
             self._refresh_goal_b()
@@ -158,7 +173,10 @@ class GoalCarryCommandCfg(UniformVelocityCommandCfg):
         lin_vel_x=(-0.5, 0.5), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-1.0, 1.0), heading=(0.0, 0.0)
     )
 
-    goal_radius_range: tuple[float, float] = (1.0, 4.0)
+    # (min, max); max is the curriculum's starting point if goal_radius_curriculum runs
+    goal_radius_range: tuple[float, float] = (0.5, 4.0)
+    stand_prob: float = 0.2
+    stand_time: float = 4.0
     success_radius: float = 0.25
     dwell_time: float = 1.0
     stop_radius: float = 0.10

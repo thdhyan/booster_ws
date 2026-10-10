@@ -277,6 +277,7 @@ class K1DebugMarkers:
         goal = UsdGeom.BasisCurves.Define(self._stage, "/Visuals/K1DebugMarkers/goal")
         goal.CreateTypeAttr(UsdGeom.Tokens.linear)
         goal.CreateWidthsAttr([0.025])
+        goal.SetWidthsInterpolation(UsdGeom.Tokens.constant)
         goal.CreateDisplayColorAttr([Gf.Vec3f(0.1, 1.0, 0.2)])
         goal.CreateDisplayOpacityAttr([0.8])
         goal.CreateVisibilityAttr(UsdGeom.Tokens.invisible)

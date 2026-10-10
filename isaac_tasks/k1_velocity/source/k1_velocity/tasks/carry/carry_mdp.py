@@ -265,9 +265,16 @@ def goal_distance_tanh(env, std: float, command_name: str = "base_velocity") -> 
     return 1.0 - torch.tanh(env.command_manager.get_term(command_name).goal_dist / std)
 
 
-def goal_reached(env, command_name: str = "base_velocity") -> torch.Tensor:
-    """1 on the step the dwell completes (the command then resamples the goal)."""
-    return env.command_manager.get_term(command_name).just_reached.float()
+def goal_reached(env, command_name: str = "base_velocity", full_radius: float = 1.0) -> torch.Tensor:
+    """Bonus on the step the dwell completes (the command then resamples the goal).
+
+    Scaled by how far the reached goal was drawn (carry_tiers.reach_scale), so a
+    stand-only goal (radius 0) pays nothing here; standing is paid by stand_still.
+    """
+    from . import carry_tiers
+
+    term = env.command_manager.get_term(command_name)
+    return term.just_reached.float() * carry_tiers.reach_scale(term.reached_r, full_radius)
 
 
 def box_tilt_l2(env) -> torch.Tensor:
@@ -306,3 +313,80 @@ def weld_error_l1(env) -> torch.Tensor:
 
 def weld_broken(env, threshold: float) -> torch.Tensor:
     return weld_error(env) > threshold
+
+
+# ---------------------------------------------------------------------------
+# tiered rewards (see carry_tiers): stand + hold always pays, the rest is gated
+# ---------------------------------------------------------------------------
+def hold_quality(env, pos_std: float = 0.08, tilt_std: float = 0.3) -> torch.Tensor:
+    """(n,) in [0, 1]: trunk upright AND box at its nominal spot in front of the trunk."""
+    from isaaclab.utils.math import quat_apply_inverse
+    from . import carry_tiers
+
+    robot, box = env.scene["robot"], env.scene["carry_box"]
+    root_pos, root_quat = robot.data.root_pos_w.torch, robot.data.root_quat_w.torch
+    box_b = quat_apply_inverse(root_quat, box.data.root_pos_w.torch - root_pos)
+    return carry_tiers.hold_quality_from(
+        box_b, _state(env).box_offset, robot.data.projected_gravity_b.torch, pos_std, tilt_std
+    )
+
+
+def stand_hold(env, pos_std: float = 0.08, tilt_std: float = 0.3) -> torch.Tensor:
+    return hold_quality(env, pos_std, tilt_std)
+
+
+def stand_still(env, command_name: str = "base_velocity", cmd_eps: float = 0.05, sigma: float = 0.2,
+                pos_std: float = 0.08, tilt_std: float = 0.3) -> torch.Tensor:
+    """hold_quality while the command is ~zero and the base is not moving."""
+    from isaaclab.utils.math import quat_apply_inverse, yaw_quat
+    from . import carry_tiers
+
+    robot = env.scene["robot"]
+    vel = quat_apply_inverse(yaw_quat(robot.data.root_quat_w.torch), robot.data.root_lin_vel_w.torch)
+    cmd = env.command_manager.get_term(command_name).vel_command_b
+    still = carry_tiers.stand_still_kernel(cmd, vel[:, :2], robot.data.root_ang_vel_w.torch[:, 2],
+                                           cmd_eps, sigma)
+    return still * hold_quality(env, pos_std, tilt_std)
+
+
+_GATED_FUNCS: dict = {}
+
+
+def gated(env, inner: str, inner_params: dict, pos_std: float = 0.08, tilt_std: float = 0.3) -> torch.Tensor:
+    """``inner(env, **inner_params) * hold_quality``. ``inner`` is "module:function"
+    (a string, not a callable, so the cfg survives the Hydra dict round trip)."""
+    func = _GATED_FUNCS.get(inner)
+    if func is None:
+        from isaaclab.utils.string import string_to_callable
+
+        func = _GATED_FUNCS[inner] = string_to_callable(inner)
+    return func(env, **inner_params) * hold_quality(env, pos_std, tilt_std)
+
+
+# ---------------------------------------------------------------------------
+# curriculum
+# ---------------------------------------------------------------------------
+def goal_radius_curriculum(env, env_ids, start: float = 1.0, step: float = 0.25, target: float = 4.0,
+                           fall_threshold: float = 0.08, window: int = 0,
+                           fall_terms: tuple = ("base_orientation", "root_height"),
+                           command_name: str = "base_velocity") -> dict:
+    """Widen the goal radius by ``step`` each time a window of resets (``window``,
+    0 = num_envs) has a fall rate under ``fall_threshold``."""
+    from . import carry_tiers
+
+    sched = getattr(env, "carry_radius_schedule", None)
+    if sched is None:
+        sched = carry_tiers.RadiusSchedule(start, step, target, fall_threshold, window or env.num_envs)
+        env.carry_radius_schedule = sched
+    term = env.command_manager.get_term(command_name)
+    # the startup reset has no termination results yet; counting it would log
+    # num_envs fall-free resets that never happened
+    if env.common_step_counter > 0 and len(env_ids) > 0:
+        tm = env.termination_manager
+        fell = torch.zeros(len(env_ids), dtype=torch.bool, device=env.device)
+        for name in fall_terms:
+            if name in tm.active_terms:
+                fell |= tm.get_term(name)[env_ids]
+        sched.update(len(env_ids), int(fell.sum()))
+    term.max_radius = sched.max_r
+    return {"max_radius": sched.max_r, "fall_rate": sched.last_rate}

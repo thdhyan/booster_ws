@@ -10,7 +10,9 @@ stack; the carry pieces are layered on top:
   per-env hold pose; the decoupled actor (decoupled_policy) gives each its own MLP;
 * command: ``base_velocity`` is the goal command (carry_command), which derives
   the walking velocity the gait rewards track and draws the faint red/green goal cube;
-* rewards: velocity stack + goal progress/success, box level, weld integrity.
+* rewards: velocity stack + goal progress/success, box level, weld integrity,
+  in tiers (carry_tiers): stand + hold always pays; the walking/goal terms are
+  multiplied by hold quality; the goal radius grows only while falls are rare.
 
 Arm gains: the K1 R14 arm actuator derives ~4 Nm/rad from its 10 Hz natural
 frequency, which cannot hold even a 1 kg box against gravity at the hold pose
@@ -25,6 +27,7 @@ import copy
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.envs import mdp
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -100,6 +103,9 @@ class K1CarrySceneCfg(K1RoughSceneCfg):
 
 
 _ARM_CFG = SceneEntityCfg("robot", joint_names=carry_mdp.ARM_JOINTS, preserve_order=True)
+_HOLD = {"pos_std": 0.08, "tilt_std": 0.3}
+# tier 2: these pay only in proportion to hold quality (wrapped in __post_init__)
+GATED_REWARDS = ("track_lin_vel_xy_exp", "track_ang_vel_z_exp", "goal_coarse", "goal_fine", "goal_reached")
 
 
 @configclass
@@ -157,7 +163,11 @@ class K1CarryCommandsCfg:
 class K1CarryRewardsCfg(RewardsCfg):
     goal_coarse = RewTerm(func=carry_mdp.goal_distance_tanh, weight=2.0, params={"std": 1.5})
     goal_fine = RewTerm(func=carry_mdp.goal_distance_tanh, weight=2.0, params={"std": 0.3})
-    goal_reached = RewTerm(func=carry_mdp.goal_reached, weight=20.0)
+    goal_reached = RewTerm(func=carry_mdp.goal_reached, weight=20.0, params={"full_radius": 1.0})
+    # tier 1: always paid -- upright with the box in front of the trunk, more so while still
+    stand_hold = RewTerm(func=carry_mdp.stand_hold, weight=1.0, params=dict(_HOLD))
+    stand_still = RewTerm(func=carry_mdp.stand_still, weight=2.0,
+                          params={"cmd_eps": 0.05, "sigma": 0.2, **_HOLD})
     box_tilt = RewTerm(func=carry_mdp.box_tilt_l2, weight=-2.0)
     weld_error = RewTerm(func=carry_mdp.weld_error_l1, weight=-10.0)
     # arms relative to the hold pose (default_joint_pos is rewritten per env)
@@ -189,6 +199,11 @@ class K1CarryEventCfg(EventCfg):
 class K1CarryCurriculumCfg(CurriculumCfg):
     terrain_levels = None   # flat plane
     velocity_range = None   # the goal command derives velocity; ranges stay fixed
+    # tier 3: the goal radius opens 1 -> 4 m in 0.25 m steps while < 8 % of resets are falls
+    goal_radius = CurrTerm(
+        func=carry_mdp.goal_radius_curriculum,
+        params={"start": 1.0, "step": 0.25, "target": 4.0, "fall_threshold": 0.08, "window": 0},
+    )
 
 
 @configclass
@@ -210,6 +225,14 @@ class K1CarryEnvCfg(K1VelocityRoughEnvCfg):
         self.rewards.base_height.params["sensor_cfg"] = None   # plane: ground is z=0
         # goals reach 4 m from the start, so cells must be wider than 2 x 4 m
         self.scene.env_spacing = 10.0
+        for name in GATED_REWARDS:
+            term = getattr(self.rewards, name)
+            term.params = {
+                "inner": f"{term.func.__module__}:{term.func.__name__}",
+                "inner_params": dict(term.params),
+                **_HOLD,
+            }
+            term.func = carry_mdp.gated
 
 
 @configclass
