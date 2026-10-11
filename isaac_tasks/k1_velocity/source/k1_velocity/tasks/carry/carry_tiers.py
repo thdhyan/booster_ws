@@ -52,6 +52,7 @@ class RadiusSchedule:
     """
 
     def __init__(self, start: float, step: float, target: float, fall_threshold: float, window: int):
+        self.start = float(start)
         self.max_r = float(start)
         self.step = float(step)
         self.target = float(target)

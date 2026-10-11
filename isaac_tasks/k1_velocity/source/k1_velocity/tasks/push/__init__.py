@@ -125,3 +125,25 @@ gym.register(
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushMultiPPORunnerCfg",
     },
 )
+
+# Simplified push rewards (hands to box, box to goal, do not fall) + box/goal distance
+# curriculum; see push_simple_env_cfg.py.
+gym.register(
+    id="Isaac-Push-Simple-K1-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.push.push_simple_env_cfg:K1PushSimpleEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushSimplePPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-Push-Simple-K1-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.push.push_simple_env_cfg:K1PushSimplePlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushSimplePPORunnerCfg",
+    },
+)

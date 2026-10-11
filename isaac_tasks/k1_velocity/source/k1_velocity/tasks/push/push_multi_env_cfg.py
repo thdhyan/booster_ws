@@ -20,6 +20,7 @@ a config field.
 from __future__ import annotations
 
 from isaaclab.managers import (
+    CurriculumTermCfg as CurrTerm,
     EventTermCfg as EventTerm,
     ObservationGroupCfg as ObsGroup,
     ObservationTermCfg as ObsTerm,
@@ -133,36 +134,48 @@ class K1PushMultiCommandsCfg:
 
 @configclass
 class K1PushMultiRewardsCfg:
-    """Team terms (box -> goal, frame-invariant, evaluated once) + per-robot terms.
+    """Simplified set (same three ideas as push_simple_env_cfg), team + per-robot.
 
-    The team terms take robot_0's frame only because the corner helpers need a frame;
-    distances are the same in any frame. A per-agent split for MAPPO is M2's job.
+    Team terms (no suffix) go to both agents; ``_k`` terms go to robot_k only
+    (agents_in_batch.RewardSplit), so a robot that falls is charged alone.
+    The corner helpers need a frame; distances are frame-invariant, robot_0's is used.
     """
 
-    corner_goal_tracking = RewTerm(func=mdp.corner_goal_tracking, weight=1.0, params={"asset_name": "robot_0"})
-    centroid_goal_tracking = RewTerm(func=mdp.centroid_goal_tracking, weight=0.5, params={"asset_name": "robot_0"})
-    box_goal_progress = RewTerm(func=mdp.box_goal_progress, weight=2.0, params={"asset_name": "robot_0"})
-    box_vel_toward_goal = RewTerm(func=mdp.box_vel_toward_goal, weight=0.5)
-    success_bonus = RewTerm(func=mdp.success_bonus, weight=50.0)
-    wrist_box_proximity_0 = RewTerm(func=mdp.wrist_box_proximity, weight=0.25, params={"asset_name": "robot_0"})
-    wrist_box_proximity_1 = RewTerm(func=mdp.wrist_box_proximity, weight=0.25, params={"asset_name": "robot_1"})
-    base_height_command_0 = RewTerm(func=mdp.base_height_command, weight=0.5, params={"asset_name": "robot_0"})
-    base_height_command_1 = RewTerm(func=mdp.base_height_command, weight=0.5, params={"asset_name": "robot_1"})
-    termination_penalty = RewTerm(func=mdp.failure_terminated, weight=-200.0)
+    # box closer to goal (team)
+    box_progress = RewTerm(func=mdp.box_goal_progress_rate, weight=5.0, params={"asset_name": "robot_0"})
+    box_near_goal = RewTerm(func=mdp.box_goal_near, weight=2.0, params={"std": 0.5})
+    success_bonus = RewTerm(func=mdp.success_bonus, weight=500.0)
+    box_failed = RewTerm(func=mdp.term_fired, weight=-500.0, params={"term_names": ["box_oob", "box_tip"]})
+    # hands to the box (per robot)
+    hands_to_box_0 = RewTerm(func=mdp.wrist_box_proximity, weight=0.5, params={"asset_name": "robot_0"})
+    hands_to_box_1 = RewTerm(func=mdp.wrist_box_proximity, weight=0.5, params={"asset_name": "robot_1"})
+    # do not fall (per robot)
+    fallen_0 = RewTerm(func=mdp.term_fired, weight=-500.0, params={"term_names": ["fallen_0"]})
+    fallen_1 = RewTerm(func=mdp.term_fired, weight=-500.0, params={"term_names": ["fallen_1"]})
+    flat_orientation_0 = RewTerm(func=mdp.vmdp.flat_orientation_l2, weight=-1.0,
+                                 params={"asset_cfg": SceneEntityCfg("robot_0")})
+    flat_orientation_1 = RewTerm(func=mdp.vmdp.flat_orientation_l2, weight=-1.0,
+                                 params={"asset_cfg": SceneEntityCfg("robot_1")})
 
 
 @configclass
 class K1PushMultiTerminationsCfg:
     time_out = DoneTerm(func=mdp.vmdp.time_out, time_out=True)
-    goal_reached = DoneTerm(func=mdp.goal_reached, params={"err_thresh": 0.08, "hold_s": 1.0})
-    box_oob = DoneTerm(func=mdp.box_out_of_bounds, params={"radius": 3.0})
+    goal_reached = DoneTerm(func=mdp.goal_reached_centroid, params={"err_thresh": 0.15, "hold_s": 1.0})
+    box_oob = DoneTerm(func=mdp.box_out_of_bounds, params={"radius": 3.6})
     box_tip = DoneTerm(func=mdp.box_tipped, params={"limit_deg": 45.0})
-    height_below_command_0 = DoneTerm(func=mdp.height_below_command, params={"margin": 0.05, "asset_name": "robot_0"})
-    height_below_command_1 = DoneTerm(func=mdp.height_below_command, params={"margin": 0.05, "asset_name": "robot_1"})
-    bad_orientation_0 = DoneTerm(func=mdp.vmdp.bad_orientation,
-                                 params={"limit_angle": 0.8, "asset_cfg": SceneEntityCfg("robot_0")})
-    bad_orientation_1 = DoneTerm(func=mdp.vmdp.bad_orientation,
-                                 params={"limit_angle": 0.8, "asset_cfg": SceneEntityCfg("robot_1")})
+    # Real falls only (z < 0.30 m or tilt > 0.8 rad). height_below_command (z < H* - 5 cm)
+    # ended 98.7 % of MAPPO episodes after ~8 steps (robot_1, 2026-10-11 run).
+    fallen_0 = DoneTerm(func=mdp.robot_fallen, params={"asset_name": "robot_0"})
+    fallen_1 = DoneTerm(func=mdp.robot_fallen, params={"asset_name": "robot_1"})
+
+
+@configclass
+class K1PushMultiCurriculumCfg:
+    box_dist = CurrTerm(func=mdp.box_dist_curriculum, params={
+        "start_iter": 200, "end_iter": 1800, "r0": (0.85, 0.95), "r1": (1.1, 1.4)})
+    goal_dist = CurrTerm(func=mdp.goal_dist_curriculum, params={
+        "start_iter": 200, "end_iter": 1800, "d_max": 1.8})
 
 
 @configclass
@@ -178,7 +191,7 @@ class K1PushMultiEventCfg(base.K1PushEventCfg):
         "phi_range": (-0.1, 0.1),
         "yaw_range": (-0.15, 0.15),
         "goal_psi_range": (-0.6, 0.6),        # forward cone: push away from the robots
-        "workspace_r": 2.6,
+        "workspace_r": 3.2,
     })
     reset_wrist_targets = None
     reset_wrist_targets_0 = EventTerm(func=mdp.reset_wrist_targets, mode="reset", params={
@@ -197,13 +210,12 @@ class K1PushMultiEnvCfg(base.K1PushEnvCfg):
     rewards: K1PushMultiRewardsCfg = K1PushMultiRewardsCfg()
     terminations: K1PushMultiTerminationsCfg = K1PushMultiTerminationsCfg()
     events: K1PushMultiEventCfg = K1PushMultiEventCfg()
+    curriculum: K1PushMultiCurriculumCfg = K1PushMultiCurriculumCfg()
 
     def __post_init__(self):
         super().__post_init__()
         for k in range(NUM_ROBOTS):
             getattr(self.scene, f"height_scanner_{k}").update_period = self.decimation * self.sim.dt
-        # play the trained goal range from the start (no curriculum here)
-        self.curriculum = None
 
 
     # train.py wraps the env in AgentsInBatchWrapper(R) when this is > 0
@@ -223,19 +235,24 @@ class K1PushMultiTrainEnvCfg(K1PushMultiEnvCfg):
         self.events.randomize_box_geometry.params["mass_range"] = (6.0, 16.0)
 
 
+def _play(cfg) -> None:
+    """Small scene, no obs noise, curricula pinned at their final values."""
+    cfg.scene.num_envs = 4
+    for k in range(NUM_ROBOTS):
+        getattr(cfg.observations, f"teacher_{k}").enable_corruption = False
+    for term in (cfg.curriculum.box_dist, cfg.curriculum.goal_dist):
+        term.params["start_iter"], term.params["end_iter"] = -2, -1
+
+
 @configclass
 class K1PushMultiPlayEnvCfg(K1PushMultiEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 4
-        for k in range(NUM_ROBOTS):
-            getattr(self.observations, f"teacher_{k}").enable_corruption = False
+        _play(self)
 
 
 @configclass
 class K1PushMultiTrainPlayEnvCfg(K1PushMultiTrainEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 4
-        for k in range(NUM_ROBOTS):
-            getattr(self.observations, f"teacher_{k}").enable_corruption = False
+        _play(self)

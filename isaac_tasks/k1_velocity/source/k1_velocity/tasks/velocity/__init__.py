@@ -121,6 +121,19 @@ gym.register(
 )
 
 
+# Squat teacher as a residual over the frozen velocity student (feet_flat included).
+for _id, _cfg in (("Isaac-Velocity-Squat-Residual-K1-v0", "K1VelocitySquatResidualEnvCfg"),
+                  ("Isaac-Velocity-Squat-Residual-K1-Play-v0", "K1VelocitySquatResidualPlayEnvCfg")):
+    gym.register(
+        id=_id,
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"k1_velocity.tasks.velocity.squat_residual_env_cfg:{_cfg}",
+            "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.squat_ppo_cfg:K1SquatResidualPPORunnerCfg",
+        },
+    )
+
 # Squat teacher -> deployable student. Separate from Isaac-Velocity-Distill-K1-v0 because
 # the squat teacher's obs is 238-dim (H* appended to the command) and the velocity one is
 # 237; sharing an env cfg fails with a size mismatch at the first policy call.

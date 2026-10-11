@@ -207,6 +207,41 @@ def spawn_carry_box(env, env_ids, width_range: tuple[float, float], mass_range: 
           f"mass {st.mass.min():.1f}-{st.mass.max():.1f} kg, {len(paths)} boxes welded to both forearms")
 
 
+def carry_mass_curriculum(env, env_ids, mass_lo: float = 1.0, hi_start: float = 2.0,
+                          hi_end: float = 8.0) -> None:
+    """reset: resample each reset env's box mass U(mass_lo, hi), hi following the goal radius.
+
+    hi = hi_start + p * (hi_end - hi_start), p = goal-radius curriculum progress (0 at its
+    start radius, 1 at its target), so the box gets heavier as the goals get farther.
+    Inertia scales with the mass ratio to the prestartup box (same geometry, uniform
+    density). st.mass (observed as 0.1 * mass) follows.
+    """
+    sched = getattr(env, "carry_radius_schedule", None)
+    p = 0.0
+    if sched is not None and sched.target > sched.start:
+        p = min(max((sched.max_r - sched.start) / (sched.target - sched.start), 0.0), 1.0)
+    hi = hi_start + p * (hi_end - hi_start)
+    st = _state(env)
+    box = env.scene["carry_box"]
+    if not hasattr(st, "mass0"):
+        st.mass0 = st.mass.clone()
+        st.inertia0 = box.data.body_inertia.torch.clone()   # (n, 1, 9), on the asset's device
+        env.carry_mass_hi = hi
+    env_ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
+    if len(env_ids) == 0:
+        return
+    m = mass_lo + (hi - mass_lo) * torch.rand(len(env_ids), device=env.device)
+    st.mass[env_ids] = m
+    # same devices as Isaac Lab's randomize_rigid_body_mass: the asset's own mass buffer
+    dev = box.data.body_mass.torch.device
+    ids = env_ids.to(dev)
+    body_ids = torch.tensor([0], device=dev, dtype=torch.long)
+    box.set_masses_index(masses=m[:, None].to(dev), body_ids=body_ids, env_ids=ids)
+    ratio = (m / st.mass0[env_ids])[:, None, None].to(dev)
+    box.set_inertias_index(inertias=st.inertia0[ids] * ratio, body_ids=body_ids, env_ids=ids)
+    env.carry_mass_hi = hi
+
+
 def reset_carry(env, env_ids: torch.Tensor) -> None:
     """reset: arms to the per-env hold pose, box placed on the welds.
 
@@ -389,4 +424,5 @@ def goal_radius_curriculum(env, env_ids, start: float = 1.0, step: float = 0.25,
                 fell |= tm.get_term(name)[env_ids]
         sched.update(len(env_ids), int(fell.sum()))
     term.max_radius = sched.max_r
-    return {"max_radius": sched.max_r, "fall_rate": sched.last_rate}
+    return {"max_radius": sched.max_r, "fall_rate": sched.last_rate,
+            "mass_hi": getattr(env, "carry_mass_hi", 0.0)}

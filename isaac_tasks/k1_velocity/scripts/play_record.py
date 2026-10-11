@@ -58,6 +58,8 @@ parser.add_argument("--disable_jit", action="store_true")
 parser.add_argument("--panel_video", action="store_true",
                     help="write a labelled overview/top-down/follow/side debug panel instead of the HUD clip")
 parser.add_argument("--panel_fps", type=int, default=25)
+parser.add_argument("--no_head_cam", action="store_true",
+                    help="panel video: skip the robot-eye RGB + depth panels (on by default)")
 parser.add_argument("--panel_size", type=int, nargs=2, default=(1920, 1080), metavar=("W", "H"),
                     help="size of EACH debug panel (default 1080p; the 2x2 tile is twice that)")
 parser.add_argument("--panel_spp", type=int, default=8,
@@ -389,7 +391,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         set_clean_render(args_cli.panel_spp)
         panel_names = (("overview", "top_down") + tuple(f"follow_{n}" for n in robot_names)
                        if multi else ("overview", "top_down", "follow", "side"))
-        panel_cams = PanelCameras(names=panel_names, size=tuple(args_cli.panel_size))
+        # robot-eye RGB + depth per robot ("" for the single-robot env)
+        head_keys = () if args_cli.no_head_cam else (
+            tuple(f"_{n}" for n in robot_names) if multi else ("",))
+        panel_cams = PanelCameras(names=panel_names, size=tuple(args_cli.panel_size), heads=head_keys)
+        head_body = {n: arts[n].find_bodies("Head_2")[0][0] for n in robot_names}
         markers = K1DebugMarkers()
         panel_recorder = TiledPanelRecorder(
             args_cli.video_out, panel_cams.names, size=tuple(args_cli.panel_size), fps=args_cli.panel_fps
@@ -525,7 +531,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     ep_reward = torch.zeros(args_cli.num_envs, device=env.device)
     frames_written = 0
 
+    def _head_views():
+        """Robot-eye cameras: 10 cm ahead of / 8 cm above the Head_2 frame, looking along its +x."""
+        from isaaclab.utils.math import quat_apply
+
+        views = []
+        if args_cli.no_head_cam:
+            return views
+        for n in robot_names:
+            data = arts[n].data
+            pos = data.body_pos_w.torch[0, head_body[n]]
+            q = data.body_quat_w.torch[0, head_body[n]]
+            off = torch.tensor([[0.10, 0.0, 0.08], [1.10, 0.0, 0.08]], device=pos.device)
+            eye, tgt = (quat_apply(q.expand(2, 4), off) + pos).cpu().numpy()
+            views.append((f"head_{n}" if multi else "head", eye, tgt))
+        return views
+
     def _panel_views():
+        return _panel_views_world() + _head_views()
+
+    def _panel_views_world():
         root = robot.data.root_pos_w[0].detach().cpu().numpy()
         if multi:
             # overview/top-down centred on the team; one follow cam behind each robot

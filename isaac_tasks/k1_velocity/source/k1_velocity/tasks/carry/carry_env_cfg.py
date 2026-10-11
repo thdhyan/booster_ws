@@ -193,22 +193,27 @@ class K1CarryEventCfg(EventCfg):
     )
     # after reset_scene / reset_robot_joints (field order = application order)
     reset_carry = EventTerm(func=carry_mdp.reset_carry, mode="reset")
+    # box mass U(1, hi) per reset, hi 2 -> 8 kg with the goal-radius curriculum progress
+    carry_mass = EventTerm(func=carry_mdp.carry_mass_curriculum, mode="reset",
+                           params={"mass_lo": CARRY_MASS_RANGE[0], "hi_start": 2.0,
+                                   "hi_end": CARRY_MASS_RANGE[1]})
 
 
 @configclass
 class K1CarryCurriculumCfg(CurriculumCfg):
     terrain_levels = None   # flat plane
     velocity_range = None   # the goal command derives velocity; ranges stay fixed
-    # tier 3: the goal radius opens 1 -> 4 m in 0.25 m steps while < 8 % of resets are falls
+    # tier 3: the goal radius opens 1 -> 10 m in 0.5 m steps while < 8 % of resets are falls
+    # (the box mass ceiling follows it, see K1CarryEventCfg.carry_mass)
     goal_radius = CurrTerm(
         func=carry_mdp.goal_radius_curriculum,
-        params={"start": 1.0, "step": 0.25, "target": 4.0, "fall_threshold": 0.08, "window": 0},
+        params={"start": 1.0, "step": 0.5, "target": 10.0, "fall_threshold": 0.08, "window": 0},
     )
 
 
 @configclass
 class K1CarryEnvCfg(K1VelocityRoughEnvCfg):
-    scene: K1CarrySceneCfg = K1CarrySceneCfg(num_envs=4096, env_spacing=10.0)
+    scene: K1CarrySceneCfg = K1CarrySceneCfg(num_envs=4096, env_spacing=22.0)
     observations: K1CarryObservationsCfg = K1CarryObservationsCfg()
     actions: K1CarryActionsCfg = K1CarryActionsCfg()
     commands: K1CarryCommandsCfg = K1CarryCommandsCfg()
@@ -223,8 +228,10 @@ class K1CarryEnvCfg(K1VelocityRoughEnvCfg):
         self.scene.height_scanner = None
         self.observations.teacher.height_scan = None
         self.rewards.base_height.params["sensor_cfg"] = None   # plane: ground is z=0
-        # goals reach 4 m from the start, so cells must be wider than 2 x 4 m
-        self.scene.env_spacing = 10.0
+        # goals reach 10 m from the start, so cells must be wider than 2 x 10 m
+        self.scene.env_spacing = 22.0
+        # 10 m at the 0.5 m/s command cap is 20 s of walking; leave time to turn and dwell
+        self.episode_length_s = 30.0
         for name in GATED_REWARDS:
             term = getattr(self.rewards, name)
             term.params = {
@@ -243,6 +250,6 @@ class K1CarryEnvCfg_PLAY(K1CarryEnvCfg):
         self.commands.base_velocity.debug_vis = True
         self.observations.policy.enable_corruption = False
         self.events.push_robot = None
-        # play runs a trained policy: start at the trained 4 m radius, not the 1 m
+        # play runs a trained policy: start at the trained max radius (and max mass), not the 1 m
         # curriculum start (a fresh play env re-runs the schedule from `start`)
         self.curriculum.goal_radius.params["start"] = self.curriculum.goal_radius.params["target"]

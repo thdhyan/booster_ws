@@ -63,3 +63,11 @@ class K1PushMultiPPORunnerCfg(K1PushPPORunnerCfg):
     max_iterations = 3000
     experiment_name = "p6_push_multi"
     run_name = "p6_push_multi"
+
+
+@configclass
+class K1PushSimplePPORunnerCfg(K1PushPPORunnerCfg):
+    """Simplified push rewards (push_simple_env_cfg)."""
+
+    experiment_name = "p6_push_simple"
+    run_name = "p6_push_simple"

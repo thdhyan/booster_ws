@@ -132,31 +132,55 @@ class GoalCarryCommand(UniformVelocityCommand):
         self._refresh_goal_b()
         return extras
 
-    # -- debug vis: faint red cube, faint green while the trunk is inside --
+    # -- debug vis: a ghost of the CARRIED box at the goal (its size, height and yaw),
+    #    red, green while the trunk is inside; plus a flat disc of the success radius --
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         super()._set_debug_vis_impl(debug_vis)
         if debug_vis:
             if not hasattr(self, "goal_visualizer"):
                 self.goal_visualizer = VisualizationMarkers(self.cfg.goal_visualizer_cfg)
+                self.goal_disc_visualizer = VisualizationMarkers(self.cfg.goal_disc_visualizer_cfg)
             self.goal_visualizer.set_visibility(True)
+            self.goal_disc_visualizer.set_visibility(True)
         elif hasattr(self, "goal_visualizer"):
             self.goal_visualizer.set_visibility(False)
+            self.goal_disc_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
         super()._debug_vis_callback(event)
         if not self.robot.is_initialized:
             return
-        pos = self.goal_pos_w.clone()
-        pos[:, 2] += 0.5 * self.cfg.goal_cube_size
+        from . import carry_mdp
+
         idx = torch.where(self.goal_dist < self.cfg.success_radius, GOAL_GREEN, GOAL_RED)
-        self.goal_visualizer.visualize(translations=pos, marker_indices=idx)
+        box = self._env.scene["carry_box"].data
+        box_pos = box.root_pos_w.torch if hasattr(box.root_pos_w, "torch") else box.root_pos_w
+        box_quat = box.root_quat_w.torch if hasattr(box.root_quat_w, "torch") else box.root_quat_w
+        pos = self.goal_pos_w.clone()
+        pos[:, 2] = box_pos[:, 2]                        # held height
+        scales = torch.ones_like(pos)
+        scales[:, 1] = carry_mdp._state(self._env).width  # prototype is 1 m wide
+        self.goal_visualizer.visualize(translations=pos, orientations=box_quat, scales=scales,
+                                       marker_indices=idx)
+        disc = self.goal_pos_w.clone()
+        disc[:, 2] = 0.005
+        self.goal_disc_visualizer.visualize(translations=disc, marker_indices=idx)
 
 
 def _goal_cube(rgb) -> sim_utils.CuboidCfg:
-    s = 0.5
+    """Carried-box ghost: BOX_DEPTH x 1 m x BOX_HEIGHT, y scaled per env to the box width."""
+    from .carry_mdp import BOX_DEPTH, BOX_HEIGHT
+
     return sim_utils.CuboidCfg(
-        size=(s, s, s),
+        size=(BOX_DEPTH, 1.0, BOX_HEIGHT),
+        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=rgb, opacity=0.45, roughness=0.6),
+    )
+
+
+def _goal_disc(rgb, radius: float) -> sim_utils.CylinderCfg:
+    return sim_utils.CylinderCfg(
+        radius=radius, height=0.01,
         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=rgb, opacity=0.3, roughness=0.6),
     )
 
@@ -185,8 +209,12 @@ class GoalCarryCommandCfg(UniformVelocityCommandCfg):
     heading_gain: float = 1.5
     max_speed: float = 0.5
 
-    goal_cube_size: float = 0.5
     goal_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
         prim_path="/Visuals/Command/carry_goal",
         markers={"red": _goal_cube((0.9, 0.1, 0.1)), "green": _goal_cube((0.1, 0.9, 0.2))},
+    )
+    # radius = success_radius default (0.25 m)
+    goal_disc_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/Command/carry_goal_disc",
+        markers={"red": _goal_disc((0.9, 0.1, 0.1), 0.25), "green": _goal_disc((0.1, 0.9, 0.2), 0.25)},
     )

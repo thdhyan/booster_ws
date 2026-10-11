@@ -11,6 +11,8 @@ normalisation) walks from a 3-dim velocity command. A skill policy drives it:
 * legs: target = default + clip(student_out + residual_scale * residual, +-1)
   (the student's own JointPositionAction: scale 1.0, clip +-1).
 * head: target = default + head_scale * a (absolute, the student never moved it).
+* ``command_name`` set (squat residual): vx/vy/wz come from that env command instead
+  (clipped to the student's ranges) and the action is only ``[residual 12 | head]``.
 
 The student's 50-dim frame is rebuilt here in its training order
     lin 3 | ang 3 | grav 3 | cmd 3 | leg_pos_rel 12 | leg_vel 12 | last_action 12 | clock 2
@@ -97,7 +99,8 @@ class FrozenStudentResidualAction(ActionTerm):
             self._head_ids = torch.as_tensor(head_ids, dtype=torch.long, device=dev)
             self._default_head = self._joint("default_joint_pos")[:, self._head_ids].clone()
         n = env.num_envs
-        self._dim = 3 + 12 + self._n_head
+        self._n_cmd = 0 if cfg.command_name else 3
+        self._dim = self._n_cmd + 12 + self._n_head
         self._raw = torch.zeros(n, self._dim, device=dev)
         self._processed = torch.zeros(n, self._dim, device=dev)
         self.cmd = torch.zeros(n, 3, device=dev)              # scaled velocity command
@@ -143,7 +146,12 @@ class FrozenStudentResidualAction(ActionTerm):
         self._raw[:] = actions
         a = actions.clamp(-1.0, 1.0)
         self._processed[:] = a
-        self.cmd = a[:, :3] * self._scale
+        if cfg.command_name:
+            c = self._env.command_manager.get_command(cfg.command_name)[:, :3]
+            self.cmd = torch.maximum(torch.minimum(c, self._scale), -self._scale)
+        else:
+            self.cmd = a[:, :3] * self._scale
+        i = self._n_cmd
         frame = self._frame()
         fresh = self._fresh
         self._hist = torch.roll(self._hist, shifts=-1, dims=1)
@@ -154,10 +162,10 @@ class FrozenStudentResidualAction(ActionTerm):
         with torch.inference_mode():
             out = self._policy(stack_term_major(self._hist))
         self.student_out = out.clone()
-        self.residual = cfg.residual_scale * a[:, 3:15]
+        self.residual = cfg.residual_scale * a[:, i:i + 12]
         self._leg_targets = self._default12 + (out + self.residual).clamp(-1.0, 1.0)
         if cfg.head:
-            self._head_targets = self._default_head + cfg.head_scale * a[:, 15:17]
+            self._head_targets = self._default_head + cfg.head_scale * a[:, i + 12:i + 14]
 
     def apply_actions(self) -> None:
         self._asset.set_joint_position_target(self._leg_targets, joint_ids=self._leg_ids.to(torch.int32))
@@ -182,3 +190,4 @@ class FrozenStudentResidualActionCfg(ActionTermCfg):
     residual_scale: float = 0.1
     head: bool = True
     head_scale: float = 1.0
+    command_name: str | None = None

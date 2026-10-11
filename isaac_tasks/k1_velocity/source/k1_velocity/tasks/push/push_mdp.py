@@ -137,6 +137,7 @@ def _state(env: ManagerBasedRLEnv) -> SimpleNamespace:
             goal_pos=torch.zeros((n, 3), device=dev),
             goal_quat=ident.repeat(n, 1).clone(),
             goal_dist_max=0.3,             # curriculum-owned (m)
+            box_r=None,                    # (lo, hi) robot->box spawn radius, box_dist_curriculum-owned
             yaw_cap=math.radians(30.0),    # curriculum-owned (rad)
             # fresh spawn pose of the CURRENT episode (world), read by the
             # wrist reset - box.data may still hold the previous pose until
@@ -469,6 +470,8 @@ def reset_box(env: ManagerBasedRLEnv, env_ids: torch.Tensor,
     """
     st = _state(env)
     n, dev = len(env_ids), env.device
+    if st.box_r is not None:                             # box_dist_curriculum overrides the cfg range
+        r_range = st.box_r
     # --- box spawn: annulus r in [0.9, 1.4], full circle, full yaw
     r = r_range[0] + (r_range[1] - r_range[0]) * torch.rand(n, device=dev)
     phi = phi_range[0] + (phi_range[1] - phi_range[0]) * torch.rand(n, device=dev)
@@ -532,6 +535,17 @@ def goal_dist_curriculum(env: ManagerBasedRLEnv, env_ids, start_iter: int = 200,
     frac = min(max((iteration - start_iter) / span, 0.0), 1.0)
     st.goal_dist_max = 0.3 + (d_max - 0.3) * frac
     return st.goal_dist_max
+
+
+def box_dist_curriculum(env: ManagerBasedRLEnv, env_ids, start_iter: int = 200,
+                        end_iter: int = 1800, r0: tuple[float, float] = (0.75, 0.9),
+                        r1: tuple[float, float] = (0.9, 1.8), steps_per_iter: int = 24) -> float:
+    """Robot->box spawn radius range r0 -> r1 (linear in iterations, like goal_dist)."""
+    st = _state(env)
+    iteration = (env.sim.get_physics_step_count() // env.cfg.decimation) / steps_per_iter
+    frac = min(max((iteration - start_iter) / max(end_iter - start_iter, 1), 0.0), 1.0)
+    st.box_r = (r0[0] + (r1[0] - r0[0]) * frac, r0[1] + (r1[1] - r0[1]) * frac)
+    return st.box_r[1]
 
 
 def goal_yaw_curriculum(env: ManagerBasedRLEnv, env_ids, start_iter: int = 1800,
@@ -726,6 +740,67 @@ def box_goal_progress(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torc
     prog = (st.prev_goal_dist - cur) / st.half_extents.mean(-1).clamp(min=0.2)
     st.prev_goal_dist = cur
     return prog
+
+
+def box_goal_progress_rate(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
+    """box_goal_progress per SECOND (metres of centroid error closed / s).
+
+    The reward manager multiplies every term by dt, so the per-step telescoping form
+    paid only 0.02 x weight x (distance / half-extent) over a whole episode -- too
+    small to compete with anything. Dividing by step_dt makes the episode total
+    weight x (distance closed) in metres, independent of dt.
+    """
+    st = _state(env)
+    cur = (box_corners_base(env, asset_name).mean(1) - goal_corners_base(env, asset_name).mean(1)).norm(dim=-1)
+    prog = (st.prev_goal_dist - cur) / env.step_dt
+    st.prev_goal_dist = cur
+    return prog
+
+
+def box_goal_near(env: ManagerBasedRLEnv, std: float = 0.5) -> torch.Tensor:
+    """exp(-|box centre - goal centre|_xy / std): dense pull that peaks at the goal."""
+    st = _state(env)
+    d = (env.scene["box"].data.root_pos_w.torch[:, :2] - st.goal_pos[:, :2]).norm(dim=-1)
+    return torch.exp(-d / std)
+
+
+def goal_reached_centroid(env: ManagerBasedRLEnv, err_thresh: float = 0.15,
+                          hold_s: float = 0.5) -> torch.Tensor:
+    """Success on box POSITION only: centre within err_thresh of the goal for hold_s.
+
+    Same success_hold bookkeeping as goal_reached (success_bonus reads it), but the
+    goal yaw is ignored: the simplified task is "bring the box to the goal".
+    """
+    st = _state(env)
+    d = (env.scene["box"].data.root_pos_w.torch[:, :2] - st.goal_pos[:, :2]).norm(dim=-1)
+    st.success_hold = torch.where(d < err_thresh, st.success_hold + env.step_dt,
+                                  torch.zeros_like(st.success_hold))
+    return st.success_hold >= hold_s
+
+
+def robot_fallen(env: ManagerBasedRLEnv, asset_name: str = "robot", min_z: float = 0.30,
+                 limit_angle: float = 0.8) -> torch.Tensor:
+    """Real fall only: trunk below min_z or tilted past limit_angle (rad).
+
+    Replaces height_below_command (z < H* - 5 cm) as the termination: that fired on
+    any squat lag behind the commanded height, and in MAPPO it ended 98.7 % of
+    episodes after ~8 steps.
+    """
+    robot = env.scene[asset_name]
+    z = robot.data.root_pos_w.torch[:, 2]
+    g = robot.data.projected_gravity_b
+    g = g.torch if hasattr(g, "torch") else g
+    tilt = torch.acos((-g[:, 2]).clamp(-1.0, 1.0))
+    return (z < min_z) | (tilt > limit_angle)
+
+
+def term_fired(env: ManagerBasedRLEnv, term_names: list[str]) -> torch.Tensor:
+    """1.0 where any of the named termination terms fired this step."""
+    tm = env.termination_manager
+    out = torch.zeros(env.num_envs, device=env.device)
+    for name in term_names:
+        out = torch.maximum(out, tm.get_term(name).float())
+    return out
 
 
 def box_vel_toward_goal(env: ManagerBasedRLEnv) -> torch.Tensor:

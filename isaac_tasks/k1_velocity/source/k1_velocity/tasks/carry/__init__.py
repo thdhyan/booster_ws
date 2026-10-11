@@ -1,10 +1,12 @@
 """K1 box-carry (P7): walk to a ground goal holding a box welded between both forearms.
 
-Box width 0.25-0.40 m and mass 1-8 kg are randomised per env at USD time; two
-FixedJoints weld it to the forearm stub tips (carry_mdp). The actor is decoupled:
+Box width 0.25-0.40 m is randomised per env at USD time; two FixedJoints weld it to
+the forearm stub tips (carry_mdp). Mass is resampled per reset, U(1, hi) with hi
+2 -> 8 kg following the goal-radius curriculum. The actor is decoupled:
 one MLP drives the 12 leg joints, another the 8 arm joints (decoupled_policy).
-Goal: 1-4 m away in any direction; success = trunk within 0.25 m for 1 s, shown as
-a faint red cube that turns green while the robot is inside it (carry_command).
+Goal: up to 1 -> 10 m away (curriculum) in any direction; success = trunk within
+0.25 m for 1 s, shown as a ghost of the carried box plus a 0.25 m disc, red, green
+while the robot is inside (carry_command).
 """
 import gymnasium as gym
 

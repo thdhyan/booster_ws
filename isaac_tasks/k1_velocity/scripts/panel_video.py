@@ -40,9 +40,17 @@ def set_clean_render(spp: int = 8) -> None:
 
 
 class PanelCameras:
-    """Replicator RGB cameras posed from world-space eye/target pairs."""
+    """Replicator RGB cameras posed from world-space eye/target pairs.
 
-    def __init__(self, names=("overview", "top_down", "follow", "side"), size=(1920, 1080), focal_length=16.0):
+    ``heads`` adds one robot-eye camera per entry (key ``""`` or ``"_robot_1"``...):
+    camera ``head<key>`` feeds two panels, ``head_rgb<key>`` and ``head_depth<key>``
+    (distance to image plane, 0-HEAD_DEPTH_MAX m, near = bright).
+    """
+
+    HEAD_DEPTH_MAX = 6.0
+
+    def __init__(self, names=("overview", "top_down", "follow", "side"), size=(1920, 1080), focal_length=16.0,
+                 heads=(), head_focal_length=10.0):
         import omni.replicator.core as rep
         import omni.usd
         from pxr import Gf, UsdGeom
@@ -52,24 +60,33 @@ class PanelCameras:
         self._stage = omni.usd.get_context().get_stage()
         self._ops = {}
         self._annotators = {}
+        self._depth = set()
         self._render_products = []
-        self.names = tuple(names)
-        for index, name in enumerate(self.names):
-            path = f"/Visuals/K1DebugCams/{name}"
+        panels = list(names)
+        cams = [(name, focal_length, {"rgb": name}) for name in names]
+        for key in heads:
+            cams.append((f"head{key}", head_focal_length,
+                         {"rgb": f"head_rgb{key}", "distance_to_image_plane": f"head_depth{key}"}))
+            panels += [f"head_rgb{key}", f"head_depth{key}"]
+            self._depth.add(f"head_depth{key}")
+        self.names = tuple(panels)
+        for cam_name, focal, outputs in cams:
+            path = f"/Visuals/K1DebugCams/{cam_name}"
             camera = UsdGeom.Camera.Define(self._stage, path)
-            camera.CreateFocalLengthAttr(focal_length)
+            camera.CreateFocalLengthAttr(focal)
             camera.CreateClippingRangeAttr(Gf.Vec2f(0.05, 500.0))
             xform = UsdGeom.Xformable(camera)
             xform.ClearXformOpOrder()
-            self._ops[name] = xform.AddTransformOp()
+            self._ops[cam_name] = xform.AddTransformOp()
             product = rep.create.render_product(path, size)
-            annotator = rep.AnnotatorRegistry.get_annotator("rgb", device="cpu")
-            annotator.attach([product])
+            for kind, panel in outputs.items():
+                annotator = rep.AnnotatorRegistry.get_annotator(kind, device="cpu")
+                annotator.attach([product])
+                self._annotators[panel] = annotator
             self._render_products.append(product)
-            self._annotators[name] = annotator
 
     def set_views(self, views) -> None:
-        """Pose cameras from ``[(name, eye, target), ...]``."""
+        """Pose cameras from ``[(name, eye, target), ...]`` (head cameras: ``head<key>``)."""
         Gf = self._Gf
         for name, eye, target in views:
             if name not in self._ops:
@@ -87,6 +104,15 @@ class PanelCameras:
             raw = raw.get("data")
         if raw is None:
             return None
+        if name in self._depth:
+            d = np.asarray(raw, dtype=np.float32)
+            if d.ndim == 3:
+                d = d[:, :, 0]
+            if d.ndim != 2 or d.size == 0:
+                return None
+            d = np.nan_to_num(d, nan=self.HEAD_DEPTH_MAX, posinf=self.HEAD_DEPTH_MAX)
+            v = (255.0 * (1.0 - np.clip(d / self.HEAD_DEPTH_MAX, 0.0, 1.0))).astype(np.uint8)
+            return np.repeat(v[:, :, None], 3, axis=2)
         raw = np.asarray(raw, dtype=np.uint8)
         return raw if raw.ndim == 3 else None
 

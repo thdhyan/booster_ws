@@ -2,6 +2,8 @@
 
 from isaaclab.utils.configclass import configclass
 
+from isaaclab_rl.rsl_rl import RslRlMLPModelCfg
+
 from .rsl_rl_ppo_cfg import K1VelocityPPOTeacherRunnerCfg
 
 
@@ -19,3 +21,23 @@ class K1SquatPPOTeacherRunnerCfg(K1VelocityPPOTeacherRunnerCfg):
 
     experiment_name = "k1_squat_teacher"
     run_name = "k1_squat_teacher"
+
+
+@configclass
+class K1SquatResidualPPORunnerCfg(K1SquatPPOTeacherRunnerCfg):
+    """Squat residual over the frozen velocity student (squat_residual_env_cfg).
+
+    Smaller initial std: the residual is added to a working gait, so std 1.0 would
+    start by kicking the legs 0.5 rad at random.
+    """
+
+    max_iterations = 6000
+    experiment_name = "k1_squat_residual"
+    run_name = "k1_squat_residual"
+
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[512, 256, 128],
+        activation="elu",
+        obs_normalization=False,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.3, std_type="log"),
+    )
