@@ -236,7 +236,6 @@ class Hud:
         return np.asarray(img)
 
 
-@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 class _OneRobotView:
     """What OnPolicyRunner reads at construction, shaped like ONE robot of a multi-robot env.
 
@@ -261,6 +260,7 @@ class _OneRobotView:
         return self._td({g: obs[f"{g}_0"] for g in self._groups}, batch_size=[self.num_envs])
 
 
+@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     import inspect
 
