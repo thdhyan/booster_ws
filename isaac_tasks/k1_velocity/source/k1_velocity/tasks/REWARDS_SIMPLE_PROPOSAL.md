@@ -3,6 +3,8 @@
 Status: approved by the user and implemented 2026-10-11 (commit 03f5ebe). Carry uses option A.
 One change from the proposal: carry keeps `joint_deviation_arms` (−0.5), which holds the arms at the per-env
 hold pose.
+Second change: carry `stand_hold` is 5.0, not 1.0. At 1.0 the regularisers outweighed it, so the warm start
+learned that falling was cheaper than surviving (16:08 relaunch, 97 % falls).
 Push (single `Isaac-Push-Simple-K1-v0` and MAPPO) already uses the simplified set.
 
 The rule is the same as for push simple:
@@ -70,7 +72,7 @@ Carry v2 design) and drops them.
 |---|---|---|
 | `goal_progress` (new: metres closed toward the goal per s, × `hold_quality`) | 5.0 | 1. carry the box to the goal; replaces goal_coarse/fine tanh + velocity tracking |
 | `goal_reached` (× `reach_scale`) | 500 | success bonus (× dt = +10) |
-| `stand_hold` (`hold_quality`) | 1.0 | 2. box at the hold spot, trunk upright |
+| `stand_hold` (`hold_quality`) | 5.0 (proposed 1.0) | 2. box at the hold spot, trunk upright |
 | `termination_penalty` (fall + `weld_broken`) | −500 | do not fall, do not drop the box |
 | `weld_error` | −10.0 | box stays in the forearms |
 | `box_tilt` | −2.0 | box level |

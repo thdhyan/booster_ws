@@ -168,8 +168,10 @@ class K1CarryRewardsCfg:
     # 1. carry the box to the goal (gated by hold quality in __post_init__)
     goal_progress = RewTerm(func=carry_mdp.goal_progress_rate, weight=5.0)       # 5 per metre closed
     goal_reached = RewTerm(func=carry_mdp.goal_reached, weight=500.0, params={"full_radius": 1.0})  # x dt = +10
-    # 2. box at the hold spot, trunk upright
-    stand_hold = RewTerm(func=carry_mdp.stand_hold, weight=1.0, params=dict(_HOLD))
+    # 2. box at the hold spot, trunk upright. 5.0, not 1.0: this is the only per-step
+    # positive term, and at 1.0 the regularisers outweighed it, so falling (-10 once) beat
+    # surviving (warm start 16:08 fell in 97 % of episodes)
+    stand_hold = RewTerm(func=carry_mdp.stand_hold, weight=5.0, params=dict(_HOLD))
     # 3. do not fall / do not drop the box (x dt = -10); carry has no success termination
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-500.0)
     weld_error = RewTerm(func=carry_mdp.weld_error_l1, weight=-10.0)
