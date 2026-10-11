@@ -15,10 +15,14 @@ Usage (container, from the clone root):
         --num_envs 2048 --max_iterations 3000 --headless \
         --checkpoint logs/rsl_rl/p6_push/<run>/model_<N>.pt
 Checkpoints: logs/skrl/p6_push_mappo/<timestamp>/checkpoints/agent_<step>.pt
+
+skrl: the thdhyan/skrl fork (2.1 API). On zz-bw it is a clone at /tmp/skrl inside the
+container ($S/tmp/skrl on the host), put on sys.path below; elsewhere the installed skrl.
 """
 
 import argparse
 import os
+import sys
 
 from isaaclab.app import AppLauncher
 
@@ -37,6 +41,9 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 # -------- Everything below runs AFTER Isaac Sim is up --------
+_SKRL_FORK = os.environ.get("K1_SKRL_PATH", "/tmp/skrl")
+if os.path.isdir(os.path.join(_SKRL_FORK, "skrl")):
+    sys.path.insert(0, _SKRL_FORK)
 from datetime import datetime
 
 import gymnasium as gym
@@ -46,7 +53,7 @@ import torch.nn as nn
 from skrl.envs.wrappers.torch.isaaclab_envs import IsaacLabMultiAgentWrapper
 from skrl.memories.torch import RandomMemory
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
-from skrl.multi_agents.torch.mappo import MAPPO, MAPPO_DEFAULT_CONFIG
+from skrl.multi_agents.torch.mappo import MAPPO, MAPPO_CFG
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 from skrl.trainers.torch import SequentialTrainer
@@ -65,24 +72,28 @@ def _mlp(n_in: int, n_out: int) -> nn.Sequential:
 
 
 class Policy(GaussianMixin, Model):
+    """Own observations (teacher_k) -> action mean; state-independent log std."""
+
     def __init__(self, observation_space, action_space, device):
-        Model.__init__(self, observation_space, action_space, device)
+        Model.__init__(self, observation_space=observation_space, action_space=action_space, device=device)
         GaussianMixin.__init__(self, clip_actions=False, clip_log_std=True,
                                min_log_std=-5.0, max_log_std=1.0)
         self.net = _mlp(self.num_observations, self.num_actions)
         self.log_std_parameter = nn.Parameter(torch.zeros(self.num_actions))
 
-    def compute(self, inputs, role):
-        return self.net(inputs["states"]), self.log_std_parameter, {}
+    def compute(self, inputs, role=""):
+        return self.net(inputs["observations"]), {"log_std": self.log_std_parameter}
 
 
 class Value(DeterministicMixin, Model):
-    def __init__(self, observation_space, action_space, device):
-        Model.__init__(self, observation_space, action_space, device)
-        DeterministicMixin.__init__(self, clip_actions=False)
-        self.net = _mlp(self.num_observations, 1)
+    """Centralized critic: global state (every robot's teacher_k) -> value."""
 
-    def compute(self, inputs, role):
+    def __init__(self, state_space, action_space, device):
+        Model.__init__(self, state_space=state_space, action_space=action_space, device=device)
+        DeterministicMixin.__init__(self, clip_actions=False)
+        self.net = _mlp(self.num_states, 1)
+
+    def compute(self, inputs, role=""):
         return self.net(inputs["states"]), {}
 
 
@@ -112,10 +123,10 @@ def warm_start(agent, path, agents, obs_dim):
                 val.net[i].weight.copy_(critic[f"mlp.{i}.weight"])
                 val.net[i].bias.copy_(critic[f"mlp.{i}.bias"])
             a_n, c_n = "obs_normalizer.", "obs_normalizer."
-            _load_scaler(agent._state_preprocessor[uid], actor[a_n + "_mean"][0],
+            _load_scaler(agent._observation_preprocessor[uid], actor[a_n + "_mean"][0],
                          actor[a_n + "_var"][0], actor[a_n + "count"])
             n = len(agents)
-            _load_scaler(agent._shared_state_preprocessor[uid],
+            _load_scaler(agent._state_preprocessor[uid],
                          critic[c_n + "_mean"][0].repeat(n), critic[c_n + "_var"][0].repeat(n),
                          critic[c_n + "count"])
     print(f"[INFO] WARM_START {len(agents)} MAPPO agents from {path} "
@@ -143,30 +154,28 @@ def main():
         memories[uid] = RandomMemory(memory_size=args_cli.rollouts, num_envs=env.num_envs, device=device)
 
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_p6_push_mappo"
-    cfg = MAPPO_DEFAULT_CONFIG.copy()
-    cfg.update({
+    cfg = {
         "rollouts": args_cli.rollouts,
         "learning_epochs": 5,
         "mini_batches": 4,
         "discount_factor": 0.99,
-        "lambda": 0.95,
+        "gae_lambda": 0.95,
         "learning_rate": 1.0e-4,
         "learning_rate_scheduler": KLAdaptiveLR,
         "learning_rate_scheduler_kwargs": {"kl_threshold": 0.01},
         "grad_norm_clip": 1.0,
         "ratio_clip": 0.2,
         "value_clip": 0.2,
-        "clip_predicted_values": True,
         "entropy_loss_scale": 0.0,     # actions clamped in the action terms; see K1PushPPORunnerCfg
         "value_loss_scale": 1.0,
         "time_limit_bootstrap": True,
+        "observation_preprocessor": RunningStandardScaler,
+        "observation_preprocessor_kwargs": {"size": env.observation_space(agents[0]), "device": device},
         "state_preprocessor": RunningStandardScaler,
-        "state_preprocessor_kwargs": {"size": env.observation_space(agents[0]), "device": device},
-        "shared_state_preprocessor": RunningStandardScaler,
-        "shared_state_preprocessor_kwargs": {"size": env.state_space(agents[0]), "device": device},
+        "state_preprocessor_kwargs": {"size": env.state_space(agents[0]), "device": device},
         "value_preprocessor": RunningStandardScaler,
         "value_preprocessor_kwargs": {"size": 1, "device": device},
-    })
+    }
     cfg["experiment"] = {
         "directory": os.path.abspath(os.path.join("logs", "skrl", "p6_push_mappo")),
         "experiment_name": stamp,
@@ -177,8 +186,8 @@ def main():
         "wandb_kwargs": {"project": "booster_k1_soccer_hrl", "name": stamp},
     }
     agent = MAPPO(possible_agents=agents, models=models, memories=memories,
-                  observation_spaces=env.observation_spaces, action_spaces=env.action_spaces,
-                  device=device, cfg=cfg, shared_observation_spaces=env.state_spaces)
+                  observation_spaces=env.observation_spaces, state_spaces=env.state_spaces,
+                  action_spaces=env.action_spaces, device=device, cfg=MAPPO_CFG(**cfg))
 
     # Isaac Lab episode stats (Episode_Reward/*, Episode_Termination/*) -> skrl tracking
     def _log(log):
@@ -186,8 +195,9 @@ def main():
             agent.track_data(f"Info / {key}", float(v) if not torch.is_tensor(v) else v.float().mean().item())
     adapter.log_sink = _log
 
+    # environment_info: extras["log"] goes through log_sink above (it also takes floats)
     trainer = SequentialTrainer(cfg={"timesteps": args_cli.max_iterations * args_cli.rollouts,
-                                     "headless": True, "environment_info": "log"},
+                                     "headless": True, "environment_info": "none"},
                                 env=env, agents=agent)
     if args_cli.checkpoint:
         warm_start(agent, os.path.abspath(args_cli.checkpoint), agents,

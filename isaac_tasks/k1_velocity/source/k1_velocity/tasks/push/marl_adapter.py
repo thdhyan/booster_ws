@@ -52,8 +52,8 @@ class MultiRobotMARLAdapter:
         self._obs = obs
         return {a: obs[f"{self.group}_{k}"] for k, a in enumerate(self.possible_agents)}
 
-    def reset(self):
-        obs, info = self.env.reset()
+    def reset(self, seed=None, options=None):
+        obs, info = self.env.reset(seed=seed, options=options)
         return self._per_agent(obs), info
 
     def step(self, actions):
