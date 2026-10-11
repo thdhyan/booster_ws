@@ -255,8 +255,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
         env = multi_agent_to_single_agent(env)
 
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run,
-                                          agent_cfg.load_checkpoint)
+        # an explicit --checkpoint is loaded as given: it may live under another
+        # experiment (push_multi warm-starts from p6_push), whose log root
+        # get_checkpoint_path would scan and not find
+        if args_cli.checkpoint:
+            resume_path = os.path.abspath(args_cli.checkpoint)
+        else:
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run,
+                                              agent_cfg.load_checkpoint)
 
     if record:
         video_kwargs = {
