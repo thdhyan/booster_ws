@@ -169,10 +169,14 @@ def main():
         "entropy_loss_scale": 0.0,     # actions clamped in the action terms; see K1PushPPORunnerCfg
         "value_loss_scale": 1.0,
         "time_limit_bootstrap": True,
+        # rsl_rl's normalizer does not clip; skrl's default (5 sigma) would distort the warm start.
+        # play_record.py --mappo assumes the same clip (MAPPO_OBS_CLIP).
         "observation_preprocessor": RunningStandardScaler,
-        "observation_preprocessor_kwargs": {"size": env.observation_space(agents[0]), "device": device},
+        "observation_preprocessor_kwargs": {"size": env.observation_space(agents[0]), "device": device,
+                                            "clip_threshold": 1.0e3},
         "state_preprocessor": RunningStandardScaler,
-        "state_preprocessor_kwargs": {"size": env.state_space(agents[0]), "device": device},
+        "state_preprocessor_kwargs": {"size": env.state_space(agents[0]), "device": device,
+                                      "clip_threshold": 1.0e3},
         "value_preprocessor": RunningStandardScaler,
         "value_preprocessor_kwargs": {"size": 1, "device": device},
     }

@@ -36,6 +36,9 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Play + record a K1 policy with HUD overlay.")
 parser.add_argument("--task", required=True, help="registered gym task id")
 parser.add_argument("--checkpoint", required=True, help="rsl_rl model_*.pt path")
+parser.add_argument("--mappo", action="store_true",
+                    help="multi-robot task: --checkpoint is a skrl MAPPO agent_*.pt (train_mappo.py), "
+                         "one separate policy per robot")
 parser.add_argument("--num_envs", type=int, default=4)
 parser.add_argument("--steps", type=int, default=750, help="control steps (~50 Hz -> 15 s @ 750)")
 parser.add_argument("--video_out", default="", help="output mp4 path")
@@ -236,6 +239,36 @@ class Hud:
         return np.asarray(img)
 
 
+def _load_mappo_actors(path, robot_names, device):
+    """skrl MAPPO checkpoint -> one deterministic actor per robot (mean action).
+
+    Mirrors train_mappo.py: obs scaler (running_mean/variance, clip MAPPO_OBS_CLIP) then
+    Linear-ELU MLP ``net``. Plain torch, so play_record does not need skrl.
+    """
+    MAPPO_OBS_CLIP = 1.0e3      # train_mappo.py's observation_preprocessor clip_threshold
+    ck = torch.load(os.path.abspath(path), map_location=device, weights_only=False)
+    actors = []
+    for uid in robot_names:
+        sd, sc = ck[uid]["policy"], ck[uid]["observation_preprocessor"]
+        idx = sorted({int(k.split(".")[1]) for k in sd if k.startswith("net.")})
+        layers = []
+        for j, i in enumerate(idx):
+            w = sd[f"net.{i}.weight"]
+            lin = torch.nn.Linear(w.shape[1], w.shape[0]).to(device)
+            lin.weight.data.copy_(w)
+            lin.bias.data.copy_(sd[f"net.{i}.bias"])
+            layers += [lin] + ([torch.nn.ELU()] if j < len(idx) - 1 else [])
+        net = torch.nn.Sequential(*layers).eval()
+        mean, std = sc["running_mean"].float(), sc["running_variance"].float().sqrt() + 1e-8
+
+        def act(x, net=net, mean=mean, std=std):
+            with torch.inference_mode():
+                return net(((x - mean) / std).clamp(-MAPPO_OBS_CLIP, MAPPO_OBS_CLIP))
+        actors.append(act)
+    print(f"[INFO] MAPPO: {len(actors)} separate policies from {path}")
+    return actors
+
+
 class _OneRobotView:
     """What OnPolicyRunner reads at construction, shaped like ONE robot of a multi-robot env.
 
@@ -366,7 +399,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     is_distill = getattr(agent_cfg.algorithm, "class_name", "PPO") == "Distillation"
     agent_cfg.max_iterations = 1
     agent_cfg_dict = agent_cfg.to_dict()
-    if is_distill:
+    if args_cli.mappo:
+        assert multi, "--mappo needs a multi-robot task"
+        policy, export_groups = None, []
+        mappo_actors = _load_mappo_actors(args_cli.checkpoint, robot_names, env.device)
+    elif is_distill:
         for key in ("stochastic", "init_noise_std", "noise_std_type",
                     "state_dependent_std"):
             for mk in ("student", "teacher"):
@@ -397,10 +434,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         print(f"[INFO] loading checkpoint: {args_cli.checkpoint}")
         runner.load(os.path.abspath(args_cli.checkpoint))
         export_groups = list(agent_cfg.obs_groups.get("actor", ["policy"]))
-    policy = runner.alg.get_policy()
-    policy.eval()
+    if not args_cli.mappo:
+        policy = runner.alg.get_policy()
+        policy.eval()
 
     def infer(obs):
+        if args_cli.mappo:
+            # separate per-robot policies, each on its own teacher_k; robot-major concat
+            return torch.cat([act(obs[f"teacher_{k}"]) for k, act in enumerate(mappo_actors)], dim=1)
         if is_distill:
             return policy({"policy": obs["policy"]})
         if multi:
