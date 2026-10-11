@@ -30,7 +30,7 @@ parser.add_argument("--rollouts", type=int, default=24)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--save_interval", type=int, default=100, help="iterations between checkpoints")
 parser.add_argument("--no_wandb", action="store_true")
-# NOTE: --checkpoint comes from AppLauncher
+parser.add_argument("--checkpoint", default=None, help="single-robot rsl_rl push .pt to warm-start every agent")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 app_launcher = AppLauncher(args_cli)

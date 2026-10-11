@@ -164,6 +164,11 @@ class TiledPanelRecorder:
 
         f = self.header_px
         lines = textwrap.wrap(status, width=max(40, int(grid.shape[1] / (0.55 * f)))) or [""]
+        # every frame must be the same size: fix the line count on the first frame (+1 spare)
+        if not hasattr(self, "_header_lines"):
+            self._header_lines = len(lines) + 1
+        n = self._header_lines
+        lines = (lines[:n - 1] + [" ".join(lines[n - 1:])] if len(lines) > n else lines) + [""] * (n - len(lines))
         height = (len(lines) * int(1.25 * f) + f) // 2 * 2   # even, for yuv420p
         header = Image.new("RGB", (grid.shape[1], height), (18, 18, 18))
         draw = ImageDraw.Draw(header)
