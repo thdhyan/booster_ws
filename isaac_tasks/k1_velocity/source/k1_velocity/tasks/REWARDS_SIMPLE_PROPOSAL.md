@@ -1,6 +1,8 @@
 # Simplified rewards for kick, track, carry, squat (proposal)
 
-Status: proposal, 2026-10-11. Nothing here is implemented yet; it needs the user's OK first.
+Status: approved by the user and implemented 2026-10-11 (commit 03f5ebe). Carry uses option A.
+One change from the proposal: carry keeps `joint_deviation_arms` (−0.5), which holds the arms at the per-env
+hold pose.
 Push (single `Isaac-Push-Simple-K1-v0` and MAPPO) already uses the simplified set.
 
 The rule is the same as for push simple:

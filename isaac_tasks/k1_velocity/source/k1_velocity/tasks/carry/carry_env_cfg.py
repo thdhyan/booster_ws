@@ -39,7 +39,6 @@ from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from k1_velocity.tasks.velocity.velocity_env_cfg import (
     K1_ARTICULATION_CFG,
-    CurriculumCfg,
     EventCfg,
     K1RoughSceneCfg,
     K1VelocityRoughEnvCfg,
@@ -214,9 +213,9 @@ class K1CarryEventCfg(EventCfg):
 
 
 @configclass
-class K1CarryCurriculumCfg(CurriculumCfg):
-    terrain_levels = None   # flat plane
-    velocity_range = None   # the goal command derives velocity; ranges stay fixed
+class K1CarryCurriculumCfg:
+    # only the goal radius: flat plane (no terrain levels), the goal command derives the
+    # velocity (no range widening), and the simplified rewards have no weight ramps
     # tier 3: the goal radius opens 1 -> 10 m in 0.5 m steps while < 8 % of resets are falls
     # (the box mass ceiling follows it, see K1CarryEventCfg.carry_mass)
     goal_radius = CurrTerm(
