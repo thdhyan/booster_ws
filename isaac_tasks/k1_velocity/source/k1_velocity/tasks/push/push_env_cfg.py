@@ -418,7 +418,8 @@ class K1PushEnvCfg(ManagerBasedRLEnvCfg):
         )
         # frozen-base obs parity: the height scanner must tick once per
         # control step, exactly like the velocity env the teacher trained in
-        self.scene.height_scanner.update_period = self.decimation * self.sim.dt
+        if self.scene.height_scanner is not None:   # multi-robot push has one per robot
+            self.scene.height_scanner.update_period = self.decimation * self.sim.dt
         # Diag A/B (arm-hold + reset-semantics hunt), PUSH_DIAG_STIFF_ARMS=1:
         # replicate the partial (home) env's reset/hold semantics, which the
         # frozen base trained against (its step-1 action is identical to

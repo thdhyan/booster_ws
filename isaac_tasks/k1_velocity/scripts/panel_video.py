@@ -315,6 +315,17 @@ class K1DebugMarkers:
         sphere.CreateDisplayOpacityAttr([0.45])
         return sphere
 
+    def mark(self, name, position, color=(1.0, 0.5, 0.05), radius=0.06) -> None:
+        """Place a named translucent sphere, creating it on first use (extra robots,
+        per-robot wrist targets)."""
+        from pxr import Gf, UsdGeom
+
+        if name not in self._xforms:
+            sphere = self._sphere(name, Gf.Vec3f(*color))
+            sphere.GetRadiusAttr().Set(radius)
+            self._xforms[name] = UsdGeom.Xformable(sphere)
+        self._translate(name, position)
+
     def _translate(self, name, position) -> None:
         xform = self._xforms[name]
         xform.ClearXformOpOrder()

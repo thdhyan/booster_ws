@@ -91,3 +91,15 @@ gym.register(
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushReachPPORunnerCfg",
     },
 )
+
+# Multi-robot push (M1): two K1s, one shared box, each robot driven by the trained
+# single-robot push policy (play_record.py --multi_robot stacks the teacher_k groups).
+gym.register(
+    id="Isaac-Push-Multi-K1-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.push.push_multi_env_cfg:K1PushMultiPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushPPORunnerCfg",
+    },
+)

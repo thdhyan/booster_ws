@@ -152,6 +152,28 @@ def _state(env: ManagerBasedRLEnv) -> SimpleNamespace:
     return st
 
 
+def _rstate(env: ManagerBasedRLEnv, asset_name: str = "robot") -> SimpleNamespace:
+    """Per-robot command state (h_cmd, last_vel_cmd).
+
+    ``"robot"`` is the single-robot env and keeps living in push_state, so every
+    existing term reads the same tensors as before. Extra robots (multi-robot push)
+    get their own namespace, otherwise two frozen bases would overwrite one H*.
+    """
+    if asset_name == "robot":
+        return _state(env)
+    table = getattr(env, "push_robot_state", None)
+    if table is None:
+        table = env.push_robot_state = {}
+    st = table.get(asset_name)
+    if st is None:
+        n, dev = env.num_envs, env.device
+        st = table[asset_name] = SimpleNamespace(
+            h_cmd=torch.full((n,), H_CMD_DEFAULT, device=dev),
+            last_vel_cmd=torch.zeros((n, 3), device=dev),
+        )
+    return st
+
+
 # ---------------------------------------------------------------------------
 # USD-time DR: per-env size + mass (read back after the built-ins write them)
 # ---------------------------------------------------------------------------
@@ -371,13 +393,14 @@ def box_corners_world(env: ManagerBasedRLEnv) -> torch.Tensor:
     return _corners_from_pose(box.data.root_pos_w.torch, box.data.root_quat_w.torch, st.half_extents)
 
 
-def _to_base(env: ManagerBasedRLEnv, pts_w: torch.Tensor, env_ids: torch.Tensor | None = None) -> torch.Tensor:
+def _to_base(env: ManagerBasedRLEnv, pts_w: torch.Tensor, env_ids: torch.Tensor | None = None,
+             asset_name: str = "robot") -> torch.Tensor:
     """(...,3) world points -> robot base frame (handles n points per env).
 
     Pass ``env_ids`` when ``pts_w`` rows are a subset of envs (reset events);
     otherwise the full-batch robot state would be broadcast against it.
     """
-    robot = env.scene["robot"]
+    robot = env.scene[asset_name]
     pos = robot.data.root_pos_w.torch
     quat = robot.data.root_quat_w.torch
     if env_ids is not None:
@@ -386,9 +409,9 @@ def _to_base(env: ManagerBasedRLEnv, pts_w: torch.Tensor, env_ids: torch.Tensor 
     return _rot_batch(quat, pts_w - pos[:, None, :], inverse=True)
 
 
-def box_corners_base(env: ManagerBasedRLEnv) -> torch.Tensor:
+def box_corners_base(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
     """(n,8,3) current box corners in the robot base frame."""
-    return _to_base(env, box_corners_world(env))
+    return _to_base(env, box_corners_world(env), asset_name=asset_name)
 
 
 def goal_corners_world(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -397,19 +420,19 @@ def goal_corners_world(env: ManagerBasedRLEnv) -> torch.Tensor:
     return _corners_from_pose(st.goal_pos, st.goal_quat, st.half_extents)
 
 
-def goal_corners_base(env: ManagerBasedRLEnv) -> torch.Tensor:
+def goal_corners_base(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
     """(n,8,3) goal corners in the robot base frame (fixed goal pose).
 
     v3 fix A1: v2 computed them as CURRENT box pose + goal_offset, so every
     corner term measured only the (env-owned) offset - pushing the box moved
     the goal along and the signal cancelled.
     """
-    return _to_base(env, goal_corners_world(env))
+    return _to_base(env, goal_corners_world(env), asset_name=asset_name)
 
 
-def wrist_positions_base(env: ManagerBasedRLEnv) -> torch.Tensor:
+def wrist_positions_base(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
     """(n,2,3) left/right wrist (hand-link) positions in the base frame."""
-    robot = env.scene["robot"]
+    robot = env.scene[asset_name]
     names = [n.split("/")[-1] for n in robot.body_names]
     idx = [names.index(LEFT_EE), names.index(RIGHT_EE)]
     pos_w = robot.data.body_pos_w[:, idx, :]
@@ -433,7 +456,12 @@ def _write_box_pose(env: ManagerBasedRLEnv, env_ids: torch.Tensor, pos: torch.Te
     box.write_root_velocity_to_sim_index(root_velocity=root[:, 7:], env_ids=env_ids)
 
 
-def reset_box(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
+def reset_box(env: ManagerBasedRLEnv, env_ids: torch.Tensor,
+              r_range: tuple[float, float] = (0.9, 1.4),
+              phi_range: tuple[float, float] = (-math.pi, math.pi),
+              yaw_range: tuple[float, float] = (-math.pi, math.pi),
+              goal_psi_range: tuple[float, float] = (-math.pi, math.pi),
+              workspace_r: float = GOAL_WORKSPACE_R) -> None:
     """v3: annulus spawn (full direction + full yaw) + FIXED episode goal.
 
     Fixes A1/A2 (goal was an env-owned integrator advanced under the box) and
@@ -442,9 +470,9 @@ def reset_box(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     st = _state(env)
     n, dev = len(env_ids), env.device
     # --- box spawn: annulus r in [0.9, 1.4], full circle, full yaw
-    r = 0.9 + 0.5 * torch.rand(n, device=dev)
-    phi = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.pi
-    box_yaw = (torch.rand(n, device=dev) * 2.0 - 1.0) * math.pi
+    r = r_range[0] + (r_range[1] - r_range[0]) * torch.rand(n, device=dev)
+    phi = phi_range[0] + (phi_range[1] - phi_range[0]) * torch.rand(n, device=dev)
+    box_yaw = yaw_range[0] + (yaw_range[1] - yaw_range[0]) * torch.rand(n, device=dev)
     pos = torch.zeros((n, 3), device=dev)
     pos[:, 0] = r * torch.cos(phi)
     pos[:, 1] = r * torch.sin(phi)
@@ -460,10 +488,10 @@ def reset_box(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     cap = st.goal_dist_max
     d = 0.3 + (cap - 0.3) * torch.rand(n, device=dev)    # [0.3, cap]
     k_dir = 4
-    psi = (torch.rand(n, k_dir, device=dev) * 2.0 - 1.0) * math.pi
+    psi = goal_psi_range[0] + (goal_psi_range[1] - goal_psi_range[0]) * torch.rand(n, k_dir, device=dev)
     gx = pos[:, 0:1] + d[:, None] * torch.cos(psi)       # (n,K)
     gy = pos[:, 1:2] + d[:, None] * torch.sin(psi)
-    feas = (gx * gx + gy * gy).sqrt() <= GOAL_WORKSPACE_R
+    feas = (gx * gx + gy * gy).sqrt() <= workspace_r
     idx = torch.where(
         feas.any(dim=1),
         feas.float().argmax(dim=1),                      # first feasible dir
@@ -568,15 +596,20 @@ class WristTargetCommandCfg(CommandTermCfg):
     resampling_time_range = (1.0e9, 1.0e9)
 
 
-def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
+def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor, asset_name: str = "robot",
+                        command_name: str = "wrist_target", follow_robot: bool = False) -> None:
     """Writes 2x3 contact targets on the box's near face at mid height.
 
     v3 (annulus spawn): the near face is derived from the FRESH spawn pose
     stored by reset_box (box.data may still hold the previous episode's pose
     until the next physics fetch), for ANY spawn direction/yaw - v2 hard-coded
     the +x face, which points away from the robot for half the new spawns.
+
+    ``follow_robot`` (multi-robot push): slide the contact pair along the face to
+    the robot's own lateral position, so robots side by side on one face get
+    separate slots instead of all reaching for the face centre.
     """
-    cmd_term = env.command_manager.get_term("wrist_target")
+    cmd_term = env.command_manager.get_term(command_name)
     if cmd_term is None:
         return
     st = _state(env)
@@ -584,7 +617,7 @@ def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     pos = st.spawn_pos[env_ids]                       # (n,3) world
     quat = st.spawn_quat[env_ids]                     # (n,4) xyzw
     half = st.half_extents[env_ids]                   # (n,3)
-    robot_pos = env.scene["robot"].data.root_pos_w.torch[env_ids]
+    robot_pos = env.scene[asset_name].data.root_pos_w.torch[env_ids]
     # box -> robot direction expressed in the BOX frame (horizontal)
     rel_box = _rot_batch(quat, robot_pos - pos, inverse=True)   # (n,3)
     dir_b = rel_box[:, :2]
@@ -603,6 +636,12 @@ def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     # two contact points +-0.35 half-extent along the horizontal tangent
     tang = torch.cat([-dir_b[:, 1:2], dir_b[:, 0:1]], dim=-1)              # (n,2)
     off = 0.35 * tang * torch.cat([hx[:, None], hy[:, None]], dim=-1)      # (n,2)
+    if follow_robot:
+        # robot's lateral coordinate along the face, kept 0.35 h inside the edge
+        h_t = (tang.abs() * torch.cat([hx[:, None], hy[:, None]], dim=-1)).sum(-1)
+        s_lat = (rel_box[:, :2] * tang).sum(-1)
+        s_lat = torch.maximum(torch.minimum(s_lat, 0.6 * h_t), -0.6 * h_t)
+        face[:, 0:2] += tang * s_lat[:, None]
     p1 = face.clone()
     p1[:, 0:2] += off
     p2 = face.clone()
@@ -614,7 +653,7 @@ def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     # NOTE: pass the (n,2,3) batch directly - _to_base subtracts pos[:, None, :]
     # per env; flattening to (2n,3) first would broadcast against the (n,1,3)
     # robot state and produce (n,2n,3).
-    tgt = _to_base(env, tgt_w, env_ids=env_ids)                                # (n,2,3)
+    tgt = _to_base(env, tgt_w, env_ids=env_ids, asset_name=asset_name)         # (n,2,3)
     # reachability clamps in the robot base frame (unchanged from v2)
     tgt[..., 0] = tgt[..., 0].clamp(0.30, 0.75)
     tgt[..., 1] = tgt[..., 1].clamp(-0.45, 0.45)
@@ -625,17 +664,17 @@ def reset_wrist_targets(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
 # ---------------------------------------------------------------------------
 # observations (teacher group = fully observable by design)
 # ---------------------------------------------------------------------------
-def push_box_teacher(env: ManagerBasedRLEnv) -> torch.Tensor:
+def push_box_teacher(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
     """mass 1 | half-extents 3 | corners 24 | vel 6 | goal pose 7 |
     goal-box delta 3 | goal corners 24 = 68 (width unchanged from v2; the
     delta replaces v2's goal_offset, which no longer exists)."""
     from isaaclab.utils.math import quat_apply_inverse, quat_inv, quat_mul
 
     st = _state(env)
-    robot = env.scene["robot"]
+    robot = env.scene[asset_name]
     box = env.scene["box"]
-    corners_bf = box_corners_base(env).flatten(1)                            # (n,24)
-    goal_corners_bf = goal_corners_base(env).flatten(1)                      # (n,24)
+    corners_bf = box_corners_base(env, asset_name).flatten(1)                # (n,24)
+    goal_corners_bf = goal_corners_base(env, asset_name).flatten(1)          # (n,24)
     vel_bf = quat_apply_inverse(robot.data.root_quat_w.torch, box.data.root_lin_vel_w.torch - robot.data.root_lin_vel_w.torch)
     ang_bf = quat_apply_inverse(robot.data.root_quat_w.torch, box.data.root_ang_vel_w.torch)
     goal_pos_bf = quat_apply_inverse(
@@ -651,32 +690,39 @@ def push_box_teacher(env: ManagerBasedRLEnv) -> torch.Tensor:
     )
 
 
+def last_action_of(env: ManagerBasedRLEnv, action_names: list[str]) -> torch.Tensor:
+    """Raw actions of the named terms, concatenated: one robot's ``last_action``
+    when several robots share the action manager (multi-robot push)."""
+    am = env.action_manager
+    return torch.cat([am.get_term(n).raw_actions for n in action_names], dim=-1)
+
+
 # ---------------------------------------------------------------------------
 # rewards
 # ---------------------------------------------------------------------------
-def corner_goal_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
+def corner_goal_tracking(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
     """-mean_i ||corner_i - goal_corner_i||, normalized by box size.
 
     v3 (A1): against the FIXED goal pose this is fully policy-controllable -
     the heaviest term finally teaches box motion.
     """
     st = _state(env)
-    d = (box_corners_base(env) - goal_corners_base(env)).norm(dim=-1).mean(-1, keepdim=True)
+    d = (box_corners_base(env, asset_name) - goal_corners_base(env, asset_name)).norm(dim=-1).mean(-1, keepdim=True)
     return (-d / st.half_extents.mean(-1, keepdim=True).clamp(min=0.2)).squeeze(-1)
 
 
-def centroid_goal_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
+def centroid_goal_tracking(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
     """-||mean(current corners) - mean(goal corners)|| (corner centroid)."""
     st = _state(env)
-    d = (box_corners_base(env).mean(1) - goal_corners_base(env).mean(1)).norm(dim=-1, keepdim=True)
+    d = (box_corners_base(env, asset_name).mean(1) - goal_corners_base(env, asset_name).mean(1)).norm(dim=-1, keepdim=True)
     return (-d / st.half_extents.mean(-1, keepdim=True).clamp(min=0.2)).squeeze(-1)
 
 
-def box_goal_progress(env: ManagerBasedRLEnv) -> torch.Tensor:
+def box_goal_progress(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
     """Telescoping Delta(corner-centroid error); prev baseline is reset in
     the SAME metric/frame by reset_box (fixes A5)."""
     st = _state(env)
-    cur = (box_corners_base(env).mean(1) - goal_corners_base(env).mean(1)).norm(dim=-1)
+    cur = (box_corners_base(env, asset_name).mean(1) - goal_corners_base(env, asset_name).mean(1)).norm(dim=-1)
     prog = (st.prev_goal_dist - cur) / st.half_extents.mean(-1).clamp(min=0.2)
     st.prev_goal_dist = cur
     return prog
@@ -701,14 +747,15 @@ def box_spin_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
     return -w[:, :2].norm(dim=-1)
 
 
-def wrist_target_tracking(env: ManagerBasedRLEnv) -> torch.Tensor:
+def wrist_target_tracking(env: ManagerBasedRLEnv, asset_name: str = "robot",
+                          command_name: str = "wrist_target") -> torch.Tensor:
     """-max ||wrist_pos_base - commanded target|| over the two wrists (both must track)."""
-    pos_bf = wrist_positions_base(env)
-    tgt = env.command_manager.get_term("wrist_target").command.reshape(-1, 2, 3)
+    pos_bf = wrist_positions_base(env, asset_name)
+    tgt = env.command_manager.get_term(command_name).command.reshape(-1, 2, 3)
     return -(pos_bf - tgt).norm(dim=-1).max(-1).values
 
 
-def wrist_box_gap(env: ManagerBasedRLEnv) -> torch.Tensor:
+def wrist_box_gap(env: ManagerBasedRLEnv, asset_name: str = "robot") -> torch.Tensor:
     """(n,2) signed distance from each wrist to the box surface, 0 when inside.
 
     Computed in the BOX frame so the clamp uses the true half-extents regardless of
@@ -719,9 +766,9 @@ def wrist_box_gap(env: ManagerBasedRLEnv) -> torch.Tensor:
     from isaaclab.utils.math import quat_inv, quat_mul
 
     st = _state(env)
-    robot = env.scene["robot"]
-    wrist_bf = wrist_positions_base(env)                     # (n,2,3)
-    corners_bf = box_corners_base(env)                       # (n,8,3)
+    robot = env.scene[asset_name]
+    wrist_bf = wrist_positions_base(env, asset_name)         # (n,2,3)
+    corners_bf = box_corners_base(env, asset_name)           # (n,8,3)
     center = corners_bf.mean(1, keepdim=True)                # (n,1,3)
     half = st.half_extents[:, None, :]                       # (n,1,3)
     box_q_bf = quat_mul(quat_inv(robot.data.root_quat_w.torch), env.scene["box"].data.root_quat_w.torch)
@@ -730,7 +777,8 @@ def wrist_box_gap(env: ManagerBasedRLEnv) -> torch.Tensor:
     return (wrist_box - inside).norm(dim=-1)                  # (n,2)
 
 
-def wrist_box_proximity(env: ManagerBasedRLEnv, coarse: float = 0.30, fine: float = 0.05) -> torch.Tensor:
+def wrist_box_proximity(env: ManagerBasedRLEnv, coarse: float = 0.30, fine: float = 0.05,
+                        asset_name: str = "robot") -> torch.Tensor:
     """two-scale exp(-max wrist-to-box gap / scale), summed (0..2).
 
     Scored on the FARTHER wrist: with the mean, one wrist on the box earned most of
@@ -742,34 +790,34 @@ def wrist_box_proximity(env: ManagerBasedRLEnv, coarse: float = 0.30, fine: floa
     each wrist to the box surface (0 inside), computed in the BOX frame so
     the clamp uses the true half-extents regardless of yaw.
     """
-    g = wrist_box_gap(env).max(-1).values
+    g = wrist_box_gap(env, asset_name).max(-1).values
     return torch.exp(-g / coarse) + torch.exp(-g / fine)
 
 
-def track_cmd_lin_vel_exp(env: ManagerBasedRLEnv, std: float = 0.5) -> torch.Tensor:
+def track_cmd_lin_vel_exp(env: ManagerBasedRLEnv, std: float = 0.5, asset_name: str = "robot") -> torch.Tensor:
     from isaaclab.utils.math import quat_apply_inverse
 
-    st = _state(env)
-    robot = env.scene["robot"]
+    st = _rstate(env, asset_name)
+    robot = env.scene[asset_name]
     v = quat_apply_inverse(robot.data.root_quat_w.torch, robot.data.root_lin_vel_w.torch)
     return torch.exp(-((v[:, :2] - st.last_vel_cmd[:, :2]).norm(dim=-1) ** 2) / (std * std))
 
 
-def track_cmd_ang_vel_exp(env: ManagerBasedRLEnv, std: float = 0.5) -> torch.Tensor:
-    st = _state(env)
-    w = env.scene["robot"].data.root_ang_vel_w.torch
+def track_cmd_ang_vel_exp(env: ManagerBasedRLEnv, std: float = 0.5, asset_name: str = "robot") -> torch.Tensor:
+    st = _rstate(env, asset_name)
+    w = env.scene[asset_name].data.root_ang_vel_w.torch
     return torch.exp(-((w[:, 2] - st.last_vel_cmd[:, 2]) ** 2) / (std * std))
 
 
-def base_height_command(env: ManagerBasedRLEnv, std: float = 0.05) -> torch.Tensor:
+def base_height_command(env: ManagerBasedRLEnv, std: float = 0.05, asset_name: str = "robot") -> torch.Tensor:
     """exp(-|z - H*| / std): trunk height tracks the CURRENT command.
 
     Fix A12/E1: v2 rewarded a fixed 0.57 target, which fights a squat-capable
     base; H* (st.h_cmd) is written each step by the frozen action's 4th
     slice (or stays at H_CMD_DEFAULT in legacy partial mode).
     """
-    st = _state(env)
-    z = env.scene["robot"].data.root_pos_w.torch[:, 2]
+    st = _rstate(env, asset_name)
+    z = env.scene[asset_name].data.root_pos_w.torch[:, 2]
     return torch.exp(-torch.abs(z - st.h_cmd) / std)
 
 
@@ -819,12 +867,12 @@ def goal_reached(env: ManagerBasedRLEnv, err_thresh: float = SUCCESS_ERR_M,
     return st.success_hold >= hold_s
 
 
-def height_below_command(env: ManagerBasedRLEnv, margin: float = 0.05) -> torch.Tensor:
+def height_below_command(env: ManagerBasedRLEnv, margin: float = 0.05, asset_name: str = "robot") -> torch.Tensor:
     """Trunk below H* - margin = failure (fix A12: v2's fixed 0.35 floor is
     meaningless once the policy commands squats at 0.40-0.55). Flat ground ->
     world z equals terrain-relative z."""
-    st = _state(env)
-    z = env.scene["robot"].data.root_pos_w.torch[:, 2]
+    st = _rstate(env, asset_name)
+    z = env.scene[asset_name].data.root_pos_w.torch[:, 2]
     return z < (st.h_cmd - margin)
 
 
@@ -868,6 +916,31 @@ def _action_term_base():
 ActionTerm = _action_term_base()
 
 
+class _ClockView:
+    """Own gait-clock identity for an extra robot.
+
+    gait_clock keys its phase/frequency state by id(env) and treats a second read
+    in the same step as a no-op, so robot_1 would silently get robot_0's phase and
+    cadence. This view forwards the three attributes the clock reads and gives
+    each extra robot a separate state entry.
+    """
+
+    def __init__(self, env):
+        self._env = env
+
+    @property
+    def episode_length_buf(self):
+        return self._env.episode_length_buf
+
+    @property
+    def num_envs(self):
+        return self._env.num_envs
+
+    @property
+    def step_dt(self):
+        return self._env.step_dt
+
+
 class FrozenBaseVelocityAction(ActionTerm):
     """Command slice for the FROZEN base policy (v3 / blocker 2a).
 
@@ -896,6 +969,7 @@ class FrozenBaseVelocityAction(ActionTerm):
         super().__init__(cfg, env)
         self._env = env
         self._asset = env.scene[cfg.asset_name]
+        self._clock_env = env if cfg.asset_name == "robot" else _ClockView(env)
         path = cfg.base_policy_path
         mode = os.environ.get("PUSH_BASE_MODE", "").lower()
         if mode not in ("squat", "partial"):
@@ -968,7 +1042,7 @@ class FrozenBaseVelocityAction(ActionTerm):
 
     def _process_squat(self, actions: torch.Tensor) -> None:
         """Blocker 2a: 4-dim command -> 236-dim teacher obs -> 12 leg targets."""
-        st = _state(self._env)
+        st = _rstate(self._env, self.cfg.asset_name)
         robot = self._asset
         raw = actions[:, :4]
         self._raw_actions[:] = raw
@@ -983,9 +1057,10 @@ class FrozenBaseVelocityAction(ActionTerm):
         st.h_cmd = h
         cmd4 = torch.cat([vel, h[:, None]], dim=-1)
         self._processed_actions[:] = cmd4
-        lin = vmdp.base_lin_vel(self._env)
-        ang = vmdp.base_ang_vel(self._env)
-        grav = vmdp.projected_gravity(self._env)
+        a_cfg = SceneEntityCfg(self.cfg.asset_name)
+        lin = vmdp.base_lin_vel(self._env, asset_cfg=a_cfg)
+        ang = vmdp.base_ang_vel(self._env, asset_cfg=a_cfg)
+        grav = vmdp.projected_gravity(self._env, asset_cfg=a_cfg)
         leg_pos = robot.data.joint_pos[:, self._leg_ids] - robot.data.default_joint_pos[:, self._leg_ids]
         # joint_vel_rel == raw: default_joint_vel is all-zero in this build
         leg_vel = robot.data.joint_vel[:, self._leg_ids]
@@ -993,7 +1068,7 @@ class FrozenBaseVelocityAction(ActionTerm):
         # below the patch top. Adding it to the offset gives the height above the surface
         # the robot actually stands on, which is what the frozen base trained against.
         scan = _height_scan(
-            self._env, sensor_cfg=SceneEntityCfg("height_scanner"),
+            self._env, sensor_cfg=SceneEntityCfg(self.cfg.height_scanner_name),
             offset=0.5 + GROUND_PATCH_THICKNESS,
         ).clamp(-1.0, 1.0)
         # 236 dims above + a 2-dim gait clock = 238, which is what a POST-gait-fix
@@ -1007,7 +1082,7 @@ class FrozenBaseVelocityAction(ActionTerm):
         # silently freeze the cadence at PHASE_FREQUENCY_HZ -- serving the frozen base
         # a cadence it was never trained against.
         clock = gait_clock.phase_clock_from_magnitude(
-            self._env, st.last_vel_cmd[:, :2].norm(dim=-1)
+            self._clock_env, st.last_vel_cmd[:, :2].norm(dim=-1)
         )
         obs = torch.cat([lin, ang, grav, cmd4, leg_pos, leg_vel, self._last, scan, clock], dim=-1)
         out = None
@@ -1131,6 +1206,8 @@ class FrozenBaseVelocityActionCfg(ActionTermCfg):
     class_type = FrozenBaseVelocityAction
     asset_name: str = "robot"
     base_policy_path: str = "models/k1_push_base.pt"
+    #: one RayCaster per robot (multi-robot push names them height_scanner_k)
+    height_scanner_name: str = "height_scanner"
 
 
 # ---------------------------------------------------------------------------
@@ -1146,6 +1223,6 @@ __all__ = [
     "box_spin_penalty", "wrist_target_tracking", "wrist_box_proximity",
     "track_cmd_lin_vel_exp", "track_cmd_ang_vel_exp", "base_height_command",
     "success_bonus", "failure_terminated", "goal_reached", "height_below_command",
-    "box_out_of_bounds", "box_tipped",
+    "box_out_of_bounds", "box_tipped", "last_action_of",
     "vmdp",
 ]

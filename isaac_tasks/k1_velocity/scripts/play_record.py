@@ -237,6 +237,30 @@ class Hud:
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
+class _OneRobotView:
+    """What OnPolicyRunner reads at construction, shaped like ONE robot of a multi-robot env.
+
+    Multi-robot push names its obs groups ``teacher_0, teacher_1, ...`` while the
+    trained single-robot policy expects ``teacher``; the runner only needs this view
+    to build the actor (obs shapes, action count), inference stacks every robot.
+    """
+
+    def __init__(self, env, groups, num_actions):
+        from tensordict import TensorDict
+
+        self._td = TensorDict
+        self._env = env
+        self._groups = groups
+        self.num_actions = num_actions
+        self.num_envs = env.num_envs
+        self.cfg = env.cfg
+        self.device = env.device
+
+    def get_observations(self):
+        obs = self._env.get_observations()
+        return self._td({g: obs[f"{g}_0"] for g in self._groups}, batch_size=[self.num_envs])
+
+
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     import inspect
 
@@ -262,7 +286,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         if hasattr(viewer, "origin_type"):
             if hasattr(viewer, "asset_name"):
                 viewer.origin_type = "asset_root"
-                viewer.asset_name = "robot"
+                # multi-robot push has robot_0, robot_1, ... and no "robot"
+                viewer.asset_name = "robot" if getattr(env_cfg.scene, "robot", None) is not None else "robot_0"
             else:
                 viewer.origin_type = "env"
         if hasattr(viewer, "env_index"):
@@ -318,13 +343,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     # -- env + rgb render --------------------------------------------------
     gym_env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
     base_env = gym_env.unwrapped
-    robot = base_env.scene["robot"]
+    arts = base_env.scene.articulations
+    robot_names = ["robot"] if "robot" in arts else sorted(n for n in arts if n.startswith("robot_"))
+    robot = arts[robot_names[0]]
+    multi = len(robot_names) > 1
     panel_cams = panel_recorder = markers = None
     if args_cli.panel_video:
         if not args_cli.video_out:
             raise ValueError("--panel_video requires --video_out")
         set_clean_render(args_cli.panel_spp)
-        panel_cams = PanelCameras(size=tuple(args_cli.panel_size))
+        panel_names = (("overview", "top_down") + tuple(f"follow_{n}" for n in robot_names)
+                       if multi else ("overview", "top_down", "follow", "side"))
+        panel_cams = PanelCameras(names=panel_names, size=tuple(args_cli.panel_size))
         markers = K1DebugMarkers()
         panel_recorder = TiledPanelRecorder(
             args_cli.video_out, panel_cams.names, size=tuple(args_cli.panel_size), fps=args_cli.panel_fps
@@ -355,7 +385,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
                     "state_dependent_std"):
             for mk in ("actor", "critic"):
                 agent_cfg_dict[mk].pop(key, None)
-        runner = OnPolicyRunner(env, agent_cfg_dict,
+        policy_groups = sorted({g for gs in agent_cfg.obs_groups.values() for g in gs})
+        runner_env = env
+        if multi:
+            runner_env = _OneRobotView(env, policy_groups, env.num_actions // len(robot_names))
+            print(f"[INFO] multi-robot: {robot_names} share one policy "
+                  f"({policy_groups} <- {[g + '_k' for g in policy_groups]})")
+        runner = OnPolicyRunner(runner_env, agent_cfg_dict,
                                 log_dir="/tmp/k1_record",
                                 device=agent_cfg.device)
         print(f"[INFO] loading checkpoint: {args_cli.checkpoint}")
@@ -367,6 +403,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     def infer(obs):
         if is_distill:
             return policy({"policy": obs["policy"]})
+        if multi:
+            # one batched actor call over every robot: (R*N, d) -> (R*N, a) -> (N, R*a),
+            # robot-major to match the action term order base_k | wrist_left_k | wrist_right_k
+            from tensordict import TensorDict
+
+            R, N = len(robot_names), env.num_envs
+            stacked = TensorDict(
+                {g: torch.cat([obs[f"{g}_{k}"] for k in range(R)], dim=0) for g in policy_groups},
+                batch_size=[R * N])
+            a = policy(stacked)
+            return a.view(R, N, -1).permute(1, 0, 2).reshape(N, -1)
         return policy(obs)
 
     # -- HUD + writers -----------------------------------------------------
@@ -437,6 +484,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
 
     def _panel_views():
         root = robot.data.root_pos_w[0].detach().cpu().numpy()
+        if multi:
+            # overview/top-down centred on the team; one follow cam behind each robot
+            roots = [arts[n].data.root_pos_w[0].detach().cpu().numpy() for n in robot_names]
+            mid = np.mean(roots, axis=0) + np.array([0.6, 0.0, 0.0])
+            views = [
+                ("overview", mid + np.array([2.6, -4.6, 3.0]), mid + np.array([0.0, 0.0, 0.35])),
+                ("top_down", mid + np.array([0.001, -0.001, 7.0]), mid),
+            ]
+            for n, r in zip(robot_names, roots):
+                views.append((f"follow_{n}", r + np.array([-1.6, 0.0, 1.3]), r + np.array([1.2, 0.0, 0.4])))
+            return views
         return [
             ("overview", root + np.array([3.2, -4.2, 2.6]), root + np.array([0.0, 0.0, 0.35])),
             ("top_down", root + np.array([0.001, -0.001, 6.0]), root),
@@ -444,8 +502,42 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             ("side", root + np.array([-2.6, 0.0, 1.4]), root + np.array([0.0, 0.0, 0.45])),
         ]
 
+    def _robot_status():
+        """Per robot: frozen-base command (vx, vy, wz, H*), trunk height, wrist-box gap."""
+        from k1_velocity.tasks.push import push_mdp
+
+        parts = []
+        for k, n in enumerate(robot_names):
+            try:
+                term = base_env.action_manager.get_term(f"base_velocity_{k}")
+                c = term.processed_actions[0].tolist()
+                z = float(arts[n].data.root_pos_w[0, 2])
+                gap = push_mdp.wrist_box_gap(base_env, n)[0].max().item()
+                parts.append(f"{n}: cmd=({c[0]:+.2f},{c[1]:+.2f},{c[2]:+.2f}) H*={c[3]:.2f} "
+                             f"z={z:.2f} wrist-box gap={gap:.2f}m")
+            except Exception as exc:  # noqa: BLE001 - status only
+                parts.append(f"{n}: n/a ({type(exc).__name__})")
+        return " | ".join(parts)
+
+    def _mark_wrist_targets():
+        """World-frame wrist targets of every robot (orange) for the panels."""
+        from isaaclab.utils.math import quat_apply
+
+        for k, n in enumerate(robot_names):
+            r = arts[n]
+            tgt = base_env.command_manager.get_term(f"wrist_target_{k}").command[0].view(2, 3)
+            q = r.data.root_quat_w.torch[0:1].repeat(2, 1)
+            w = quat_apply(q, tgt) + r.data.root_pos_w.torch[0]
+            for j, p in enumerate(w.detach().cpu().numpy()):
+                markers.mark(f"wrist_tgt_{k}_{j}", p, color=(1.0, 0.5, 0.05), radius=0.05)
+            markers.mark(f"robot_{k}", r.data.root_pos_w.torch[0].detach().cpu().numpy()
+                         + np.array([0.0, 0.0, 0.18]), color=(0.1, 0.8, 1.0), radius=0.11)
+
     def _panel_status(step, step_reward, episode_reward):
         info = markers.update(base_env, robot, args_cli.task) if markers else {"knowledge": "n/a"}
+        if multi and markers:
+            _mark_wrist_targets()
+            info["knowledge"] = f"{info['knowledge']} | {_robot_status()}"
         visible = ""
         state = getattr(base_env, "head_track", None)
         if state is not None and getattr(state, "yolo", None) is not None:
