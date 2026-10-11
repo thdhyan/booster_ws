@@ -91,7 +91,7 @@ import torch  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 import imageio.v2 as imageio  # noqa: E402
 
-from panel_video import K1DebugMarkers, PanelCameras, TiledPanelRecorder, pump_app, set_clean_render  # noqa: E402
+from panel_video import K1DebugMarkers, marker_kind, PanelCameras, TiledPanelRecorder, pump_app, set_clean_render  # noqa: E402
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner  # noqa: E402
 
@@ -396,7 +396,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             tuple(f"_{n}" for n in robot_names) if multi else ("",))
         panel_cams = PanelCameras(names=panel_names, size=tuple(args_cli.panel_size), heads=head_keys)
         head_body = {n: arts[n].find_bodies("Head_2")[0][0] for n in robot_names}
-        markers = K1DebugMarkers()
+        markers = K1DebugMarkers(marker_kind(args_cli.task))
         panel_recorder = TiledPanelRecorder(
             args_cli.video_out, panel_cams.names, size=tuple(args_cli.panel_size), fps=args_cli.panel_fps
         )
@@ -588,27 +588,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         return " | ".join(parts)
 
     def _mark_wrist_targets():
-        """World-frame wrist targets of every robot (orange) for the panels."""
+        """World-frame wrist targets of every robot (orange) for the push panels."""
         from isaaclab.utils.math import quat_apply
-
-        # the generic velocity-command target/estimate spheres mean nothing here
-        for name in ("target", "estimate"):
-            markers._translate(name, np.array([0.0, 0.0, -10.0]))
 
         for k, n in enumerate(robot_names):
             r = arts[n]
-            tgt = base_env.command_manager.get_term(f"wrist_target_{k}").command[0].view(2, 3)
+            term = f"wrist_target_{k}" if multi else "wrist_target"
+            tgt = base_env.command_manager.get_term(term).command[0].view(2, 3)
             q = r.data.root_quat_w.torch[0:1].repeat(2, 1)
             w = quat_apply(q, tgt) + r.data.root_pos_w.torch[0]
             for j, p in enumerate(w.detach().cpu().numpy()):
                 markers.mark(f"wrist_tgt_{k}_{j}", p, color=(1.0, 0.5, 0.05), radius=0.05)
-            markers.mark(f"robot_{k}", r.data.root_pos_w.torch[0].detach().cpu().numpy()
-                         + np.array([0.0, 0.0, 0.18]), color=(0.1, 0.8, 1.0), radius=0.11)
 
     def _panel_status(step, step_reward, episode_reward):
         info = markers.update(base_env, robot, args_cli.task) if markers else {"knowledge": "n/a"}
+        if markers and markers.kind == "push":
+            try:
+                _mark_wrist_targets()
+            except Exception as exc:  # noqa: BLE001 - debug markers only
+                print(f"[markers] wrist targets skipped: {type(exc).__name__}: {exc}")
         if multi and markers:
-            _mark_wrist_targets()
             info["knowledge"] = f"{info['knowledge']} | {_robot_status()}"
         visible = ""
         state = getattr(base_env, "head_track", None)

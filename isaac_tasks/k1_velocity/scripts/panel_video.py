@@ -290,55 +290,68 @@ class TiledPanelRecorder:
             return -1
 
 
-class K1DebugMarkers:
-    """Transparent robot/target/boundary markers for the debug panels."""
+def marker_kind(task: str) -> str:
+    """Which marker set a task gets (only what that task needs, nothing else)."""
+    t = task.lower()
+    for kind, keys in (("push", ("push",)), ("carry", ("carry",)), ("squat", ("squat",)),
+                       ("ball", ("ball", "track", "kick", "skill"))):
+        if any(k in t for k in keys):
+            return kind
+    return "velocity"
 
-    def __init__(self):
+
+class K1DebugMarkers:
+    """Task-specific transparent markers for the debug panels.
+
+    push  : goal box wireframe + centre, box out-of-bounds ring, wrist targets (orange)
+    squat : commanded trunk height H* as a ring around the robot (velocity arrows come from the env)
+    carry : none here (the env draws the ghost box + success disc)
+    ball, velocity : none (ball / env velocity arrows are already in the scene)
+    """
+
+    def __init__(self, kind: str = "velocity"):
         import omni.usd
         from pxr import Gf, UsdGeom, Vt
 
         self._Gf = Gf
         self._Vt = Vt
+        self.kind = kind
         self._stage = omni.usd.get_context().get_stage()
-        root = UsdGeom.Xform.Define(self._stage, "/Visuals/K1DebugMarkers")
-        self.robot = self._sphere("robot", Gf.Vec3f(0.1, 0.8, 1.0))
-        self.target = self._sphere("target", Gf.Vec3f(1.0, 0.8, 0.1))
-        self.estimate = self._sphere("estimate", Gf.Vec3f(1.0, 0.1, 0.8))
-        # A solid translucent cube would sit between the cameras and the robot,
-        # so the arena boundary is drawn as a flat square outline instead.
-        boundary = UsdGeom.BasisCurves.Define(self._stage, "/Visuals/K1DebugMarkers/boundary")
-        half = 5.0
-        points = [Gf.Vec3f(x, y, 0.0) for x, y in
-                  ((-half, -half), (half, -half), (half, half), (-half, half))]
-        boundary.CreatePointsAttr(Vt.Vec3fArray(points))
-        boundary.CreateWidthsAttr([0.03])
-        boundary.CreateDisplayColorAttr([Gf.Vec3f(0.2, 0.5, 1.0)])
-        boundary.CreateDisplayOpacityAttr([0.7])
-        self.boundary = boundary
-        # Goal: wireframe of the push box's goal pose (12 edges) or, for carry,
-        # a ring at the success radius. Points are rewritten each update.
-        goal = UsdGeom.BasisCurves.Define(self._stage, "/Visuals/K1DebugMarkers/goal")
-        goal.CreateTypeAttr(UsdGeom.Tokens.linear)
-        goal.CreateWidthsAttr([0.025])
-        goal.SetWidthsInterpolation(UsdGeom.Tokens.constant)
-        goal.CreateDisplayColorAttr([Gf.Vec3f(0.1, 1.0, 0.2)])
-        goal.CreateDisplayOpacityAttr([0.8])
-        goal.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
-        self.goal = goal
-        self.goal_centre = self._sphere("goal_centre", Gf.Vec3f(0.1, 1.0, 0.2))
-        self.goal_centre.GetRadiusAttr().Set(0.05)
-        UsdGeom.Imageable(self.goal_centre).MakeInvisible()
-        self._xforms = {
-            "robot": UsdGeom.Xformable(self.robot),
-            "target": UsdGeom.Xformable(self.target),
-            "estimate": UsdGeom.Xformable(self.estimate),
-            "boundary": UsdGeom.Xformable(boundary),
-            "goal_centre": UsdGeom.Xformable(self.goal_centre),
-        }
-        del root
+        UsdGeom.Xform.Define(self._stage, "/Visuals/K1DebugMarkers")
+        self._xforms = {}
+        if kind == "push":
+            self.goal = self._curve("goal", (0.1, 1.0, 0.2), 0.025)
+            self.goal_centre = self._sphere("goal_centre", Gf.Vec3f(0.1, 1.0, 0.2))
+            self.goal_centre.GetRadiusAttr().Set(0.05)
+            self._xforms["goal_centre"] = UsdGeom.Xformable(self.goal_centre)
+            self.oob = self._curve("oob", (0.2, 0.5, 1.0), 0.03)
+        elif kind == "squat":
+            self.height_ring = self._curve("height_ring", (1.0, 0.8, 0.1), 0.02)
+
+    def _curve(self, name, rgb, width):
+        from pxr import UsdGeom
+
+        Gf = self._Gf
+        c = UsdGeom.BasisCurves.Define(self._stage, f"/Visuals/K1DebugMarkers/{name}")
+        c.CreateTypeAttr(UsdGeom.Tokens.linear)
+        c.CreateWidthsAttr([width])
+        c.SetWidthsInterpolation(UsdGeom.Tokens.constant)
+        c.CreateDisplayColorAttr([Gf.Vec3f(*rgb)])
+        c.CreateDisplayOpacityAttr([0.8])
+        return c
+
+    def _set_curve(self, curve, points, counts) -> None:
+        Gf, Vt = self._Gf, self._Vt
+        curve.GetPointsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*[float(v) for v in p]) for p in points]))
+        curve.GetCurveVertexCountsAttr().Set(Vt.IntArray(counts))
+
+    @staticmethod
+    def _ring(centre, radius, z, n=48):
+        a = np.linspace(0.0, 2.0 * np.pi, n + 1)
+        return [np.array([centre[0] + radius * np.cos(t), centre[1] + radius * np.sin(t), z]) for t in a]
 
     def _sphere(self, name, color):
-        from pxr import Gf, UsdGeom
+        from pxr import UsdGeom
 
         sphere = UsdGeom.Sphere.Define(self._stage, f"/Visuals/K1DebugMarkers/{name}")
         sphere.CreateRadiusAttr(0.11)
@@ -347,8 +360,7 @@ class K1DebugMarkers:
         return sphere
 
     def mark(self, name, position, color=(1.0, 0.5, 0.05), radius=0.06) -> None:
-        """Place a named translucent sphere, creating it on first use (extra robots,
-        per-robot wrist targets)."""
+        """Place a named translucent sphere, creating it on first use (per-robot wrist targets)."""
         from pxr import Gf, UsdGeom
 
         if name not in self._xforms:
@@ -362,84 +374,63 @@ class K1DebugMarkers:
         xform.ClearXformOpOrder()
         xform.AddTranslateOp().Set(self._Gf.Vec3d(*[float(v) for v in position]))
 
-    def _show_goal(self, points, counts, centre) -> None:
-        from pxr import UsdGeom
+    def _update_push(self, base_env) -> str:
+        push = base_env.push_state
+        pos = push.goal_pos[0].detach().cpu().numpy()
+        x, y, z, w = (float(v) for v in push.goal_quat[0].detach().cpu().numpy())  # xyzw
+        half = push.half_extents[0].detach().cpu().numpy()
+        rot = np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ])
+        signs = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+        corners = pos + (signs * half) @ rot.T
+        edges = [(a, b) for a in range(8) for b in range(a + 1, 8)
+                 if int(np.abs(signs[a] - signs[b]).sum()) == 2]
+        self._set_curve(self.goal, [corners[i] for e in edges for i in e], [2] * len(edges))
+        self._translate("goal_centre", pos)
+        # box out-of-bounds radius (termination box_oob), around the env origin
+        try:
+            r_oob = float(base_env.cfg.terminations.box_oob.params["radius"])
+            origin = base_env.scene.env_origins[0].detach().cpu().numpy()
+            ring = self._ring(origin, r_oob, 0.02, 96)
+            self._set_curve(self.oob, ring, [len(ring)])
+        except Exception:
+            pass
+        box_xy = None
+        try:
+            box_pos = base_env.scene["box"].data.root_pos_w
+            box_xy = getattr(box_pos, "torch", box_pos)[0, :2].detach().cpu().numpy()
+        except Exception:
+            pass
+        dist = "" if box_xy is None else f" box->goal={float(np.linalg.norm(pos[:2] - box_xy)):.2f}m"
+        return f"goal ({pos[0]:+.2f},{pos[1]:+.2f}){dist}"
 
-        Gf, Vt = self._Gf, self._Vt
-        self.goal.GetPointsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*[float(v) for v in p]) for p in points]))
-        self.goal.GetCurveVertexCountsAttr().Set(Vt.IntArray(counts))
-        UsdGeom.Imageable(self.goal).MakeVisible()
-        UsdGeom.Imageable(self.goal_centre).MakeVisible()
-        self._translate("goal_centre", centre)
-
-    def _update_goal(self, base_env):
-        """Draw the task goal if the env has one; return a header string or ''."""
-        push = getattr(base_env, "push_state", None)
-        if push is not None:
-            pos = push.goal_pos[0].detach().cpu().numpy()
-            x, y, z, w = (float(v) for v in push.goal_quat[0].detach().cpu().numpy())  # xyzw
-            half = push.half_extents[0].detach().cpu().numpy()
-            rot = np.array([
-                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-            ])
-            signs = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
-            corners = pos + (signs * half) @ rot.T
-            edges = [(a, b) for a in range(8) for b in range(a + 1, 8)
-                     if int(np.abs(signs[a] - signs[b]).sum()) == 2]
-            self._show_goal([corners[i] for e in edges for i in e], [2] * len(edges), pos)
-            box_xy = None
-            try:
-                box_pos = base_env.scene["box"].data.root_pos_w
-                box_xy = getattr(box_pos, "torch", box_pos)[0, :2].detach().cpu().numpy()
-            except Exception:
-                pass
-            dist = "" if box_xy is None else f" box->goal={float(np.linalg.norm(pos[:2] - box_xy)):.2f}m"
-            return f"goal ({pos[0]:+.2f},{pos[1]:+.2f}){dist}"
+    def update(self, base_env, robot, task: str) -> dict:
+        """Update this task's markers and return status/knowledge fields for the header."""
+        root = robot.data.root_pos_w[0].detach().cpu().numpy()
+        if self.kind == "push":
+            return {"knowledge": self._update_push(base_env), "task": task}
         try:
             term = base_env.command_manager.get_term("base_velocity")
         except Exception:
             term = None
-        if term is not None and hasattr(term, "goal_pos_w"):
+        if self.kind == "carry" and term is not None and hasattr(term, "goal_pos_w"):
             pos = term.goal_pos_w[0].detach().cpu().numpy()
-            radius = float(getattr(term.cfg, "success_radius", 0.25))
-            angles = np.linspace(0.0, 2.0 * np.pi, 33)
-            ring = [pos + np.array([radius * np.cos(a), radius * np.sin(a), 0.02]) for a in angles]
-            self._show_goal(ring, [len(ring)], pos + np.array([0.0, 0.0, 0.05]))
-            return f"goal ({pos[0]:+.2f},{pos[1]:+.2f}) dist={float(term.goal_dist[0]):.2f}m"
-        return ""
-
-    def update(self, base_env, robot, task: str) -> dict:
-        """Update markers and return status/knowledge fields for the header."""
-        scene = base_env.scene
-        root = robot.data.root_pos_w[0].detach().cpu().numpy()
-        origin = scene.env_origins[0].detach().cpu().numpy()
-        self._translate("robot", root + np.array([0.0, 0.0, 0.18]))
-        self._translate("boundary", origin + np.array([0.0, 0.0, -0.03]))
-
-        target = root + np.array([0.8, 0.0, 0.15])
-        knowledge = "command target"
-        ball = None
+            return {"knowledge": f"goal ({pos[0]:+.2f},{pos[1]:+.2f}) dist={float(term.goal_dist[0]):.2f}m",
+                    "task": task}
+        if self.kind == "ball":
+            return {"knowledge": "ball GT (reward only)", "task": task}
+        knowledge = "command n/a"
         try:
-            ball = scene["ball"]
+            cmd = base_env.command_manager.get_command("base_velocity")[0].detach().cpu().numpy()
+            knowledge = f"command ({cmd[0]:+.2f},{cmd[1]:+.2f},{cmd[2]:+.2f})"
+            if self.kind == "squat" and cmd.shape[0] > 3:
+                z0 = float(base_env.scene.env_origins[0, 2])  # terrain origin height
+                ring = self._ring(root, 0.25, z0 + float(cmd[3]))
+                self._set_curve(self.height_ring, ring, [len(ring)])
+                knowledge += f" H*={float(cmd[3]):.2f} z={float(root[2]):.2f}"
         except Exception:
             pass
-        if ball is not None:
-            target = ball.data.root_pos_w[0].detach().cpu().numpy()
-            knowledge = "ball GT (reward only)"
-        else:
-            try:
-                cmd = base_env.command_manager.get_command("base_velocity")[0].detach().cpu().numpy()
-                norm = float(np.linalg.norm(cmd[:2]))
-                if norm > 0.05:
-                    target = root + np.array([cmd[0], cmd[1], 0.0]) / norm * min(1.5, max(0.5, norm))
-                    knowledge = f"command ({cmd[0]:+.2f},{cmd[1]:+.2f},{cmd[2]:+.2f})"
-            except Exception:
-                pass
-        self._translate("target", target)
-        self._translate("estimate", target + np.array([0.0, 0.0, 0.12]))
-        goal = self._update_goal(base_env)
-        if goal:
-            knowledge = f"{knowledge} | {goal}"
-        return {"target": target, "knowledge": knowledge, "task": task}
+        return {"knowledge": knowledge, "task": task}

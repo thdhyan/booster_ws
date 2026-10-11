@@ -135,8 +135,8 @@ class GoalCarryCommand(UniformVelocityCommand):
     # -- debug vis: a ghost of the CARRIED box at the goal (its size, height and yaw),
     #    red, green while the trunk is inside; plus a flat disc of the success radius --
 
+    # no super(): the inherited velocity arrows are walk-task clutter here
     def _set_debug_vis_impl(self, debug_vis: bool):
-        super()._set_debug_vis_impl(debug_vis)
         if debug_vis:
             if not hasattr(self, "goal_visualizer"):
                 self.goal_visualizer = VisualizationMarkers(self.cfg.goal_visualizer_cfg)
@@ -148,7 +148,6 @@ class GoalCarryCommand(UniformVelocityCommand):
             self.goal_disc_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        super()._debug_vis_callback(event)
         if not self.robot.is_initialized:
             return
         from . import carry_mdp
