@@ -103,3 +103,25 @@ gym.register(
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushPPORunnerCfg",
     },
 )
+
+# Multi-robot push training (M2): agents-in-batch, one shared actor over both robots
+# (train.py wraps in AgentsInBatchWrapper because env_cfg.agents_in_batch > 0).
+gym.register(
+    id="Isaac-Push-Multi-K1-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.push.push_multi_env_cfg:K1PushMultiTrainEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushMultiPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-Push-Multi-K1-Train-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "k1_velocity.tasks.push.push_multi_env_cfg:K1PushMultiTrainPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "k1_velocity.tasks.push.agents.rsl_rl_ppo_cfg:K1PushMultiPPORunnerCfg",
+    },
+)

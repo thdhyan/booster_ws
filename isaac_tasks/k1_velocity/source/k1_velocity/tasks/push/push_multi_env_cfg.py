@@ -28,6 +28,7 @@ from isaaclab.managers import (
     TerminationTermCfg as DoneTerm,
 )
 from isaaclab.utils.configclass import configclass
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from . import push_env_cfg as base
 from . import push_mdp as mdp
@@ -67,23 +68,27 @@ def _teacher_group(k: int):
 
     @configclass
     class TeacherK(ObsGroup):
-        """Single-robot TeacherCfg, term for term, bound to robot_k (109 dims)."""
+        """Single-robot TeacherCfg, term for term (noise included), bound to robot_k (109 dims)."""
 
         box_state = ObsTerm(func=mdp.push_box_teacher, params={"asset_name": name})
-        base_lin_vel = ObsTerm(func=mdp.vmdp.base_lin_vel, params={"asset_cfg": a})
-        base_ang_vel = ObsTerm(func=mdp.vmdp.base_ang_vel, params={"asset_cfg": a})
+        base_lin_vel = ObsTerm(func=mdp.vmdp.base_lin_vel, params={"asset_cfg": a},
+                               noise=Unoise(n_min=-0.05, n_max=0.05))
+        base_ang_vel = ObsTerm(func=mdp.vmdp.base_ang_vel, params={"asset_cfg": a},
+                               noise=Unoise(n_min=-0.1, n_max=0.1))
         projected_gravity = ObsTerm(func=mdp.vmdp.projected_gravity, params={"asset_cfg": a})
         wrist_targets = ObsTerm(func=mdp.vmdp.generated_commands,
                                 params={"command_name": f"wrist_target_{k}"})
         arm_joint_pos = ObsTerm(func=mdp.vmdp.joint_pos_rel,
-                                params={"asset_cfg": SceneEntityCfg(name, joint_names=ARM_JOINTS)})
+                                params={"asset_cfg": SceneEntityCfg(name, joint_names=ARM_JOINTS)},
+                                noise=Unoise(n_min=-0.01, n_max=0.01))
         arm_joint_vel = ObsTerm(func=mdp.vmdp.joint_vel_rel,
-                                params={"asset_cfg": SceneEntityCfg(name, joint_names=ARM_JOINTS)})
+                                params={"asset_cfg": SceneEntityCfg(name, joint_names=ARM_JOINTS)},
+                                noise=Unoise(n_min=-0.5, n_max=0.5))
         actions = ObsTerm(func=mdp.last_action_of, params={
             "action_names": [f"base_velocity_{k}", f"wrist_left_{k}", f"wrist_right_{k}"]})
 
         def __post_init__(self):
-            self.enable_corruption = False
+            self.enable_corruption = True      # training; the Play cfg turns it off
             self.concatenate_terms = True
 
     return TeacherK()
@@ -201,8 +206,36 @@ class K1PushMultiEnvCfg(base.K1PushEnvCfg):
         self.curriculum = None
 
 
+    # train.py wraps the env in AgentsInBatchWrapper(R) when this is > 0
+    agents_in_batch: int = NUM_ROBOTS
+
+
+@configclass
+class K1PushMultiTrainEnvCfg(K1PushMultiEnvCfg):
+    """M2: train the shared push policy with both robots in the loop (warm-start p6).
+
+    The box is heavier than the single-robot range (6-16 kg vs 3-10) so the team has
+    a reason to push together; corruption stays on as in single-robot training.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.events.randomize_box_geometry.params["mass_range"] = (6.0, 16.0)
+
+
 @configclass
 class K1PushMultiPlayEnvCfg(K1PushMultiEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 4
+        for k in range(NUM_ROBOTS):
+            getattr(self.observations, f"teacher_{k}").enable_corruption = False
+
+
+@configclass
+class K1PushMultiTrainPlayEnvCfg(K1PushMultiTrainEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 4
+        for k in range(NUM_ROBOTS):
+            getattr(self.observations, f"teacher_{k}").enable_corruption = False

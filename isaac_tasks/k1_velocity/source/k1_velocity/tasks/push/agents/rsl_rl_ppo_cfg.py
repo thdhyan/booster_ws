@@ -54,3 +54,12 @@ class K1PushPPORunnerCfg(K1PushReachPPORunnerCfg):
         # nothing and the entropy bonus drove it 0.8 -> 3.2 (2026-10-10 run, reward
         # 125 -> 32, goal never reached). No entropy bonus for this stage.
         self.algorithm.entropy_coef = 0.0
+
+
+@configclass
+class K1PushMultiPPORunnerCfg(K1PushPPORunnerCfg):
+    """M2 multi-robot push: shared actor over both robots, warm-started from p6_push."""
+
+    max_iterations = 3000
+    experiment_name = "p6_push_multi"
+    run_name = "p6_push_multi"

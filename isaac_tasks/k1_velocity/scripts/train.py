@@ -276,6 +276,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
         )
 
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    # multi-robot envs (push M2): R robots per env -> R*N rows, one shared actor
+    if getattr(env_cfg, "agents_in_batch", 0):
+        from k1_velocity.tasks.push.agents_in_batch import AgentsInBatchWrapper
+        env = AgentsInBatchWrapper(env, env_cfg.agents_in_batch, group="teacher")
+        print(f"[INFO] AgentsInBatchWrapper: {env_cfg.agents_in_batch} robots/env -> {env.num_envs} rows")
     # rsl_rl 5.x MLPModel dropped the deprecated noise kwargs that
     # isaaclab_rl 3.0.0b2's RslRlMLPModelCfg still serializes — strip them.
     agent_cfg_dict = agent_cfg.to_dict()
