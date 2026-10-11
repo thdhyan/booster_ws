@@ -21,6 +21,27 @@ import torch
 from tensordict import TensorDict
 
 
+class RewardSplit:
+    """Per-robot rewards: total minus every OTHER robot's ``_k``-suffixed reward terms."""
+
+    def __init__(self, base_env, num_agents: int):
+        rm = base_env.reward_manager
+        self._rm = rm
+        self._dt = base_env.step_dt
+        own = [[i for i, n in enumerate(rm.active_terms) if re.fullmatch(rf".*_{k}", n)]
+               for k in range(num_agents)]
+        self._other_cols = [
+            torch.tensor([i for j in range(num_agents) if j != k for i in own[j]],
+                         dtype=torch.long, device=base_env.device)
+            for k in range(num_agents)
+        ]
+
+    def __call__(self, rew: torch.Tensor) -> list[torch.Tensor]:
+        step_rew = self._rm._step_reward          # (N, T), already divided by dt
+        return [rew - step_rew[:, cols].sum(dim=1) * self._dt if cols.numel() else rew
+                for cols in self._other_cols]
+
+
 class AgentsInBatchWrapper:
     def __init__(self, env, num_agents: int, group: str = "teacher"):
         self.env = env
@@ -33,17 +54,7 @@ class AgentsInBatchWrapper:
         self.cfg = env.cfg
         self.max_episode_length = env.max_episode_length
 
-        rm = env.unwrapped.reward_manager
-        self._rm = rm
-        self._dt = env.unwrapped.step_dt
-        # column ids of every OTHER robot's suffixed terms, per robot
-        own = [[i for i, n in enumerate(rm.active_terms) if re.fullmatch(rf".*_{k}", n)]
-               for k in range(self.R)]
-        self._other_cols = [
-            torch.tensor([i for j in range(self.R) if j != k for i in own[j]],
-                         dtype=torch.long, device=self.device)
-            for k in range(self.R)
-        ]
+        self._split = RewardSplit(env.unwrapped, self.R)
 
     @property
     def unwrapped(self):
@@ -68,9 +79,7 @@ class AgentsInBatchWrapper:
     def step(self, actions: torch.Tensor):
         a = actions.view(self.R, self.N, self.num_actions).permute(1, 0, 2).reshape(self.N, -1)
         obs, rew, dones, extras = self.env.step(a)
-        step_rew = self._rm._step_reward          # (N, T), already divided by dt
-        rews = [rew - step_rew[:, cols].sum(dim=1) * self._dt if cols.numel() else rew
-                for cols in self._other_cols]
+        rews = self._split(rew)
         if "time_outs" in extras:
             extras["time_outs"] = extras["time_outs"].repeat(self.R)
         return self._stack(obs), torch.cat(rews), dones.repeat(self.R), extras
