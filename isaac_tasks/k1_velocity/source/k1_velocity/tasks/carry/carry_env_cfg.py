@@ -1,7 +1,7 @@
 """K1 box carry: walk to a ground goal holding a box welded between both forearm stubs.
 
-Built on the velocity (P2) env so the lower body keeps the full gait reward
-stack; the carry pieces are layered on top:
+Built on the velocity (P2) env (scene, obs, leg action); the carry pieces are
+layered on top:
 
 * scene: flat plane (no terrain curriculum), ``replicate_physics=False`` for the
   per-env box width/mass DR, and ``carry_box`` -- a visual-only cuboid held by two
@@ -10,9 +10,9 @@ stack; the carry pieces are layered on top:
   per-env hold pose; the decoupled actor (decoupled_policy) gives each its own MLP;
 * command: ``base_velocity`` is the goal command (carry_command), which derives
   the walking velocity the gait rewards track and draws the faint red/green goal cube;
-* rewards: velocity stack + goal progress/success, box level, weld integrity,
-  in tiers (carry_tiers): stand + hold always pays; the walking/goal terms are
-  multiplied by hold quality; the goal radius grows only while falls are rare.
+* rewards (simplified 2026-10-11): goal progress/success, hold quality, box level,
+  weld integrity, fall penalty and 4 gait terms; stand + hold always pays, the goal
+  terms are multiplied by hold quality; the goal radius grows only while falls are rare.
 
 Arm gains: the K1 R14 arm actuator derives ~4 Nm/rad from its 10 Hz natural
 frequency, which cannot hold even a 1 kg box against gravity at the hold pose
@@ -105,7 +105,8 @@ class K1CarrySceneCfg(K1RoughSceneCfg):
 _ARM_CFG = SceneEntityCfg("robot", joint_names=carry_mdp.ARM_JOINTS, preserve_order=True)
 _HOLD = {"pos_std": 0.08, "tilt_std": 0.3}
 # tier 2: these pay only in proportion to hold quality (wrapped in __post_init__)
-GATED_REWARDS = ("track_lin_vel_xy_exp", "track_ang_vel_z_exp", "goal_coarse", "goal_fine", "goal_reached")
+GATED_REWARDS = ("goal_progress", "goal_reached")
+_VEL_REWARDS = RewardsCfg()
 
 
 @configclass
@@ -160,22 +161,35 @@ class K1CarryCommandsCfg:
 
 
 @configclass
-class K1CarryRewardsCfg(RewardsCfg):
-    goal_coarse = RewTerm(func=carry_mdp.goal_distance_tanh, weight=2.0, params={"std": 1.5})
-    goal_fine = RewTerm(func=carry_mdp.goal_distance_tanh, weight=2.0, params={"std": 0.3})
-    goal_reached = RewTerm(func=carry_mdp.goal_reached, weight=20.0, params={"full_radius": 1.0})
-    # tier 1: always paid -- upright with the box in front of the trunk, more so while still
+class K1CarryRewardsCfg:
+    """Simplified set (2026-10-11, REWARDS_SIMPLE_PROPOSAL.md option A): goal progress,
+    hold, do not fall, light regularisation, plus 4 gait terms because the legs train
+    from scratch (not a residual over the velocity student)."""
+
+    # 1. carry the box to the goal (gated by hold quality in __post_init__)
+    goal_progress = RewTerm(func=carry_mdp.goal_progress_rate, weight=5.0)       # 5 per metre closed
+    goal_reached = RewTerm(func=carry_mdp.goal_reached, weight=500.0, params={"full_radius": 1.0})  # x dt = +10
+    # 2. box at the hold spot, trunk upright
     stand_hold = RewTerm(func=carry_mdp.stand_hold, weight=1.0, params=dict(_HOLD))
-    stand_still = RewTerm(func=carry_mdp.stand_still, weight=2.0,
-                          params={"cmd_eps": 0.05, "sigma": 0.2, **_HOLD})
-    box_tilt = RewTerm(func=carry_mdp.box_tilt_l2, weight=-2.0)
+    # 3. do not fall / do not drop the box (x dt = -10); carry has no success termination
+    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-500.0)
     weld_error = RewTerm(func=carry_mdp.weld_error_l1, weight=-10.0)
+    box_tilt = RewTerm(func=carry_mdp.box_tilt_l2, weight=-2.0)
+    # light regularisation
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0,
+                                  params={"asset_cfg": SceneEntityCfg("robot", body_names=["Trunk"])})
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
     # arms relative to the hold pose (default_joint_pos is rewritten per env)
     joint_deviation_arms = RewTerm(func=mdp.joint_deviation_l1, weight=-0.5, params={"asset_cfg": _ARM_CFG})
     joint_deviation_head = RewTerm(
         func=mdp.joint_deviation_l1, weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["AAHead_yaw", "Head_pitch"])},
     )
+    # minimum gait for legs trained from scratch (same terms/weights as the velocity env)
+    feet_slide = _VEL_REWARDS.feet_slide
+    feet_clearance = _VEL_REWARDS.feet_clearance
+    feet_alternation = _VEL_REWARDS.feet_alternation
+    undesired_contacts = _VEL_REWARDS.undesired_contacts
 
 
 @configclass
@@ -227,7 +241,6 @@ class K1CarryEnvCfg(K1VelocityRoughEnvCfg):
         # flat and blind: no height scan anywhere (set after super, which configures it)
         self.scene.height_scanner = None
         self.observations.teacher.height_scan = None
-        self.rewards.base_height.params["sensor_cfg"] = None   # plane: ground is z=0
         # goals reach 10 m from the start, so cells must be wider than 2 x 10 m
         self.scene.env_spacing = 22.0
         # 10 m at the 0.5 m/s command cap is 20 s of walking; leave time to turn and dwell

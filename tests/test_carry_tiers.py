@@ -79,11 +79,11 @@ def test_radius_schedule_holds_while_falls_are_frequent_and_caps_at_target():
     assert sched.max_r == 4.0
 
 
-def test_cfg_gates_walk_and_goal_terms_and_keeps_tier_one_ungated():
+def test_cfg_gates_goal_terms_and_keeps_tier_one_ungated():
     src = (CARRY / "carry_env_cfg.py").read_text()
-    for name in ("track_lin_vel_xy_exp", "track_ang_vel_z_exp", "goal_coarse", "goal_fine", "goal_reached"):
+    for name in ("goal_progress", "goal_reached"):
         assert f'"{name}"' in src.split("GATED_REWARDS = ")[1].split("\n")[0]
     gated_line = src.split("GATED_REWARDS = ")[1].split("\n")[0]
-    assert "stand_hold" not in gated_line and "stand_still" not in gated_line
-    assert "stand_hold = RewTerm" in src and "stand_still = RewTerm" in src
+    assert "stand_hold" not in gated_line
+    assert "stand_hold = RewTerm" in src
     assert "goal_radius_curriculum" in src

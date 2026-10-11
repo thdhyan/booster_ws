@@ -121,6 +121,7 @@ def _progress_state(env: ManagerBasedRLEnv) -> SimpleNamespace:
         state = SimpleNamespace(
             initial_goal_dist=torch.zeros(env.num_envs, device=env.device),
             initial_robot_ball_dist=torch.zeros(env.num_envs, device=env.device),
+            prev_goal_dist=torch.zeros(env.num_envs, device=env.device),
         )
         env.kick_progress = state
     return state
@@ -203,6 +204,19 @@ def ball_to_goal_progress(env: ManagerBasedRLEnv) -> torch.Tensor:
     return ((initial_dist - current_dist) / initial_dist).clamp(0.0, 1.0)
 
 
+def ball_to_goal_progress_rate(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Metres of ball-to-goal distance closed per SECOND.
+
+    The reward manager multiplies by dt, so the episode total is weight x metres closed
+    (as push's ``box_goal_progress_rate``). Pays for progress, not for a state.
+    """
+    state = _progress_state(env)
+    cur = goal_distance(env)
+    prog = (state.prev_goal_dist - cur) / env.step_dt
+    state.prev_goal_dist = cur
+    return prog
+
+
 def approach_ball(env: ManagerBasedRLEnv, min_dist: float = 0.5) -> torch.Tensor:
     """Reward closing the initial robot-to-ball distance while still far away."""
     state = _progress_state(env)
@@ -266,6 +280,7 @@ def _reset_progress(env: ManagerBasedRLEnv, env_ids: torch.Tensor, ball_pos: tor
     robot_pos_w = env.scene.env_origins[env_ids, :2] + robot_local_xy
     state.initial_goal_dist[env_ids] = torch.norm(ball_pos - GOAL_POS.to(env.device), dim=-1)
     state.initial_robot_ball_dist[env_ids] = torch.norm(ball_pos[:, :2] - robot_pos_w[:, :2], dim=-1)
+    state.prev_goal_dist[env_ids] = state.initial_goal_dist[env_ids]
 
 
 def reset_ball_omnireset(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:

@@ -23,8 +23,8 @@ from k1_velocity.tasks.kick.mdp import (  # noqa: F401 (re-exported for the cfgs
 )
 
 
-def _action_term(env):
-    return env.action_manager.get_term("skill")
+def _action_term(env, name: str = "skill"):
+    return env.action_manager.get_term(name)
 
 
 def _track_state(env) -> SimpleNamespace:
@@ -73,9 +73,19 @@ def ball_visible(env) -> torch.Tensor:
     return ball_fov_visible(env).float()
 
 
-def residual_l2(env) -> torch.Tensor:
+def residual_l2(env, action_name: str = "skill") -> torch.Tensor:
     """|residual|^2 actually added to the student's leg output (keeps the skill a residual)."""
-    return _action_term(env).residual.square().sum(-1)
+    return _action_term(env, action_name).residual.square().sum(-1)
+
+
+def term_fired(env, term_names: list[str]) -> torch.Tensor:
+    """1.0 where any of the named termination terms fired this step (failures only,
+    unlike ``is_terminated``, which also fires on a success termination)."""
+    tm = env.termination_manager
+    out = torch.zeros(env.num_envs, device=env.device)
+    for name in term_names:
+        out = torch.maximum(out, tm.get_term(name).float())
+    return out
 
 
 def command_rate_l2(env) -> torch.Tensor:

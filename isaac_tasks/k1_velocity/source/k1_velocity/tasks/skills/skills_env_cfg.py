@@ -97,30 +97,29 @@ class KickObsCfg(TrackObsCfg):
 
 @configclass
 class CommonRewardsCfg:
-    alive = RewTerm(func=smdp.is_alive, weight=0.5)
-    termination = RewTerm(func=kmdp.is_terminated, weight=-50.0)
-    flat_orientation_l2 = RewTerm(func=kmdp.flat_orientation_l2, weight=-1.0)
+    # 2026-10-11 simplified set (REWARDS_SIMPLE_PROPOSAL.md): task terms + one fall
+    # penalty (x dt = -10) + light regularisation. The frozen student owns the gait.
     action_rate_l2 = RewTerm(func=kmdp.action_rate_l2, weight=-0.01)
     residual_l2 = RewTerm(func=smdp.residual_l2, weight=-0.5)
-    command_rate_l2 = RewTerm(func=smdp.command_rate_l2, weight=-0.05)
-    head_track = RewTerm(func=smdp.track_ball_head_exp, weight=1.0, params={"std": 0.35})
 
 
 @configclass
 class TrackRewardsCfg(CommonRewardsCfg):
     ball_distance = RewTerm(func=smdp.ball_distance_keep, weight=1.5, params={"target": 0.8, "std": 0.4})
-    face_ball = RewTerm(func=smdp.face_ball, weight=0.5, params={"std": 0.5})
-    ball_visible = RewTerm(func=smdp.ball_visible, weight=0.5)
+    head_track = RewTerm(func=smdp.track_ball_head_exp, weight=1.0, params={"std": 0.35})
+    termination_penalty = RewTerm(func=smdp.term_fired, weight=-500.0,
+                                  params={"term_names": ["root_height", "base_orientation", "ball_lost"]})
 
 
 @configclass
 class KickRewardsCfg(CommonRewardsCfg):
-    goal_scored = RewTerm(func=kmdp.goal_scored, weight=50.0)
-    ball_to_goal_progress = RewTerm(func=kmdp.ball_to_goal_progress, weight=1.0)
     approach_ball = RewTerm(func=kmdp.approach_ball, weight=1.0, params={"min_dist": 0.5})
-    kick_toward_goal = RewTerm(func=kmdp.kick_toward_goal, weight=2.0, params={"speed_scale": 0.5})
-    align_stance = RewTerm(func=kmdp.align_stance, weight=0.5, params={"max_dist": 0.75})
-    face_ball = RewTerm(func=smdp.face_ball, weight=0.3, params={"std": 0.5})
+    ball_progress = RewTerm(func=kmdp.ball_to_goal_progress_rate, weight=5.0)   # 5 per metre closed
+    goal_scored = RewTerm(func=kmdp.goal_scored, weight=500.0)                  # x dt = +10 once
+    head_track = RewTerm(func=smdp.track_ball_head_exp, weight=0.5, params={"std": 0.35})
+    # failures only: the old is_terminated also fired on the goal_scored termination
+    termination_penalty = RewTerm(func=smdp.term_fired, weight=-500.0,
+                                  params={"term_names": ["root_height", "base_orientation"]})
 
 
 @configclass

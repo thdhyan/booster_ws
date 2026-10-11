@@ -300,11 +300,26 @@ def goal_distance_tanh(env, std: float, command_name: str = "base_velocity") -> 
     return 1.0 - torch.tanh(env.command_manager.get_term(command_name).goal_dist / std)
 
 
+def goal_progress_rate(env, command_name: str = "base_velocity") -> torch.Tensor:
+    """Metres closed toward the goal per SECOND (x dt in the manager: episode total is
+    weight x metres). Zero on the step a goal resamples and on an episode's first step,
+    where goal_dist jumps."""
+    term = env.command_manager.get_term(command_name)
+    st = _state(env)
+    cur = term.goal_dist.clone()
+    prev = getattr(st, "prev_goal_dist", None)
+    st.prev_goal_dist = cur
+    if prev is None:
+        return torch.zeros_like(cur)
+    fresh = term.just_reached | (env.episode_length_buf <= 1)
+    return torch.where(fresh, torch.zeros_like(cur), (prev - cur) / env.step_dt)
+
+
 def goal_reached(env, command_name: str = "base_velocity", full_radius: float = 1.0) -> torch.Tensor:
     """Bonus on the step the dwell completes (the command then resamples the goal).
 
     Scaled by how far the reached goal was drawn (carry_tiers.reach_scale), so a
-    stand-only goal (radius 0) pays nothing here; standing is paid by stand_still.
+    stand-only goal (radius 0) pays nothing here; standing is paid by stand_hold.
     """
     from . import carry_tiers
 
