@@ -222,6 +222,13 @@ K1_TRAIN_SCRIPT=plateau_stop.py ~/run_k1_train.sh \
 
 ## 5. Recording video
 
+**Reporting cadence (user requirement, 2026-10-10):**
+
+- After every smoke test or basic test, post a short note (what ran, the result, a frame or
+  video link) to Google Slides and Drive.
+- While a training run is going, record a debug video from its latest checkpoint **every
+  3 hours** (play run on GPU1), upload it to Drive and add a slide.
+
 ```bash
 K1_TRAIN_SCRIPT=play_record.py K1_GPU=1 PUSH_BASE_MODE=squat ~/run_k1_train.sh \
   --task Isaac-Push-SG-K1-Play-v0 --checkpoint <ckpt> \
@@ -242,6 +249,28 @@ the training cfg):
 
 `--checkpoint` for `play_record.py` may be absolute. (`train.py --checkpoint` may **not** —
 it must be clone-relative.)
+
+### Video quality: 1080p per panel, denoised (user requirement, 2026-10-10)
+
+The user wants **clear videos: every panel 1080p, no renderer grain**. Since `6abff32`
+`play_record.py --panel_video` defaults to:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--panel_size W H` | `1920 1080` | size of **each** panel; the 2×2 tile is 3840×2160 + header |
+| `--panel_spp` | `8` | `/rtx/rtpt/spp` (real-time path tracer samples per pixel; the kit default is 1, which is the grain) |
+| `--panel_subframes` | `4` | Kit updates per captured frame with physics paused, so the temporal denoiser converges on each pose |
+
+`set_clean_render()` also turns on `/rtx/newDenoiser/enabled` and the firefly filter.
+Rendering stays clip-only (cameras exist only with `--panel_video`). It is several
+times slower than the old 480×270 panels; use fewer `--steps` for quick checks. Don't go
+back to small or noisy panels for anything shown to the user.
+
+**Goal markers now render under `--headless` too.** `K1DebugMarkers` draws plain USD
+curves (no `VisualizationMarkers`, which need a visualizer): a green wireframe of the
+push goal pose (`push_state.goal_pos/goal_quat/half_extents`, the 8 corners `goal_reached`
+scores) plus a small centre sphere, or for carry a ring at `success_radius` around the
+goal. The header shows `goal (x,y) box->goal=…m` (push) or `goal … dist=…m` (carry).
 
 ### ⚠️ Always check `PANEL_VERIFY`, never file existence
 
@@ -471,6 +500,22 @@ Open risks:
 
 ---
 
+### 11b. Tiered rewards (`e658931`), user request 2026-10-10: "robot keeps falling"
+
+The first carry run fell in ~15% of episodes (`base_orientation`) because every reward
+needed walking. The user chose **gated tiers** and **kill + warm-start resume**:
+
+| Tier | Terms | Rule |
+|---|---|---|
+| 1, always paid | `stand_hold` (w 1), `stand_still` (w 2) | `hold_quality` = exp(−‖box − nominal‖²/0.08²) · exp(−‖g_xy‖²/0.3²), box in the root frame vs `carry_state.box_offset`; `stand_still` also needs ‖cmd‖<0.05 and pays exp(−(v²+ω²)/0.2²) |
+| 2, gated | `track_lin_vel_xy_exp`, `track_ang_vel_z_exp`, `goal_coarse`, `goal_fine`, `goal_reached` | wrapped in `carry_mdp.gated` (term × hold_quality) in `K1CarryEnvCfg.__post_init__`; the inner function is stored as a `"module:function"` string so Hydra can round-trip the cfg |
+| 3, curriculum | `goal_radius` curriculum term | max goal radius starts at 1 m and grows by 0.25 m up to 4 m each time a window of `num_envs` resets has < 8% falls (`base_orientation` + `root_height`). Logged as `Curriculum/goal_radius/{max_radius,fall_rate}` |
+
+Also: 20% of goals are **stand goals** (radius 0, 4 s dwell), and `goal_reached` is
+scaled by `clamp(goal_r / 1 m, 0, 1)`, so standing can't farm the success bonus.
+Min radius is now 0.5 m. Pure maths is in `carry_tiers.py` (no Isaac imports), tested by
+`tests/test_carry_tiers.py`. Observation dims are unchanged, so old checkpoints load.
+
 ## 12. Videos delivered (2026-10-10)
 
 Recorded on zz-bw with `play_record.py --panel_video --label` (4 panels: overview,
@@ -498,3 +543,23 @@ with `ffprobe -count_frames` and frames were inspected.
 
 Next videos: Push-SG at a later checkpoint (e.g. model_1500) and carry at ~model_1000,
 uploaded the same way.
+
+## 13. Multi-robot push (M1 play, M2 training) — 2026-10-10
+
+- **M1** `Isaac-Push-Multi-K1-Play-v0` (`push_multi_env_cfg.py`): 2 K1s at y=±0.5 m, one shared
+  box (0.85–0.95 m, 3–10 kg), forward goal cone. Per robot: `base_velocity_k`, `wrist_{left,right}_k`,
+  `wrist_target_k`, `height_scanner_k`, 109-dim `teacher_k` (single-robot layout).
+  `play_record.py` stacks the groups and runs the single-robot policy once.
+  Smoke (p6 `2026-10-10_18-59-36/model_200`): pipeline OK, 400 frames 3840×2300, but robots drift off
+  the box (wrist-box gap 0.8→1.3 m, cmd saturated) — the checkpoint is too early.
+  Drive `p6_push_multi_m1_smoke_2026-10-10.mp4` (`1F5QllGXsA8tEJM537zlnmu2erAhvGJoU`), slide 38.
+- **M2** `Isaac-Push-Multi-K1-v0` + `AgentsInBatchWrapper` (`agents_in_batch.py`, applied by train.py
+  when `env_cfg.agents_in_batch > 0`): N envs → 2N rows, one shared actor/critic (IPPO with shared
+  weights), reward per robot = team terms + own `_k` terms, dones broadcast. Box 6–16 kg, obs noise on.
+  Runner `p6_push_multi`. Unit test with a fake env passed; 3-iteration train smoke (64 envs, GPU0)
+  passed. `--checkpoint` from another experiment now loads directly (commit 30b4672).
+- **Full M2 run not started**: dl disk 100 % + 4 GPUs busy (other user), lambda NVML mismatch
+  (reboot). Proposed: zz-bw GPU0 next to ball-track:
+  `K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/train.py K1_GPU=0 ~/run_k1_train.sh --task Isaac-Push-Multi-K1-v0 --num_envs 2048 --max_iterations 3000 --headless --checkpoint logs/rsl_rl/p6_push/<best run>/model_<N>.pt --warm_start`
+  Better: warm-start from a single-robot push checkpoint that already reaches goals.
+- Status slide 37 + Drive `status_2026-10-10_2000.md`.
