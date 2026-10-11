@@ -51,45 +51,47 @@ Source: run `p6_push` params/env.yaml (what the run trained with). Episode 20.0 
 - `goal_dist`: `goal_dist_curriculum` start_iter=200, end_iter=1800, d_max=1.5. Goal distance cap 0.3 -> d_max metres (iterations via physics steps).
 - `goal_yaw`: `goal_yaw_curriculum` start_iter=1800, end_iter=3000, yaw0_deg=30.0, yaw_max_deg=180.0. Phase 2 of the goal curriculum (A3): goal yaw delta +-30 -> +-180 deg, phased AFTER the distance walk (start_iter = its end) so orientation tracking enters only once distance pushing works. The goal's own yaw is what makes box rotation task-relevant (v2's spin penalty punished ALL rotation while goal yaw was pinned to box yaw - no orientation task).
 
-## Push multi-robot (Isaac-Push-Multi-K1-v0): skrl MAPPO, one policy per robot
+## Push simple rewards (Isaac-Push-Simple-K1-v0): PPO, command policy on frozen squat base
 
-![push/push_mappo](figures/push_mappo.png)
+![push/push_simple](figures/push_simple.png)
 
-Decoupled per robot (separate weights), centralized critics. Warm start: single push.
+Same network as push_single; only the rewards changed: hands to box, box progress (m/s), box near goal, success bonus, fall/box-fail penalty. Box spawn radius and goal distance on curricula.
 
 ### Reward terms
 
-Source: run `p6_push_multi` params/env.yaml (what the run trained with). Episode 20.0 s, policy dt 0.020 s. Isaac Lab multiplies every weight by dt; `Episode_Reward/<term>` in TensorBoard is the episode sum divided by the episode length in seconds.
+Source: run `p6_push_simple` params/env.yaml (what the run trained with). Episode 20.0 s, policy dt 0.020 s. Isaac Lab multiplies every weight by dt; `Episode_Reward/<term>` in TensorBoard is the episode sum divided by the episode length in seconds.
 
 | term | weight | function | params | what it computes (docstring) |
 |---|---|---|---|---|
-| `corner_goal_tracking` | 1.0 | `corner_goal_tracking` (push_mdp) | asset_name=robot_0 | -mean_i ||corner_i - goal_corner_i||, normalized by box size. |
-| `centroid_goal_tracking` | 0.5 | `centroid_goal_tracking` (push_mdp) | asset_name=robot_0 | -||mean(current corners) - mean(goal corners)|| (corner centroid). |
-| `box_goal_progress` | 2.0 | `box_goal_progress` (push_mdp) | asset_name=robot_0 | Telescoping Delta(corner-centroid error); prev baseline is reset in the SAME metric/frame by reset_box (fixes A5). |
-| `box_vel_toward_goal` | 0.5 | `box_vel_toward_goal` (push_mdp) |  | World-frame box velocity projected on the world direction (goal - box), recomputed every step (fix A4: v2 dotted a base-frame velocity with a world [1,0,0] that never updated - misdirected as soon as the robot yaws). |
-| `success_bonus` | 50.0 | `success_bonus` (push_mdp) |  | Sparse +1 exactly once per success. |
-| `wrist_box_proximity_0` | 0.25 | `wrist_box_proximity` (push_mdp) | asset_name=robot_0 | two-scale exp(-max wrist-to-box gap / scale), summed (0..2). |
-| `wrist_box_proximity_1` | 0.25 | `wrist_box_proximity` (push_mdp) | asset_name=robot_1 | two-scale exp(-max wrist-to-box gap / scale), summed (0..2). |
-| `base_height_command_0` | 0.5 | `base_height_command` (push_mdp) | asset_name=robot_0 | exp(-|z - H*| / std): trunk height tracks the CURRENT command. |
-| `base_height_command_1` | 0.5 | `base_height_command` (push_mdp) | asset_name=robot_1 | exp(-|z - H*| / std): trunk height tracks the CURRENT command. |
-| `termination_penalty` | -200.0 | `failure_terminated` (push_mdp) |  | 1.0 on non-timeout terminations EXCLUDING goal_reached: the -200 penalty must not charge success (fix A9/A10 - vmdp.is_terminated only excluded time_out; adding a success term would have made success net -150). Per-term dones are refreshed by the termination manager before rewards, so this reads the current step. |
+| `hands_to_box` | 0.5 | `wrist_box_proximity` (push_mdp) |  | two-scale exp(-max wrist-to-box gap / scale), summed (0..2). |
+| `box_progress` | 5.0 | `box_goal_progress_rate` (push_mdp) |  | box_goal_progress per SECOND (metres of centroid error closed / s). |
+| `box_near_goal` | 2.0 | `box_goal_near` (push_mdp) | std=0.5 | exp(-|box centre - goal centre|_xy / std): dense pull that peaks at the goal. |
+| `success_bonus` | 500.0 | `success_bonus` (push_mdp) |  | Sparse +1 exactly once per success. |
+| `termination_penalty` | -500.0 | `term_fired` (push_mdp) | term_names=['fallen', 'box_oob', 'box_tip'] | 1.0 where any of the named termination terms fired this step. |
+| `flat_orientation_l2` | -1.0 | `flat_orientation_l2` (rewards) |  | Squared xy of projected gravity (trunk tilt). Penalty. |
+| `action_rate_l2` | -0.005 | `action_rate_l2` (rewards) |  | Squared change of the action between steps. Penalty. |
+| `joint_pos_limits` | -1.0 | `joint_pos_limits` (rewards) | asset_cfg=robot[ALeft_Shoulder_Pitch,Left_Shoulder_Roll,Left_Elbow_Pitch,Left_Elbow_Yaw,ARight_Shoulder_Pitch,Right_Shoulder_Roll,Right_Elbow_Pitch,Right_Elbow_Yaw] | Joint positions beyond soft limits. Penalty. |
 
 ### Terminations
 
 | term | function | params | meaning |
 |---|---|---|---|
 | `time_out` | `time_out` |  | Episode length reached (not a failure). |
-| `goal_reached` | `goal_reached` | err_thresh=0.08, hold_s=1.0 | Success: mean corner error < err_thresh held for hold_s seconds. |
+| `fallen` | `robot_fallen` | min_z=0.3, limit_angle=0.8 | Real fall only: trunk below min_z or tilted past limit_angle (rad). |
+| `goal_reached` | `goal_reached_centroid` | err_thresh=0.15, hold_s=1.0 | Success on box POSITION only: centre within err_thresh of the goal for hold_s. |
 | `box_oob` | `box_out_of_bounds` | radius=3.0 | Box centre beyond `radius` from the env origin = failure (fix A11: v2 parked the box anywhere - no bounds term, no failure count). radius > GOAL_WORKSPACE_R keeps every legal goal inside bounds, with 0.4 m of overshoot margin before the failure fires. |
 | `box_tip` | `box_tipped` | limit_deg=45.0 | Box roll/pitch past limit_deg = failure (fix A13: v2 only had a spin penalty - a tipped box made the corner goal unreachable but the episode kept running). Box up-axis z < cos(limit) -> tipped. |
-| `height_below_command_0` | `height_below_command` | margin=0.05, asset_name=robot_0 | Trunk below H* - margin = failure (fix A12: v2's fixed 0.35 floor is meaningless once the policy commands squats at 0.40-0.55). Flat ground -> world z equals terrain-relative z. |
-| `height_below_command_1` | `height_below_command` | margin=0.05, asset_name=robot_1 | Trunk below H* - margin = failure (fix A12: v2's fixed 0.35 floor is meaningless once the policy commands squats at 0.40-0.55). Flat ground -> world z equals terrain-relative z. |
-| `bad_orientation_0` | `bad_orientation` | limit_angle=0.8, asset_cfg=robot_0 | Trunk tilt beyond limit_angle (rad). |
-| `bad_orientation_1` | `bad_orientation` | limit_angle=0.8, asset_cfg=robot_1 | Trunk tilt beyond limit_angle (rad). |
 
 ### Curriculum
 
-None.
+- `box_dist`: `box_dist_curriculum` start_iter=200, end_iter=1800, r0=[0.75, 0.9], r1=[0.9, 1.8]. Robot->box spawn radius range r0 -> r1 (linear in iterations, like goal_dist).
+- `goal_dist`: `goal_dist_curriculum` start_iter=200, end_iter=1800, d_max=2.5. Goal distance cap 0.3 -> d_max metres (iterations via physics steps).
+
+## Push multi-robot (Isaac-Push-Multi-K1-v0): skrl MAPPO, one policy per robot
+
+![push/push_mappo](figures/push_mappo.png)
+
+skrl MAPPO (thdhyan/skrl fork), not rsl_rl. Decoupled per robot (separate weights), centralized critics. Rewards: team box terms + per-robot hands/fall terms (RewardSplit, _k suffix).
 
 ---
 

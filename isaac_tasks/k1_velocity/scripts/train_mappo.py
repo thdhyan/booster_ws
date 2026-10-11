@@ -60,6 +60,7 @@ from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
 
 import isaaclab_tasks  # noqa: F401
+from isaaclab.utils.io import dump_yaml
 from isaaclab_tasks.utils import parse_env_cfg
 
 import k1_velocity.tasks.push  # noqa: F401 — registers Isaac-Push-Multi-K1-*
@@ -212,6 +213,8 @@ def main():
     print(f"[INFO] MAPPO: {len(agents)} separate policies, {env.num_envs} envs, "
           f"obs {env.observation_space(agents[0]).shape}, state {env.state_space(agents[0]).shape}, "
           f"log {cfg['experiment']['directory']}/{stamp}")
+    # same params dump as train.py (task_docs.py reads params/env.yaml for the reward table)
+    dump_yaml(os.path.join(cfg["experiment"]["directory"], stamp, "params", "env.yaml"), env_cfg)
     trainer.train()
     env.close()
 

@@ -86,6 +86,19 @@ SPECS = {
         critic="critic MLP 238-512-256-128-1 (teacher obs)",
         note="Not residual, not decoupled. One actor for the 12 leg joints; head and arms held at default.",
     ),
+    "velocity/squat_residual": dict(
+        title="Squat residual (Isaac-Velocity-Squat-Residual-K1-v0): PPO, RESIDUAL on frozen velocity student",
+        run="k1_squat_residual", inputs=_SQUAT_OBS,
+        nodes={"actor": ("actor MLP 238-512-256-128-12 ELU", "trained"), "base": _STUDENT,
+               "cmd": ("env command vx, vy, wz\n(not from the actor)", "base"),
+               "res": ("12 leg residual x 0.5", "residual"),
+               "sum": ("legs = student + residual\n12 leg targets -> PD", "PD")},
+        edges=[("obs", "actor", ""), ("actor", "res", ""), ("cmd", "base", "command"), ("base", "sum", ""),
+               ("res", "sum", "+")],
+        critic="critic MLP 238-512-256-128-1 (teacher obs)",
+        note="Residual: the frozen student walks the env velocity command; the residual adds squat depth (H*) and "
+             "feet_flat. Actor init std 0.3.",
+    ),
     "velocity/squat_student": dict(
         title="Squat student (Isaac-Velocity-Squat-K1-Distill-v0): distillation", run=None,
         inputs=[("policy obs x 10-step history", 510), ("(lin/ang vel, gravity, cmd 4, leg pos/vel,", 0),
@@ -120,8 +133,22 @@ SPECS = {
         critic="critic MLP 109-512-256-128-1",
         note="Hierarchical, NOT residual: the legs come only from the frozen base. Arms by IK.",
     ),
+    "push/push_simple": dict(
+        title="Push simple rewards (Isaac-Push-Simple-K1-v0): PPO, command policy on frozen squat base",
+        run="p6_push_simple", inputs=_PUSH_OBS,
+        nodes={"actor": ("actor MLP 109-512-256-128-10 ELU", "trained"),
+               "cmd": ("vx, vy, wz, H* (4)", "base"),
+               "base": ("frozen base k1_push_base.pt\n(= squat teacher JIT 238-512-256-128-12)", "frozen"),
+               "legs": ("12 leg joint targets -> PD", "PD"),
+               "ik": ("wrist L/R xyz deltas (3+3)\n-> differential IK -> 8 arm joints", "IK")},
+        edges=[("obs", "actor", ""), ("actor", "cmd", ""), ("actor", "ik", ""), ("cmd", "base", "command"),
+               ("base", "legs", "")],
+        critic="critic MLP 109-512-256-128-1",
+        note="Same network as push_single; only the rewards changed: hands to box, box progress (m/s), box near "
+             "goal, success bonus, fall/box-fail penalty. Box spawn radius and goal distance on curricula.",
+    ),
     "push/push_mappo": dict(
-        title="Push multi-robot (Isaac-Push-Multi-K1-v0): skrl MAPPO, one policy per robot", run="p6_push_multi",
+        title="Push multi-robot (Isaac-Push-Multi-K1-v0): skrl MAPPO, one policy per robot", run="p6_push_mappo",
         inputs=[("robot_k's own obs (same 109 as single push)", 109)],
         nodes={"actor": ("policy_0 MLP 109-512-256-128-10", "trained"),
                "actor1": ("policy_1 MLP 109-512-256-128-10", "trained"),
@@ -130,7 +157,7 @@ SPECS = {
                "v": ("value_k MLP 218 (both robots' obs)-512-256-128-1\n(centralized critic, one per robot)", "critic")},
         edges=[("obs", "actor", "robot_0 obs"), ("obs", "actor1", "robot_1 obs"), ("actor", "b0", ""),
                ("actor1", "b1", ""), ("obs", "v", "both")],
-        critic=None, note="Decoupled per robot (separate weights), centralized critics. Warm start: single push.",
+        critic=None, note="skrl MAPPO (thdhyan/skrl fork), not rsl_rl. Decoupled per robot (separate weights), centralized critics. Rewards: team box terms + per-robot hands/fall terms (RewardSplit, _k suffix).",
     ),
     "skills/track": dict(
         title="Ball track (p8_balltrack_residual): PPO, RESIDUAL on frozen velocity student",

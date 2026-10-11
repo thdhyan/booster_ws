@@ -607,3 +607,30 @@ uploaded the same way.
   kick it700 → track it700 → carry it2000 → squat it21800 → push it500 → MAPPO it100 (`--mappo`).
   Output `logs/videos/batch_3h_2145/`.
 - Drive: `status_2026-10-10_2145.md`, `p6_push_it300_2026-10-10.mp4`; slides 39 (status) + 40 (push video).
+
+## 14. Simplified rewards, curricula, relaunches — 2026-10-11 13:00–13:30 (commit e9888ba)
+
+User request 2026-10-11: simplify rewards; box and goal curricula; MAPPO relaunch that does not terminate
+instantly; squat teacher as a residual over the velocity controller; carry goal radius to 10 m plus a mass
+curriculum; ghost box marker for carry; head RGB + depth panels; Carry v2 pick-up design.
+
+| Task id | What changed | zz-bw run (tmux / log) |
+|---|---|---|
+| `Isaac-Push-Simple-K1-v0` (`push/push_simple_env_cfg.py`) | 3 ideas only: hands to box 0.5, box progress in m/s 5, box near goal 2, success 500, fall/box-fail −500 (weights get multiplied by dt=0.02). Box spawn radius 0.75–0.9 → 0.9–1.8 m and goal distance 0.3 → 2.5 m over it 200–1800. Success = box centre within 0.15 m for 1 s | `k1_push` / `logs/push_simple_1320.log` |
+| `Isaac-Push-Multi-K1-v0` (skrl MAPPO, `scripts/train_mappo.py`) | Same team terms. Per-robot hands and fall (`_k`). `height_below_command_k` (fired 98.7 % for robot_1) replaced by `robot_fallen` (z < 0.30 or tilt > 0.8). Curricula on. No warm start | `k1_mappo` / `logs/mappo_1315.log` |
+| `Isaac-Velocity-Squat-Residual-K1-v0` (`velocity/squat_residual_env_cfg.py`) | 12-leg residual ×0.5 over the frozen `k1_velocity_student_gaitfix.pt`, fed by the env velocity command. feet_flat kept. Init std 0.3 | `k1_squatres` / `logs/squat_res_1325.log` |
+| `Isaac-Carry-K1-v0` | Goal radius curriculum 1 → 10 m (step 0.5). Episode 30 s, env_spacing 22. Box mass resampled each reset from U(1, hi), with hi going 2 → 8 kg alongside the radius (previously fixed U(1, 8) from the start, i.e. max difficulty). Goal marker = translucent ghost of the held box + success disc | relaunch after the smoke video is checked |
+
+The old squat teacher (`k1_squat`, plateau at it 27.5k, curriculum stuck at stage 1) is still running on GPU0.
+It is superseded by the residual run; kill it once the residual run learns.
+
+Smoke tests: `smoke_1310.sh`. It runs 3-iteration training on GPU0, then records panel videos on GPU1 to
+`logs/videos/smoke_1310/`. All three train smokes exited rc=0.
+
+Panels: `play_record.py` adds per-robot eye RGB and depth (0–6 m) panels by default. Turn them off with
+`--no_head_cam`.
+
+Carry v2 (pick up + carry + place, following ULTRA arXiv 2603.03279) is designed in `carry/CARRY_V2.md`.
+
+Architecture figures: `push/figures/push_mappo.png`, `push_simple.png`, `velocity/figures/squat_residual.png`.
+Regenerate with `task_docs.py` after rsyncing `params/{env,agent}.yaml` of the new runs into `k1m_out/params/<run>/`.
