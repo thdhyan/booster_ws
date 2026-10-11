@@ -523,6 +523,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         """World-frame wrist targets of every robot (orange) for the panels."""
         from isaaclab.utils.math import quat_apply
 
+        # the generic velocity-command target/estimate spheres mean nothing here
+        for name in ("target", "estimate"):
+            markers._translate(name, np.array([0.0, 0.0, -10.0]))
+
         for k, n in enumerate(robot_names):
             r = arts[n]
             tgt = base_env.command_manager.get_term(f"wrist_target_{k}").command[0].view(2, 3)
