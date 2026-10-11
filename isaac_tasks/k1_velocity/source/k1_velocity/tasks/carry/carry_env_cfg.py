@@ -243,3 +243,6 @@ class K1CarryEnvCfg_PLAY(K1CarryEnvCfg):
         self.commands.base_velocity.debug_vis = True
         self.observations.policy.enable_corruption = False
         self.events.push_robot = None
+        # play runs a trained policy: start at the trained 4 m radius, not the 1 m
+        # curriculum start (a fresh play env re-runs the schedule from `start`)
+        self.curriculum.goal_radius.params["start"] = self.curriculum.goal_radius.params["target"]

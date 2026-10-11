@@ -509,3 +509,43 @@ def action_jerk_l2(env, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     prev2.copy_(prev)
     prev.copy_(flat)
     return third.pow(2).mean()
+
+
+def _sole_level(foot_quat: torch.Tensor, std: float) -> torch.Tensor:
+    """exp(-|g_xy|^2 / std^2) of gravity in each foot frame: 1 for a level sole.
+
+    The K1 foot links have identity joint origins, so the foot frame's xy plane is
+    the sole plane; any pitch (heel or toe up) or roll tilts gravity into xy.
+    """
+    w, x, y, z = foot_quat.unbind(-1)
+    # third row of R^T (gravity (0,0,-1) expressed in the foot frame), xy part
+    gx = -2.0 * (x * z - w * y)
+    gy = -2.0 * (y * z + w * x)
+    return torch.exp(-(gx * gx + gy * gy) / std**2)
+
+
+def feet_flat_contact(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
+    std: float = 0.15,
+    force_threshold: float = 5.0,
+) -> torch.Tensor:
+    """Reward (>= 0, max 1) for loaded feet whose sole is flat on the ground.
+
+    Per foot: [contact force > threshold] * level(sole), averaged over the feet.
+    Standing on the heel/ankle edge or the toes pitches the sole and loses the
+    credit; ``feet_roll_l2`` only charged roll, so pitch was free. Positive weight.
+    Flat-ground assumption: on slopes/stairs edges the level term under-pays a
+    little, which is fine for a shaping term.
+    """
+    robot = env.scene[asset_cfg.name]
+    sensor = env.scene.sensors[sensor_cfg.name]
+    hist = sensor.data.net_forces_w_history
+    hist = hist.torch if hasattr(hist, "torch") else hist        # Isaac Lab 3 warp arrays
+    quat = robot.data.body_quat_w
+    quat = quat.torch if hasattr(quat, "torch") else quat
+    forces = hist[:, :, sensor_cfg.body_ids, :].norm(dim=-1).max(dim=1)[0]
+    loaded = (forces > force_threshold).to(forces.dtype)
+    level = _sole_level(quat[:, asset_cfg.body_ids, :], std)
+    return (loaded * level).mean(dim=1)

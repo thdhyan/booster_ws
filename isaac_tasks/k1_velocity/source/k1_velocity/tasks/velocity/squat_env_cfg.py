@@ -40,6 +40,7 @@ from isaaclab.managers import (
 )
 from isaaclab.utils.configclass import configclass
 
+from . import gait_rewards as gait
 from . import squat_mdp
 from .squat_command import SquatVelocityHeightCommandCfg
 from .velocity_env_cfg import K1_TRUNK_HEIGHT, CommandsCfg, RewardsCfg, TerminationsCfg, K1VelocityRoughEnvCfg
@@ -102,6 +103,18 @@ class SquatRewardsCfg(RewardsCfg):
         func=squat_mdp.base_height_cmd_exp,
         weight=2.0,
         params={"command_name": "base_velocity", "std": 0.05, "sensor_name": "height_scanner"},
+    )
+    # 2026-10-11: whole sole on the ground while loaded. The teacher stood on its
+    # ankle edge/heels during squats; feet_roll only charged roll, pitch was free.
+    # std 0.15 on sin(tilt): 6 deg tilt keeps 61 % of the credit, 15 deg keeps 5 %.
+    feet_flat = RewTerm(
+        func=gait.feet_flat_contact,
+        weight=1.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
+            "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
+            "std": 0.15,
+        },
     )
 
 
