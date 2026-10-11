@@ -597,3 +597,13 @@ uploaded the same way.
   the first frame (`4a05dc3`); batch restarted 20:27 (`$S/record_batch_1010.sh`, tmux `k1_rec_batch`).
 - Marker fix (`7416e48`): velocity target/estimate spheres hidden in multi-robot videos. Remaining
   markers: cyan = robot root, orange = wrist targets, green wireframe = goal box.
+
+### 13d. 3-hour report 21:45 + MAPPO full run
+
+- MAPPO full run (user OK 20:38): tmux `k1_mappo`, GPU0, 2048 envs, 3000 it, warm p6 it400,
+  `logs/skrl/p6_push_mappo/2026-10-10_20-39-31_p6_push_mappo`, wandb run `8d0jdhbz`; ~1.6 s/step → ~31 h.
+- 20:27 batch: only `p6_push_it300` finished (71 min/clip on loaded GPU1); stopped and replaced by
+  `$S/record_batch_3h_2145.sh` (tmux `k1_rec_3h`, latest ckpts, 400 steps each):
+  kick it700 → track it700 → carry it2000 → squat it21800 → push it500 → MAPPO it100 (`--mappo`).
+  Output `logs/videos/batch_3h_2145/`.
+- Drive: `status_2026-10-10_2145.md`, `p6_push_it300_2026-10-10.mp4`; slides 39 (status) + 40 (push video).
