@@ -563,3 +563,37 @@ uploaded the same way.
   `K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/train.py K1_GPU=0 ~/run_k1_train.sh --task Isaac-Push-Multi-K1-v0 --num_envs 2048 --max_iterations 3000 --headless --checkpoint logs/rsl_rl/p6_push/<best run>/model_<N>.pt --warm_start`
   Better: warm-start from a single-robot push checkpoint that already reaches goals.
 - Status slide 37 + Drive `status_2026-10-10_2000.md`.
+
+### 13b. MAPPO, separate policies (skrl fork) — 2026-10-10 ~20:40
+
+- User asked for skrl MAPPO with **one policy per robot**, using the fork `github.com/thdhyan/skrl`
+  (skrl 2.1 API; its MAPPO equals upstream develop, the fork only adds POMDP/OmniReset wrappers).
+- `marl_adapter.py`: `MultiRobotMARLAdapter` exposes the manager-based multi-robot push env as a
+  DirectMARLEnv (`possible_agents`, per-agent spaces, `state()` = concat of every `teacher_k`, dict
+  step/reset) for skrl's `IsaacLabMultiAgentWrapper`. Rewards via `RewardSplit` (shared with M2).
+- `scripts/train_mappo.py`: per robot a Gaussian policy (109→512-256-128→10, ELU) + a centralized
+  value net (218→…→1). `--checkpoint <rsl p6 .pt>` warm-starts every agent: actor weights,
+  log_std = log(std_param), obs scaler ← rsl normalizer; critic weights on the agent's own 109-column
+  block (zeros on the other robot's), shared scaler = stats repeated. Scalers use clip 1e3 (rsl does
+  not clip; skrl's default is 5σ). Logs `logs/skrl/p6_push_mappo/<stamp>/checkpoints/agent_<t>.pt`.
+- zz-bw: the fork is cloned at `$S/tmp/skrl` (= `/tmp/skrl` in the container, pinned `1388269b`);
+  train_mappo puts it first on `sys.path` (`K1_SKRL_PATH` overrides). The container cannot keep
+  user-site installs (HOME override blocked), so do not `pip install --user` skrl.
+- Fix needed for skrl: it steps the env under `no_grad`, not `inference_mode`, so the frozen base's
+  `_last` buffer was an inference tensor → in-place reset failed. Now cloned (`56e9a23`).
+- Smoke (64 envs, 3 updates, GPU0): passed, `2026-10-10_20-32-18_p6_push_mappo/checkpoints/agent_72.pt`.
+  ~1.1 s per env step at 64 envs while GPU0 also trains ball-track.
+- Play: `play_record.py --mappo --checkpoint .../agent_<t>.pt --task Isaac-Push-Multi-K1-Train-Play-v0`
+  (plain-torch loader, no skrl needed). Smoke video queued after the batch: `$S/record_mappo_smoke.sh`
+  → `videos/batch_1010_2015/mappo_smoke_it3.mp4`.
+- Full MAPPO run: **not started**, same host question as M2 (needs user OK for shared GPU0):
+  `K1_TRAIN_SCRIPT=isaac_tasks/k1_velocity/scripts/train_mappo.py K1_GPU=0 ~/run_k1_train.sh --task Isaac-Push-Multi-K1-v0 --num_envs 2048 --max_iterations 3000 --headless --checkpoint logs/rsl_rl/p6_push/<run>/model_<N>.pt`
+
+### 13c. Video batch fix — 2026-10-10 ~20:25
+
+- First 20:06 batch wrote no mp4s: the panel header wrapped to a varying number of lines, so the
+  frame height changed and imageio raised "All images in a movie should have same size" (rc still
+  printed 0 because the script echoes `$?` of the launcher wrapper). Header line count is now fixed on
+  the first frame (`4a05dc3`); batch restarted 20:27 (`$S/record_batch_1010.sh`, tmux `k1_rec_batch`).
+- Marker fix (`7416e48`): velocity target/estimate spheres hidden in multi-robot videos. Remaining
+  markers: cyan = robot root, orange = wrist targets, green wireframe = goal box.
