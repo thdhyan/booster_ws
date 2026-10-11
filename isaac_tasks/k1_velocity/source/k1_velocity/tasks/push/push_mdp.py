@@ -1089,7 +1089,7 @@ class FrozenBaseVelocityAction(ActionTerm):
         if self._diag_mode != "hold":
             with torch.inference_mode():
                 out = self._policy(obs.to(robot.device))
-            self._last = out
+            self._last = out.clone()  # normal tensor: skrl steps outside inference_mode
         if self._diag_debug and self._dbg_n < 5:
             for name, blk in (
                 ("lin_vel", lin), ("ang_vel", ang), ("gravity", grav), ("cmd4", cmd4),
@@ -1157,7 +1157,7 @@ class FrozenBaseVelocityAction(ActionTerm):
         if self._diag_mode != "hold":
             with torch.inference_mode():
                 out = self._policy(obs.to(self._asset.device))
-            self._last = out
+            self._last = out.clone()  # normal tensor: skrl steps outside inference_mode
         if self._diag_debug and self._dbg_n < 5:
             for name, blk in (
                 ("lin_vel", lin), ("ang_vel", ang), ("gravity", grav), ("cmd", vel),
