@@ -245,7 +245,9 @@ def _load_mappo_actors(path, robot_names, device):
     Mirrors train_mappo.py: obs scaler (running_mean/variance, clip MAPPO_OBS_CLIP) then
     Linear-ELU MLP ``net``. Plain torch, so play_record does not need skrl.
     """
-    MAPPO_OBS_CLIP = 1.0e3      # train_mappo.py's observation_preprocessor clip_threshold
+    # train_mappo.py's observation_preprocessor clip_threshold; runs started before that
+    # setting existed (2026-10-10_20-39-31) used skrl's default 5
+    MAPPO_OBS_CLIP = float(os.environ.get("K1_MAPPO_OBS_CLIP", 1.0e3))
     ck = torch.load(os.path.abspath(path), map_location=device, weights_only=False)
     actors = []
     for uid in robot_names:
