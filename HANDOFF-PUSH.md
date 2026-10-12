@@ -666,3 +666,23 @@ zz-bw GPU1 for other users.
   --panel_size 1280 720 --steps 80` takes ~3 min (see `~/k1_run_ws/carry_smoke_dl.sh`).
 - lambda: G1 Isaac Sim + XR teleop + SOMA retarget containers stopped on request
   (`docker stop`, restart policy none); `k1m` service container left running.
+
+## 16. 3h reports 2026-10-12 02:12 and 04:45 (Drive `k1_rep0212_*`, `k1_rep0444_*`, one slide each)
+
+| run | it @04:45 | reward | state | proposed fix (awaiting user) |
+|---|---|---|---|---|
+| track (dl/0) | 2670/3000 | 15.1, slowly up | 90 % timeout, head_track 0.77 | none, finishing |
+| carry (dl/0) | 1762/3000 | 129, flat | 40 % base_orientation, radius stuck 1 m | wait, then soften |
+| kick (dl/1) | 2794/4000 | 18.1, flat | goal_scored 6 %, ball_progress < 0 | ball-to-goal vel + kick-foot contact rewards |
+| reach (dl/0) | 1879/3000 | -6.4 | std 2.0 diverged, 72 % `height_below_command` | relax margin (H* pad 0.55 -> trunk < 0.50 kills leaning) |
+| push simple (dl/1) | 2064/3000 | -7.7, falling | 28 % fallen, goal ~0 | kill, resume MAPPO agent_14400 on dl GPU1 |
+| squat (zz-bw/0) | 1115/6000 | 327, flat | stage 0, height_ema 0.028 > gate 0.025 | restart from it800, gate 0.03 |
+| MAPPO (stopped) | 16.4k/72k | 32 | goal_reached 42-55 % | ckpt + `models/k1_push_base.pt` already on dl |
+
+- Laptop no longer reaches dl directly: `ssh -J zz-bw dl`, `rsync -e "ssh -J zz-bw"`. zz-bw has no `dl`
+  alias, so relay zz-bw -> dl files via the laptop.
+- Report renders run on dl GPU1 (`~/rec3h_dl.sh`, queue `~/recq2.sh`, 1080p denoised, ~5-15 min each).
+  zz-bw GPU0 is too loaded by squat to finish a render in 20 min.
+- Kit 110 renderer segfaults now and then (rc 139, omni.syntheticdata). The partial `/tmp/_panel_<pid>.mp4`
+  stays decodable: `ffmpeg -i in -c copy -movflags +faststart out.mp4`.
+- `tmux has-session -t name` prefix-matches (`k1_rec3h` matched `k1_rec3h_b`); use `-t "=name"`.
