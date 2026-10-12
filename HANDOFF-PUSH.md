@@ -708,3 +708,8 @@ zz-bw GPU1 for other users.
 - 12:50 report (Drive `k1_rep1250_*`, status slide + 5 clip slides): all restarts training. MAPPO goal_reached
   45 % right after resume; carry tilt falls 13 % (was 36 %); squat height_ema 0.0283 under the 0.03 gate
   (stage advance due after it 200); reach/kick too early to judge. Renders: `~/recq4.sh <gpu> <jobs>` on dl.
+- 15:45 report (Drive `k1_rep1545_*`, status slide + 5 clip slides): dl runs all FINISHED, dl GPU0/1 idle.
+  kick v2 it 3999 goal_scored 59 % (v1 6.6 %) WORKS; carry v2 it 2999 curriculum done (10 m, 8 kg), falls 13 %
+  WORKS; MAPPO 57.6k ts goal curriculum 1.8 m, goal_reached 7 % (peak 52 % earlier stages); reach v2 FAILED
+  (fallen 58 %, std 1.75); squat v2 (zz-bw GPU0) 4695/6000 stuck at stage 1, height_ema 0.049 > gate 0.03,
+  trunk z 0.55 vs H* 0.46. Renders: `~/recq5.sh`.
