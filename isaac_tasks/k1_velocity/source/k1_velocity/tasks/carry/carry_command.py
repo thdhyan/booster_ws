@@ -159,7 +159,7 @@ class GoalCarryCommand(UniformVelocityCommand):
         pos = self.goal_pos_w.clone()
         pos[:, 2] = box_pos[:, 2]                        # held height
         scales = torch.ones_like(pos)
-        scales[:, 1] = carry_mdp._state(self._env).width  # prototype is 1 m wide
+        scales[:, 1] = carry_mdp.visual_width(carry_mdp._state(self._env).width)  # prototype is 1 m wide
         self.goal_visualizer.visualize(translations=pos, orientations=box_quat, scales=scales,
                                        marker_indices=idx)
         disc = self.goal_pos_w.clone()

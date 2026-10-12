@@ -35,6 +35,16 @@ _LEFT_ORIGINS = ((0.0, 0.077, 0.1845), (0.0025, 0.068, -0.0135), (0.0, 0.044428,
 _AXES = ((0.0, 1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 MIRROR = (1.0, -1.0, 1.0, -1.0)
 STUB_TIP = 0.20            # m along the forearm's +-y (mesh is 0.228 long)
+# Forearm half-thickness at the tip (Left_Arm_4.STL, |x|,|z| <= 0.025). The welds sit on the
+# stub AXIS at +-w/2, so a w-wide visual box would swallow half of each forearm; the mesh
+# is drawn narrower so its faces meet the stubs' inner surfaces. Visual only: welds,
+# mass, inertia and the width observation all keep the nominal w.
+STUB_HALF_THICK, VIS_GAP = 0.025, 0.005
+
+
+def visual_width(width):
+    """Rendered box width for a nominal (weld-to-weld) width: clears both forearms."""
+    return width - 2.0 * (STUB_HALF_THICK + VIS_GAP)
 
 # Offline IK: stub tip at (0.29, +w/2, 0.04), forearm along +x.
 WIDTH_TABLE = (0.25, 0.275, 0.30, 0.325, 0.35, 0.375, 0.40)
@@ -167,9 +177,9 @@ def spawn_carry_box(env, env_ids, width_range: tuple[float, float], mass_range: 
         mesh = stage.GetPrimAtPath(path + "/geometry/mesh")
         scale = mesh.GetAttribute("xformOp:scale")
         if scale and scale.IsValid():
-            scale.Set(Gf.Vec3f(BOX_DEPTH, w, BOX_HEIGHT))
+            scale.Set(Gf.Vec3f(BOX_DEPTH, visual_width(w), BOX_HEIGHT))
         else:
-            UsdGeom.Xformable(mesh).AddScaleOp().Set(Gf.Vec3f(BOX_DEPTH, w, BOX_HEIGHT))
+            UsdGeom.Xformable(mesh).AddScaleOp().Set(Gf.Vec3f(BOX_DEPTH, visual_width(w), BOX_HEIGHT))
 
         mass_api = UsdPhysics.MassAPI.Apply(stage.GetPrimAtPath(path))
         mass_api.CreateMassAttr().Set(m)

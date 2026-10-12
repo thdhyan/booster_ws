@@ -266,7 +266,7 @@ class TiledPanelRecorder:
         try:
             proc = subprocess.run(
                 [ffmpeg, "-v", "error", "-i", path, "-f", "null", "-"],
-                capture_output=True, text=True, timeout=900,
+                capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[PANEL_VERIFY] decode check failed: {type(exc).__name__}: {exc}")
@@ -282,7 +282,7 @@ class TiledPanelRecorder:
                 [ffprobe, "-v", "error", "-select_streams", "v:0",
                  "-count_frames", "-show_entries", "stream=nb_read_frames",
                  "-of", "csv=p=0", path],
-                capture_output=True, text=True, timeout=900,
+                capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL,
             )
             return int(probe.stdout.strip().splitlines()[0])
         except Exception as exc:  # noqa: BLE001
