@@ -649,12 +649,20 @@ zz-bw GPU1 for other users.
 | reach on walk student (H* padded 0.55), 3000 it | dl / 0 | `k1_reach` | `~/k1_logs/reach_walk_dl.log` |
 | kick residual on walk student, 4000 it | dl / 1 | `k1_kick` | `~/k1_logs/kick_walk_dl.log` |
 | push simple on walk student (H* padded), 3000 it | dl / 1 | `k1_push` | `~/k1_logs/push_walk_dl.log` |
+| carry on walk student (H* padded), 3000 it, launched 10-12 01:14 | dl / 0 | `k1_carry` | `~/k1_logs/carry_walk_dl.log` |
 
 - dl runs from `~/k1_run_ws` (main @ def4c4e) via `~/run_k1_train_dl.sh`; IsaacLab v3 there, so
   `--viz none`, not `--headless`. `models/k1_velocity_student_gaitfix.pt` (untracked) rsynced in,
   md5 6a57cd28… matches zz-bw. dl disk is ~100 % full (14 GB free): watch checkpoints.
 - zz-bw render bursts: `$S/tmp/booster_ws/rec_burst.sh <play_task> <exp_dir> <name> <label> [steps]`
   (GPU0, `timeout 1200`, latest checkpoint of the exp dir, output `$S/logs/videos/burst/`).
-- Carry not launched yet: waiting on the box-between-stubs viz check from the burst clip.
+- Carry viz fix (0b58353): welds sit on the stub axis at +-w/2, so a w-wide mesh swallowed half
+  of each forearm. Mesh (and goal ghost) now drawn `visual_width(w) = w - 2*(0.025+0.005)`; welds,
+  mass, inertia and the width obs keep nominal w. Checked on a dl clip (frame 2): stubs press on
+  the box side faces. Clip on Drive `k1_carry_vizfix_2026-10-12.mp4`, Slides note added.
+- panel_video `_count_decodable`: ffmpeg/ffprobe now get `stdin=DEVNULL` + timeout; before, the
+  verify step hung forever under tmux and recordings died at `timeout 1200` with no mp4.
+- dl recording works: `play_record.py ... --viz none --panel_video --panel_spp 4 --panel_subframes 1
+  --panel_size 1280 720 --steps 80` takes ~3 min (see `~/k1_run_ws/carry_smoke_dl.sh`).
 - lambda: G1 Isaac Sim + XR teleop + SOMA retarget containers stopped on request
   (`docker stop`, restart policy none); `k1m` service container left running.
