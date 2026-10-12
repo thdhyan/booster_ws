@@ -5,7 +5,9 @@
 
 Three ideas, nothing else (plus light regularization):
 
-1. hands to the box     -> ``wrist_box_proximity`` (farther wrist, two-scale)
+1. reach / hands to box -> ``wrist_box_proximity`` (farther wrist, two-scale) and
+                           ``wrist_target_tracking`` (the reach task's wrist-target term),
+                           both at the reach env's weight 1.0
 2. box closer to goal   -> ``box_goal_progress_rate`` (metres closed / s) + ``box_goal_near``
                            + a success bonus when the box centre sits on the goal
 3. do not fall          -> ``robot_fallen`` termination with a penalty
@@ -37,8 +39,10 @@ OOB_R = 3.0             # box beyond this = failure (env_spacing 8 keeps cells a
 
 @configclass
 class K1PushSimpleRewardsCfg:
-    # 1. hands to the box (0..2 per s)
-    hands_to_box = RewTerm(func=mdp.wrist_box_proximity, weight=0.5)
+    # 1. reach: hands to the box (0..2 per s) + wrists to the commanded targets
+    #    (func returns NEGATIVE distance -> positive weight is the penalty), as in reach
+    hands_to_box = RewTerm(func=mdp.wrist_box_proximity, weight=1.0)
+    wrist_target_tracking = RewTerm(func=mdp.wrist_target_tracking, weight=1.0)
     # 2. box closer to the goal
     box_progress = RewTerm(func=mdp.box_goal_progress_rate, weight=5.0)   # 5 per metre closed
     box_near_goal = RewTerm(func=mdp.box_goal_near, weight=2.0, params={"std": 0.5})
@@ -82,6 +86,8 @@ class K1PushSimpleEnvCfg(base.K1PushEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.events.reset_box.params = {"workspace_r": WORKSPACE_R}
+        # no height-controllable base yet: the P2 walk student, H* slot ignored
+        self.actions.base_velocity.base_policy_path = base.WALK_STUDENT_POLICY
 
 
 @configclass

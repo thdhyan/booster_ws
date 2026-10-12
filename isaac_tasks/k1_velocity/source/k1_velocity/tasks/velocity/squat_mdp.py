@@ -219,3 +219,100 @@ def squat_depth_curriculum(
         "height_ema": float(term.height_err_ema),
         "iteration": float(iteration),
     }
+
+
+def feet_unloaded_when_still(
+    env,
+    sensor_cfg,
+    command_name: str = "base_velocity",
+    force_threshold: float = 5.0,
+    still_speed: float = 0.05,
+) -> torch.Tensor:
+    """(n,) fraction of feet OFF the ground while the velocity command is ~zero.
+
+    Negative weight. Squat stage A commands zero velocity and wants both feet planted;
+    the gait clock never stops (MIN_HZ > 0), so the frozen student would otherwise keep
+    stepping in place under the squat.
+    """
+    sensor = env.scene.sensors[sensor_cfg.name]
+    hist = sensor.data.net_forces_w_history
+    hist = hist.torch if hasattr(hist, "torch") else hist
+    forces = hist[:, :, sensor_cfg.body_ids, :].norm(dim=-1).max(dim=1)[0]
+    unloaded = (forces <= force_threshold).float().mean(dim=1)
+    cmd = env.command_manager.get_command(command_name)
+    still = (cmd[:, :2].norm(dim=-1) < still_speed) & (cmd[:, 2].abs() < still_speed)
+    return unloaded * still.float()
+
+
+def squat_height_then_velocity_curriculum(
+    env,
+    env_ids,
+    command_name: str = "base_velocity",
+    steps_per_iter: int = 24,
+    rel_squat: float = 0.6,
+    height_stages: tuple = ((0.50, 0.55), (0.46, 0.55), (0.43, 0.55), (0.40, 0.55)),
+    vel_scales: tuple = (0.25, 0.5, 0.75, 1.0),
+    vel_full: tuple = ((-0.5, 0.5), (-0.3, 0.3), (-0.8, 0.8)),
+    vel_rel_standing: float = 0.1,
+    min_stage_iters: int = 200,
+    height_gate: float = 0.025,
+    vel_gate: float = 0.20,
+) -> dict | None:
+    """Two curricula in sequence (squat residual).
+
+    A. Height, zero velocity: every env gets a zero velocity command
+       (``rel_standing_envs`` = 1), ``rel_squat`` of them a squat H* from
+       ``height_stages[k]``. Next depth once ``height_err_ema <= height_gate``.
+    B. Velocity: after the deepest height stage is held, the velocity ranges grow
+       ``vel_scales[k] * vel_full`` (VR limits) with ``vel_rel_standing`` standing envs,
+       gated on BOTH height and velocity EMAs, so squat-and-walk is learned on top of a
+       working squat.
+
+    Every stage lasts at least ``min_stage_iters`` (lets the 0.99 EMAs see the new
+    stage). State lives on the command term, as for :func:`squat_depth_curriculum`.
+    """
+    term = env.command_manager.get_term(command_name)
+    if not hasattr(term, "squat_stage"):
+        return None
+    iteration = (env.sim.get_physics_step_count() // env.cfg.decimation) / steps_per_iter
+    n_h = len(height_stages)
+    n_total = n_h + len(vel_scales)
+
+    def apply(stage: int) -> None:
+        c = term.cfg
+        c.rel_squat_envs = float(rel_squat)
+        lo, hi = height_stages[min(stage, n_h - 1)]
+        c.squat_height_range = (float(lo), float(hi))
+        s = 0.0 if stage < n_h else float(vel_scales[stage - n_h])
+        (x0, x1), (y0, y1), (z0, z1) = vel_full
+        c.ranges.lin_vel_x = (s * x0, s * x1)
+        c.ranges.lin_vel_y = (s * y0, s * y1)
+        c.ranges.ang_vel_z = (s * z0, s * z1)
+        c.rel_standing_envs = 1.0 if stage < n_h else float(vel_rel_standing)
+        term.squat_stage = stage
+        term.hv_stage_since = iteration
+        print(f"[squat-curriculum] iter {iteration:.0f}: stage {stage} "
+              f"({'height' if stage < n_h else 'velocity'}) H*~U{c.squat_height_range} "
+              f"vel_scale={s:.2f} rel_standing={c.rel_standing_envs:.2f} "
+              f"(vel_ema={term.vel_err_ema:.3f}, height_ema={term.height_err_ema:.4f})", flush=True)
+
+    if not getattr(term, "hv_init", False):
+        term.hv_init = True
+        apply(0)
+    stage = int(term.squat_stage)
+    if stage < n_total - 1 and iteration - term.hv_stage_since >= min_stage_iters:
+        ok = term.height_err_ema <= float(height_gate)
+        if stage >= n_h:                  # in B: velocity must track too
+            ok = ok and term.vel_err_ema <= float(vel_gate)
+        if ok:
+            apply(stage + 1)
+    c = term.cfg
+    return {
+        "stage": int(term.squat_stage),
+        "velocity_phase": float(term.squat_stage >= n_h),
+        "h_low": float(c.squat_height_range[0]),
+        "vel_x_max": float(c.ranges.lin_vel_x[1]),
+        "vel_ema": float(term.vel_err_ema),
+        "height_ema": float(term.height_err_ema),
+        "iteration": float(iteration),
+    }

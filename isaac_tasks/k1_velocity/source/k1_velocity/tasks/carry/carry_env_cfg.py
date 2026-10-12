@@ -6,13 +6,16 @@ layered on top:
 * scene: flat plane (no terrain curriculum), ``replicate_physics=False`` for the
   per-env box width/mass DR, and ``carry_box`` -- a visual-only cuboid held by two
   FixedJoints to the forearm stubs (carry_mdp.spawn_carry_box);
-* actions: the existing 12-leg ``joint_pos`` plus an 8-arm ``arm_pos`` around the
-  per-env hold pose; the decoupled actor (decoupled_policy) gives each its own MLP;
+* actions (decoupled WBC, 2026-10-11): ``base_cmd`` [vx, vy, wz, H*] drives the FROZEN
+  P2 walk student (push_mdp.FrozenBaseVelocityAction "student" mode; it has no H*
+  input, so H* is ignored and padded to standing) plus an 8-arm ``arm_pos`` around the
+  per-env hold pose. 12 dims. The legs are no longer trained;
 * command: ``base_velocity`` is the goal command (carry_command), which derives
   the walking velocity the gait rewards track and draws the faint red/green goal cube;
 * rewards (simplified 2026-10-11): goal progress/success, hold quality, box level,
-  weld integrity, fall penalty and 4 gait terms; stand + hold always pays, the goal
-  terms are multiplied by hold quality; the goal radius grows only while falls are rare.
+  weld integrity, fall penalty; stand + hold always pays, the goal terms are
+  multiplied by hold quality; the goal radius grows only while falls are rare. The 4
+  gait terms went with the leg action (the student owns the gait).
 
 Arm gains: the K1 R14 arm actuator derives ~4 Nm/rad from its 10 Hz natural
 frequency, which cannot hold even a 1 kg box against gravity at the hold pose
@@ -43,12 +46,15 @@ from k1_velocity.tasks.velocity.velocity_env_cfg import (
     K1RoughSceneCfg,
     K1VelocityRoughEnvCfg,
     ObservationsCfg,
-    RewardsCfg,
     TerminationsCfg,
 )
 
+from k1_velocity.tasks.push.push_mdp import FrozenBaseVelocityActionCfg
+
 from . import carry_mdp
 from .carry_command import GoalCarryCommandCfg
+
+WALK_STUDENT_POLICY = "models/k1_velocity_student_gaitfix.pt"
 
 ARM_STIFFNESS = 40.0
 ARM_DAMPING = 2.0
@@ -105,7 +111,6 @@ _ARM_CFG = SceneEntityCfg("robot", joint_names=carry_mdp.ARM_JOINTS, preserve_or
 _HOLD = {"pos_std": 0.08, "tilt_std": 0.3}
 # tier 2: these pay only in proportion to hold quality (wrapped in __post_init__)
 GATED_REWARDS = ("goal_progress", "goal_reached")
-_VEL_REWARDS = RewardsCfg()
 
 
 @configclass
@@ -117,6 +122,10 @@ class K1CarryObservationsCfg(ObservationsCfg):
                                 noise=Unoise(n_min=-0.01, n_max=0.01))
         arm_joint_vel = ObsTerm(func=mdp.joint_vel_rel, params={"asset_cfg": _ARM_CFG},
                                 noise=Unoise(n_min=-1.5, n_max=1.5))
+        # the frozen student's action term owns the gait clock now (it advances the
+        # phase at the policy's commanded speed); an obs read would drive the clock
+        # frequency from the goal command instead
+        phase_clock = None
 
     @configclass
     class TeacherCfg(ObservationsCfg.TeacherCfg):
@@ -124,6 +133,7 @@ class K1CarryObservationsCfg(ObservationsCfg):
         arm_joint_pos = ObsTerm(func=mdp.joint_pos_rel, params={"asset_cfg": _ARM_CFG})
         arm_joint_vel = ObsTerm(func=mdp.joint_vel_rel, params={"asset_cfg": _ARM_CFG})
         box_params = ObsTerm(func=carry_mdp.box_params_obs)
+        phase_clock = None
 
     policy: PolicyCfg = PolicyCfg()
     teacher: TeacherCfg = TeacherCfg()
@@ -131,18 +141,8 @@ class K1CarryObservationsCfg(ObservationsCfg):
 
 @configclass
 class K1CarryActionsCfg:
-    joint_pos = mdp.JointPositionActionCfg(
-        asset_name="robot",
-        joint_names=[
-            "Left_Hip_Pitch", "Left_Hip_Roll", "Left_Hip_Yaw",
-            "Left_Knee_Pitch", "Left_Ankle_Pitch", "Left_Ankle_Roll",
-            "Right_Hip_Pitch", "Right_Hip_Roll", "Right_Hip_Yaw",
-            "Right_Knee_Pitch", "Right_Ankle_Pitch", "Right_Ankle_Roll",
-        ],
-        scale=1.0,
-        use_default_offset=True,
-        clip={".*": (-1.0, 1.0)},
-    )
+    # [vx, vy, wz, H*] -> frozen walk student -> 12 leg targets (H* ignored, no height input)
+    base_cmd = FrozenBaseVelocityActionCfg(asset_name="robot", base_policy_path=WALK_STUDENT_POLICY)
     # offset = per-env hold pose (reset_carry overwrites _offset once)
     arm_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
@@ -161,9 +161,8 @@ class K1CarryCommandsCfg:
 
 @configclass
 class K1CarryRewardsCfg:
-    """Simplified set (2026-10-11, REWARDS_SIMPLE_PROPOSAL.md option A): goal progress,
-    hold, do not fall, light regularisation, plus 4 gait terms because the legs train
-    from scratch (not a residual over the velocity student)."""
+    """Simplified set (2026-10-11, REWARDS_SIMPLE_PROPOSAL.md): goal progress, hold, do
+    not fall, light regularisation. No gait terms: the frozen walk student owns the legs."""
 
     # 1. carry the box to the goal (gated by hold quality in __post_init__)
     goal_progress = RewTerm(func=carry_mdp.goal_progress_rate, weight=5.0)       # 5 per metre closed
@@ -186,11 +185,6 @@ class K1CarryRewardsCfg:
         func=mdp.joint_deviation_l1, weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["AAHead_yaw", "Head_pitch"])},
     )
-    # minimum gait for legs trained from scratch (same terms/weights as the velocity env)
-    feet_slide = _VEL_REWARDS.feet_slide
-    feet_clearance = _VEL_REWARDS.feet_clearance
-    feet_alternation = _VEL_REWARDS.feet_alternation
-    undesired_contacts = _VEL_REWARDS.undesired_contacts
 
 
 @configclass

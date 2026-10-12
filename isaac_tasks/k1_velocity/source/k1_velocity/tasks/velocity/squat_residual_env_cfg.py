@@ -1,7 +1,7 @@
 """Squat teacher as a RESIDUAL over the frozen velocity student (``Isaac-Velocity-Squat-Residual-K1-v0``).
 
-Same world, commands, observations, terminations and squat curriculum as
-``K1VelocitySquatEnvCfg``. The action and the rewards change:
+Same world, commands, observations and terminations as
+``K1VelocitySquatEnvCfg``. The action, the rewards and the curriculum change:
 
     leg target = default + clip(student(vx, vy, wz) + residual_scale * a, +-1)
 
@@ -14,9 +14,15 @@ needs a large knee/hip offset, which the 0.1 used by track/kick could not reach.
 Rewards (2026-10-11, REWARDS_SIMPLE_PROPOSAL.md): 8 terms instead of the teacher's 33.
 The frozen student already walks with a clean gait, so the AGILE gait/torque stack is
 dropped; ``residual_l2`` keeps the policy near the student's gait.
+
+Curriculum (2026-10-11): two stages in sequence, see
+``squat_mdp.squat_height_then_velocity_curriculum``. A: zero velocity, H* goes deeper,
+feet planted flat (``feet_flat`` 2.0 + ``feet_planted`` -2.0). B: once the deepest
+squat is held, the velocity ranges grow to the VR limits so the robot squats and walks.
 """
 import os
 
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.configclass import configclass
@@ -51,10 +57,14 @@ class SquatResidualRewardsCfg:
     # the squat term: trunk at H*
     base_height = RewTerm(func=squat_mdp.base_height_cmd_exp, weight=4.0,
                           params={"command_name": "base_velocity", "std": 0.05, "sensor_name": "height_scanner"})
-    feet_flat = RewTerm(func=gait.feet_flat_contact, weight=1.0, params={
+    feet_flat = RewTerm(func=gait.feet_flat_contact, weight=2.0, params={
         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
         "asset_cfg": SceneEntityCfg("robot", body_names=["left_foot_link", "right_foot_link"]),
         "std": 0.15})
+    # stage A (zero velocity): both feet stay on the ground under the squat
+    feet_planted = RewTerm(func=squat_mdp.feet_unloaded_when_still, weight=-2.0, params={
+        "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
+        "command_name": "base_velocity"})
     # do not fall (x dt = -10); no success termination here, so is_terminated is safe
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-500.0)
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0,
@@ -64,9 +74,16 @@ class SquatResidualRewardsCfg:
 
 
 @configclass
+class SquatResidualCurriculumCfg:
+    terrain_levels = CurrTerm(func=mdp.terrain_levels_vel, params={"asset_cfg": SceneEntityCfg("robot")})
+    squat = CurrTerm(func=squat_mdp.squat_height_then_velocity_curriculum, params={"command_name": "base_velocity"})
+
+
+@configclass
 class K1VelocitySquatResidualEnvCfg(K1VelocitySquatEnvCfg):
     actions: SquatResidualActionsCfg = SquatResidualActionsCfg()
     rewards: SquatResidualRewardsCfg = SquatResidualRewardsCfg()
+    curriculum: SquatResidualCurriculumCfg = SquatResidualCurriculumCfg()
 
 
 @configclass

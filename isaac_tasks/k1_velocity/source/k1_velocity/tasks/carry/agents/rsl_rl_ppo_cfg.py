@@ -1,9 +1,7 @@
-"""RSL-RL PPO runner for box carrying: decoupled leg/arm actor, shared critic."""
+"""RSL-RL PPO runner for box carrying: base command + arms over the frozen walk student."""
 from isaaclab.utils.configclass import configclass
 
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
-
-from k1_velocity.tasks.carry.decoupled_policy import DecoupledMLPModelCfg
 
 
 @configclass
@@ -18,20 +16,20 @@ class K1CarryPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     wandb_entity = "thakk100-dhyan-home"
     obs_groups = {"actor": ["teacher"], "critic": ["teacher"]}
 
-    # legs (12) and arms (8) each get their own [512, 256, 128] MLP
-    actor = DecoupledMLPModelCfg(
+    # action = [vx, vy, wz, H* | 8 arms]; the legs belong to the frozen walk student, so the
+    # leg/arm SplitMLP (decoupled_policy) no longer applies
+    actor = RslRlMLPModelCfg(
         hidden_dims=[512, 256, 128],
         activation="elu",
         obs_normalization=True,
-        leg_dim=12,
-        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0, std_type="log"),
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.5, std_type="log"),
     )
     critic = RslRlMLPModelCfg(hidden_dims=[512, 256, 128], activation="elu", obs_normalization=True)
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.01,
+        entropy_coef=0.001,   # 0.01 grew std 0.47 -> 1.72 (2026-10-11); actions are clamped
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=1.0e-3,

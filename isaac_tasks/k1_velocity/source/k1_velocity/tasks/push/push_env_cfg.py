@@ -58,6 +58,9 @@ from k1_velocity.tasks.partial.mdp import randomize_arm_pose
 # vars are stripped by singularity --containall, so the zz-bw chain points the
 # default models/k1_push_base.pt symlink at the wanted export instead).
 _PUSH_BASE_POLICY = os.environ.get("PUSH_BASE_POLICY", "models/k1_push_base.pt")
+# P2 walk student (no H* input): FrozenBaseVelocityAction picks "student" mode from the
+# basename. Used by push simple and reach until a height-controllable base exists.
+WALK_STUDENT_POLICY = "models/k1_velocity_student_gaitfix.pt"
 
 
 @configclass
@@ -471,3 +474,4 @@ class K1PushReachEnvCfg(K1PushEnvCfg):
         super().__post_init__()
         self.rewards = K1PushReachRewardsCfg()
         self.events.randomize_box_geometry.params["mass_range"] = (6.0, 12.0)
+        self.actions.base_velocity.base_policy_path = WALK_STUDENT_POLICY

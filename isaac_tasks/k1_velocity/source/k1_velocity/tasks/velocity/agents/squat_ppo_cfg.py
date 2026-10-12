@@ -2,7 +2,7 @@
 
 from isaaclab.utils.configclass import configclass
 
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg
+from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
 
 from .rsl_rl_ppo_cfg import K1VelocityPPOTeacherRunnerCfg
 
@@ -40,4 +40,21 @@ class K1SquatResidualPPORunnerCfg(K1SquatPPOTeacherRunnerCfg):
         activation="elu",
         obs_normalization=False,
         distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=0.3, std_type="log"),
+    )
+
+    # actions are clamped to +-1 in the residual action, so std above ~1 is free
+    # noise: 0.01 grew std 0.3 -> 5.2 in the 2026-10-11 run (skills use 0.001 too)
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.001,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=1.0e-3,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
     )

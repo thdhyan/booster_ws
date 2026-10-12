@@ -75,6 +75,9 @@ from isaaclab.utils.configclass import configclass
 
 import isaaclab.sim as sim_utils
 from k1_velocity.tasks.velocity import gait_clock
+from k1_velocity.tasks.skills.residual_action import FRAME_TERMS as STUDENT_FRAME_TERMS
+from k1_velocity.tasks.skills.residual_action import HISTORY as STUDENT_HISTORY
+from k1_velocity.tasks.skills.residual_action import load_student, stack_term_major
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -1033,6 +1036,14 @@ class FrozenBaseVelocityAction(ActionTerm):
       [0.40, 0.55] m into st.h_cmd. Arms/head untouched (IK terms own the
       arms; the velocity teacher never actuated the head).
 
+    student (models/k1_velocity_student_gaitfix.pt, basename contains "student")
+      The P2 walk student: no H* input, so the action slice stays 4 for
+      interface parity with squat mode but H* is IGNORED and st.h_cmd is padded
+      to H_CMD_DEFAULT (0.55, standing). Its 50-dim frame (lin 3 | ang 3 |
+      grav 3 | cmd 3 | leg_pos 12 | leg_vel 12 | last 12 | clock 2) is stacked
+      over 10 steps term-major with the skills/residual_action helpers ->
+      12 leg targets, target = default + clip(out, +-1). No height scan.
+
     partial (legacy v2, models/k1_partialctrl_base.pt)
       action slice = 3; 68-dim partial PolicyCfg obs (lin 3 | ang 3 | grav 3
       | cmd 3 | leg_pos 12 | leg_vel 12 | head_pos 2 | arm_pos 8 | arm_vel 8
@@ -1047,11 +1058,15 @@ class FrozenBaseVelocityAction(ActionTerm):
         self._clock_env = env if cfg.asset_name == "robot" else _ClockView(env)
         path = cfg.base_policy_path
         mode = os.environ.get("PUSH_BASE_MODE", "").lower()
-        if mode not in ("squat", "partial"):
-            mode = "partial" if "partialctrl" in os.path.basename(os.path.realpath(path)) else "squat"
+        if mode not in ("squat", "partial", "student"):
+            base = os.path.basename(os.path.realpath(path))
+            mode = "partial" if "partialctrl" in base else ("student" if "student" in base else "squat")
         self._mode = mode
-        self._policy = torch.jit.load(path, map_location=self._asset.device)
-        self._policy.eval()
+        if mode == "student":
+            self._policy = load_student(path, self._asset.device)
+        else:
+            self._policy = torch.jit.load(path, map_location=self._asset.device)
+            self._policy.eval()
         # diag switches (env vars; default = normal operation)
         #   PUSH_FROZEN_MODE=hold  -> write default leg targets, skip policy
         #                             (isolates env/physics from the frozen path)
@@ -1090,6 +1105,9 @@ class FrozenBaseVelocityAction(ActionTerm):
             self._cmd_dim, self._out_dim = 3, 14
         else:
             self._cmd_dim, self._out_dim = 4, 12
+        if self._mode == "student":
+            self._hist = torch.zeros((env.num_envs, STUDENT_HISTORY, sum(STUDENT_FRAME_TERMS)), device=dev)
+            self._fresh = torch.ones(env.num_envs, dtype=torch.bool, device=dev)
         self._last = torch.zeros((env.num_envs, self._out_dim), device=dev)
         self._vel = torch.zeros((env.num_envs, 3), device=dev)
         self._raw_actions = torch.zeros((env.num_envs, self._cmd_dim), device=dev)
@@ -1112,8 +1130,44 @@ class FrozenBaseVelocityAction(ActionTerm):
     def process_actions(self, actions: torch.Tensor) -> None:
         if self._mode == "partial":
             self._process_partial(actions)
+        elif self._mode == "student":
+            self._process_student(actions)
         else:
             self._process_squat(actions)
+
+    def _process_student(self, actions: torch.Tensor) -> None:
+        """Walk student: [vx, vy, wz, H*(ignored)] -> 500-dim history obs -> 12 leg targets."""
+        st = _rstate(self._env, self.cfg.asset_name)
+        robot = self._asset
+        raw = actions[:, :4]
+        self._raw_actions[:] = raw
+        vel = torch.stack(
+            [raw[:, 0].clamp(-0.5, 0.5),
+             raw[:, 1].clamp(-0.3, 0.3),
+             raw[:, 2].clamp(-0.8, 0.8)], dim=-1
+        )                                               # VR-parity ranges, inside the student's
+        self._vel = vel
+        st.last_vel_cmd = vel
+        st.h_cmd = torch.full_like(vel[:, 0], H_CMD_DEFAULT)   # no height input: pad standing
+        self._processed_actions[:] = torch.cat([vel, st.h_cmd[:, None]], dim=-1)
+        a_cfg = SceneEntityCfg(self.cfg.asset_name)
+        lin = vmdp.base_lin_vel(self._env, asset_cfg=a_cfg)
+        ang = vmdp.base_ang_vel(self._env, asset_cfg=a_cfg)
+        grav = vmdp.projected_gravity(self._env, asset_cfg=a_cfg)
+        leg_pos = robot.data.joint_pos[:, self._leg_ids] - robot.data.default_joint_pos[:, self._leg_ids]
+        leg_vel = robot.data.joint_vel[:, self._leg_ids]
+        clock = gait_clock.phase_clock_from_magnitude(self._clock_env, vel[:, :2].norm(dim=-1))
+        frame = torch.cat([lin, ang, grav, vel, leg_pos, leg_vel, self._last, clock], dim=-1)
+        self._hist = torch.roll(self._hist, shifts=-1, dims=1)
+        self._hist[:, -1] = frame
+        if self._fresh.any():   # first frame after reset fills the whole history
+            self._hist[self._fresh] = frame[self._fresh].unsqueeze(1).expand(-1, STUDENT_HISTORY, -1)
+            self._fresh[:] = False
+        with torch.inference_mode():
+            out = self._policy(stack_term_major(self._hist))
+        self._last = out.clone()  # normal tensor: skrl steps outside inference_mode
+        targets = self._default12 + out.clamp(-1.0, 1.0)
+        robot.set_joint_position_target(targets, joint_ids=self._leg_ids.to(torch.int32))
 
     def _process_squat(self, actions: torch.Tensor) -> None:
         """Blocker 2a: 4-dim command -> 236-dim teacher obs -> 12 leg targets."""
@@ -1266,6 +1320,8 @@ class FrozenBaseVelocityAction(ActionTerm):
             self._last.zero_()
         else:
             self._last[env_ids] = 0.0
+        if self._mode == "student":
+            self._fresh[slice(None) if env_ids is None else env_ids] = True
 
 
 @configclass

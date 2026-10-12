@@ -2,8 +2,9 @@
 
 Box width 0.25-0.40 m is randomised per env at USD time; two FixedJoints weld it to
 the forearm stub tips (carry_mdp). Mass is resampled per reset, U(1, hi) with hi
-2 -> 8 kg following the goal-radius curriculum. The actor is decoupled:
-one MLP drives the 12 leg joints, another the 8 arm joints (decoupled_policy).
+2 -> 8 kg following the goal-radius curriculum. The policy is a decoupled
+WBC: [vx, vy, wz, H*] drives the frozen P2 walk student (legs; H* ignored until a
+height-controllable base exists) and 8 dims drive the arms around the hold pose.
 Goal: up to 1 -> 10 m away (curriculum) in any direction; success = trunk within
 0.25 m for 1 s, shown as a ghost of the carried box plus a 0.25 m disc, red, green
 while the robot is inside (carry_command).

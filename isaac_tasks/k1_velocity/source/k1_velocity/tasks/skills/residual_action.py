@@ -13,6 +13,10 @@ normalisation) walks from a 3-dim velocity command. A skill policy drives it:
 * head: target = default + head_scale * a (absolute, the student never moved it).
 * ``command_name`` set (squat residual): vx/vy/wz come from that env command instead
   (clipped to the student's ranges) and the action is only ``[residual 12 | head]``.
+* ``cmd_pad``: constants appended to the student's command slot. Empty for the walk
+  student (3-dim command). For a squat student ([vx, vy, wz, H*]) set it to the
+  standing height, e.g. ``(0.57,)``, so track/kick keep their action and only the
+  student file changes.
 
 The student's 50-dim frame is rebuilt here in its training order
     lin 3 | ang 3 | grav 3 | cmd 3 | leg_pos_rel 12 | leg_vel 12 | last_action 12 | clock 2
@@ -74,10 +78,10 @@ def load_student(path: str, device) -> nn.Module:
     return net.to(device).eval()
 
 
-def stack_term_major(hist: torch.Tensor) -> torch.Tensor:
+def stack_term_major(hist: torch.Tensor, terms: tuple = FRAME_TERMS) -> torch.Tensor:
     """(n, H, 50) frame history (oldest first) -> (n, 50*H) term-major layout."""
     out, k = [], 0
-    for d in FRAME_TERMS:
+    for d in terms:
         out.append(hist[:, :, k:k + d].reshape(hist.shape[0], -1))
         k += d
     return torch.cat(out, dim=-1)
@@ -106,13 +110,15 @@ class FrozenStudentResidualAction(ActionTerm):
         self.cmd = torch.zeros(n, 3, device=dev)              # scaled velocity command
         self.student_out = torch.zeros(n, 12, device=dev)     # student's raw output (its last_action)
         self.residual = torch.zeros(n, 12, device=dev)        # scaled residual actually added
-        self._hist = torch.zeros(n, HISTORY, sum(FRAME_TERMS), device=dev)
+        self._pad = torch.tensor(cfg.cmd_pad, device=dev).expand(n, len(cfg.cmd_pad))
+        self._terms = FRAME_TERMS[:3] + (3 + len(cfg.cmd_pad),) + FRAME_TERMS[4:]
+        self._hist = torch.zeros(n, HISTORY, sum(self._terms), device=dev)
         self._fresh = torch.ones(n, dtype=torch.bool, device=dev)
         self._leg_targets = self._default12.clone()
         self._head_targets = self._default_head.clone() if cfg.head else None
         self._scale = torch.tensor(CMD_RANGES, device=dev)
         print(f"[skills] frozen student loaded: {cfg.student_path} action_dim={self._dim} "
-              f"residual_scale={cfg.residual_scale} head={cfg.head}")
+              f"residual_scale={cfg.residual_scale} head={cfg.head} cmd_pad={tuple(cfg.cmd_pad)}")
 
     @property
     def action_dim(self) -> int:
@@ -139,7 +145,7 @@ class FrozenStudentResidualAction(ActionTerm):
         leg_pos = jp[:, self._leg_ids] - self._default12
         leg_vel = jv[:, self._leg_ids]
         clock = gait_clock.phase_clock_from_magnitude(env, self.cmd[:, :2].norm(dim=-1))
-        return torch.cat([lin, ang, grav, self.cmd, leg_pos, leg_vel, self.student_out, clock], dim=-1)
+        return torch.cat([lin, ang, grav, self.cmd, self._pad, leg_pos, leg_vel, self.student_out, clock], dim=-1)
 
     def process_actions(self, actions: torch.Tensor) -> None:
         cfg = self.cfg
@@ -160,7 +166,7 @@ class FrozenStudentResidualAction(ActionTerm):
             self._hist[fresh] = frame[fresh].unsqueeze(1).expand(-1, HISTORY, -1)
             self._fresh[:] = False
         with torch.inference_mode():
-            out = self._policy(stack_term_major(self._hist))
+            out = self._policy(stack_term_major(self._hist, self._terms))
         self.student_out = out.clone()
         self.residual = cfg.residual_scale * a[:, i:i + 12]
         self._leg_targets = self._default12 + (out + self.residual).clamp(-1.0, 1.0)
@@ -191,3 +197,4 @@ class FrozenStudentResidualActionCfg(ActionTermCfg):
     head: bool = True
     head_scale: float = 1.0
     command_name: str | None = None
+    cmd_pad: tuple = ()

@@ -60,7 +60,9 @@ class K1SkillSceneCfg(K1KickSceneCfg):
 
 @configclass
 class SkillActionsCfg:
-    skill = FrozenStudentResidualActionCfg(student_path=STUDENT_PATH, residual_scale=0.1, head=True)
+    # cmd_pad: the walk student has no H* input, so nothing is padded. When the squat
+    # student replaces it, set cmd_pad=(0.57,) (standing H*) and nothing else changes.
+    skill = FrozenStudentResidualActionCfg(student_path=STUDENT_PATH, residual_scale=0.1, head=True, cmd_pad=())
 
 
 @configclass
