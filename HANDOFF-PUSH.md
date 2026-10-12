@@ -634,3 +634,27 @@ Carry v2 (pick up + carry + place, following ULTRA arXiv 2603.03279) is designed
 
 Architecture figures: `push/figures/push_mappo.png`, `push_simple.png`, `velocity/figures/squat_residual.png`.
 Regenerate with `task_docs.py` after rsyncing `params/{env,agent}.yaml` of the new runs into `k1m_out/params/<run>/`.
+
+## 15. Restart on walk-student bases + GPU budget — 2026-10-11 23:00
+
+**GPU rule (user, shared boxes):** long training only on **dl GPU0/1 + zz-bw GPU0** (runs share
+a GPU). Rendering only in 15–20 min bursts on zz-bw GPU0 (or lambda GPU0, but lambda's NVML
+has a driver/library mismatch right now). Never use lambda for training; leave dl GPU2/3 and
+zz-bw GPU1 for other users.
+
+| run | host / GPU | tmux | log |
+|---|---|---|---|
+| squat residual, 2-stage curriculum (H* at v=0, then velocity), 6000 it | zz-bw / 0 | `k1_squat` | `$S/logs/squat_2curr_2205.log` |
+| track residual on walk student, 3000 it | dl / 0 | `k1_track` | `~/k1_logs/track_walk_dl.log` |
+| reach on walk student (H* padded 0.55), 3000 it | dl / 0 | `k1_reach` | `~/k1_logs/reach_walk_dl.log` |
+| kick residual on walk student, 4000 it | dl / 1 | `k1_kick` | `~/k1_logs/kick_walk_dl.log` |
+| push simple on walk student (H* padded), 3000 it | dl / 1 | `k1_push` | `~/k1_logs/push_walk_dl.log` |
+
+- dl runs from `~/k1_run_ws` (main @ def4c4e) via `~/run_k1_train_dl.sh`; IsaacLab v3 there, so
+  `--viz none`, not `--headless`. `models/k1_velocity_student_gaitfix.pt` (untracked) rsynced in,
+  md5 6a57cd28… matches zz-bw. dl disk is ~100 % full (14 GB free): watch checkpoints.
+- zz-bw render bursts: `$S/tmp/booster_ws/rec_burst.sh <play_task> <exp_dir> <name> <label> [steps]`
+  (GPU0, `timeout 1200`, latest checkpoint of the exp dir, output `$S/logs/videos/burst/`).
+- Carry not launched yet: waiting on the box-between-stubs viz check from the burst clip.
+- lambda: G1 Isaac Sim + XR teleop + SOMA retarget containers stopped on request
+  (`docker stop`, restart policy none); `k1m` service container left running.
