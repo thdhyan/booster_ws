@@ -59,7 +59,7 @@ class SquatResidualRewardsCfg:
                                   params={"command_name": "base_velocity", "std": 0.25,
                                           "require_span": False})
     # the squat term: trunk at H*
-    base_height = RewTerm(func=squat_mdp.base_height_cmd_exp, weight=4.0,
+    base_height = RewTerm(func=squat_mdp.base_height_cmd_exp, weight=10.0,  # 2026-10-12: 4 -> 10, stuck at stage 0
                           params={"command_name": "base_velocity", "std": 0.05, "sensor_name": "height_scanner"})
     feet_flat = RewTerm(func=gait.feet_flat_contact, weight=2.0, params={
         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["left_foot_link", "right_foot_link"]),
@@ -73,14 +73,15 @@ class SquatResidualRewardsCfg:
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-500.0)
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0,
                                   params={"asset_cfg": SceneEntityCfg("robot", body_names=["Trunk"])})
-    residual_l2 = RewTerm(func=smdp.residual_l2, weight=-0.2, params={"action_name": "joint_pos"})
+    residual_l2 = RewTerm(func=smdp.residual_l2, weight=-0.1, params={"action_name": "joint_pos"})
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
 
 
 @configclass
 class SquatResidualCurriculumCfg:
     terrain_levels = CurrTerm(func=mdp.terrain_levels_vel, params={"asset_cfg": SceneEntityCfg("robot")})
-    squat = CurrTerm(func=squat_mdp.squat_height_then_velocity_curriculum, params={"command_name": "base_velocity"})
+    squat = CurrTerm(func=squat_mdp.squat_height_then_velocity_curriculum, params={"command_name": "base_velocity",
+                                                                                   "height_gate": 0.03})  # ema plateaued at 0.0305 > 0.025
 
 
 @configclass

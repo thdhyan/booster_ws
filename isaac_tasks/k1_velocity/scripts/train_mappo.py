@@ -35,6 +35,7 @@ parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--save_interval", type=int, default=100, help="iterations between checkpoints")
 parser.add_argument("--no_wandb", action="store_true")
 parser.add_argument("--checkpoint", default=None, help="single-robot rsl_rl push .pt to warm-start every agent")
+parser.add_argument("--resume", default=None, help="skrl MAPPO agent_<t>.pt to continue from (models + scalers)")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 app_launcher = AppLauncher(args_cli)
@@ -207,6 +208,10 @@ def main():
     if args_cli.checkpoint:
         warm_start(agent, os.path.abspath(args_cli.checkpoint), agents,
                    env.observation_space(agents[0]).shape[0])
+    if args_cli.resume:
+        # env curricula are not in the checkpoint; they restart from their first stage
+        agent.load(os.path.abspath(args_cli.resume))
+        print(f"[INFO] MAPPO: resumed from {args_cli.resume}")
     # decorrelate episode clocks (rsl_rl's init_at_random_ep_len)
     base = adapter.base
     base.episode_length_buf = torch.randint_like(base.episode_length_buf, high=int(base.max_episode_length))

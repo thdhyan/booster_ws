@@ -475,3 +475,7 @@ class K1PushReachEnvCfg(K1PushEnvCfg):
         self.rewards = K1PushReachRewardsCfg()
         self.events.randomize_box_geometry.params["mass_range"] = (6.0, 12.0)
         self.actions.base_velocity.base_policy_path = WALK_STUDENT_POLICY
+        # 2026-10-12: height_below_command ended 72 % of reach episodes on squat
+        # lag; terminate on real falls only (as push_simple / MAPPO)
+        self.terminations.height_below_command = None
+        self.terminations.fallen = DoneTerm(func=mdp.robot_fallen, params={"min_z": 0.30, "limit_angle": 0.8})

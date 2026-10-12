@@ -119,6 +119,11 @@ class KickRewardsCfg(CommonRewardsCfg):
     ball_progress = RewTerm(func=kmdp.ball_to_goal_progress_rate, weight=5.0)   # 5 per metre closed
     goal_scored = RewTerm(func=kmdp.goal_scored, weight=500.0)                  # x dt = +10 once
     head_track = RewTerm(func=smdp.track_ball_head_exp, weight=0.5, params={"std": 0.35})
+    # 2026-10-12: v1 scored 6.6 % with ball_progress < 0 - dense terms for lining up,
+    # touching the ball with a foot and sending it goalward
+    align_stance = RewTerm(func=kmdp.align_stance, weight=0.5, params={"max_dist": 0.75})
+    foot_ball = RewTerm(func=smdp.foot_ball_proximity, weight=1.0, params={"std": 0.3})
+    ball_vel_goal = RewTerm(func=smdp.ball_vel_to_goal, weight=2.0, params={"max_speed": 3.0})
     # failures only: the old is_terminated also fired on the goal_scored termination
     termination_penalty = RewTerm(func=smdp.term_fired, weight=-500.0,
                                   params={"term_names": ["root_height", "base_orientation"]})

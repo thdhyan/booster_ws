@@ -78,6 +78,32 @@ def residual_l2(env, action_name: str = "skill") -> torch.Tensor:
     return _action_term(env, action_name).residual.square().sum(-1)
 
 
+def ball_vel_to_goal(env, max_speed: float = 3.0) -> torch.Tensor:
+    """Ball speed along the ball->goal axis, clamped to [0, max_speed] (m/s).
+
+    Replaces kmdp.kick_toward_goal, which paid >= 1 for any moving ball.
+    """
+    ball = env.scene["ball"]
+    vel = ball.data.root_lin_vel_w.torch[:, :2]
+    axis = kmdp._goal_positions_w(env)[:, :2] - ball.data.root_pos_w.torch[:, :2]
+    axis = axis / axis.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    return (vel * axis).sum(dim=-1).clamp(0.0, max_speed)
+
+
+def foot_ball_proximity(env, std: float = 0.3,
+                        foot_names: tuple[str, ...] = ("left_foot_link", "right_foot_link")) -> torch.Tensor:
+    """exp(-d / std) of the nearer foot's horizontal distance to the ball."""
+    robot = env.scene["robot"]
+    ids = getattr(env, "_kick_foot_ids", None)
+    if ids is None:
+        ids = robot.find_bodies(list(foot_names))[0]
+        env._kick_foot_ids = ids
+    feet = robot.data.body_pos_w.torch[:, ids, :2]
+    ball = env.scene["ball"].data.root_pos_w.torch[:, None, :2]
+    d = (feet - ball).norm(dim=-1).min(dim=-1).values
+    return torch.exp(-d / std)
+
+
 def term_fired(env, term_names: list[str]) -> torch.Tensor:
     """1.0 where any of the named termination terms fired this step (failures only,
     unlike ``is_terminated``, which also fires on a success termination)."""

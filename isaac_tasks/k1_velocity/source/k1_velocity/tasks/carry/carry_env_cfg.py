@@ -172,7 +172,8 @@ class K1CarryRewardsCfg:
     # surviving (warm start 16:08 fell in 97 % of episodes)
     stand_hold = RewTerm(func=carry_mdp.stand_hold, weight=5.0, params=dict(_HOLD))
     # 3. do not fall / do not drop the box (x dt = -10); carry has no success termination
-    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-500.0)
+    # 2026-10-12: -500 -> -200; v1 plateaued at 36 % falls with the radius stuck at 1 m
+    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
     weld_error = RewTerm(func=carry_mdp.weld_error_l1, weight=-10.0)
     box_tilt = RewTerm(func=carry_mdp.box_tilt_l2, weight=-2.0)
     # light regularisation
@@ -216,7 +217,7 @@ class K1CarryCurriculumCfg:
     # (the box mass ceiling follows it, see K1CarryEventCfg.carry_mass)
     goal_radius = CurrTerm(
         func=carry_mdp.goal_radius_curriculum,
-        params={"start": 1.0, "step": 0.5, "target": 10.0, "fall_threshold": 0.08, "window": 0},
+        params={"start": 1.0, "step": 0.5, "target": 10.0, "fall_threshold": 0.20, "window": 0},
     )
 
 
@@ -240,6 +241,10 @@ class K1CarryEnvCfg(K1VelocityRoughEnvCfg):
         self.scene.env_spacing = 22.0
         # 10 m at the 0.5 m/s command cap is 20 s of walking; leave time to turn and dwell
         self.episode_length_s = 30.0
+        # 2026-10-12: 30 deg tilt limit is tight with a box in the arms (skills use 0.8 rad);
+        # pushes softened from +-0.5 m/s
+        self.terminations.base_orientation.params["limit_angle"] = 0.8
+        self.events.push_robot.params["velocity_range"] = {"x": (-0.2, 0.2), "y": (-0.2, 0.2)}
         for name in GATED_REWARDS:
             term = getattr(self.rewards, name)
             term.params = {
