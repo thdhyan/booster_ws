@@ -50,10 +50,14 @@ class SquatResidualActionsCfg:
 
 @configclass
 class SquatResidualRewardsCfg:
+    # require_span=False: the height stages of the curriculum pin the velocity ranges to 0,
+    # so the weight ramp has no span and correctly stays at its floor.
     track_lin_vel_xy_exp = RewTerm(func=agile.track_lin_vel_xy_exp_weighted, weight=10.0,
-                                   params={"command_name": "base_velocity", "std": 0.15})
+                                   params={"command_name": "base_velocity", "std": 0.15,
+                                           "require_span": False})
     track_ang_vel_z_exp = RewTerm(func=agile.track_ang_vel_z_world_exp_weighted, weight=5.0,
-                                  params={"command_name": "base_velocity", "std": 0.25})
+                                  params={"command_name": "base_velocity", "std": 0.25,
+                                          "require_span": False})
     # the squat term: trunk at H*
     base_height = RewTerm(func=squat_mdp.base_height_cmd_exp, weight=4.0,
                           params={"command_name": "base_velocity", "std": 0.05, "sensor_name": "height_scanner"})
