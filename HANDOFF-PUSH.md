@@ -686,3 +686,7 @@ zz-bw GPU1 for other users.
 - Kit 110 renderer segfaults now and then (rc 139, omni.syntheticdata). The partial `/tmp/_panel_<pid>.mp4`
   stays decodable: `ffmpeg -i in -c copy -movflags +faststart out.mp4`.
 - `tmux has-session -t name` prefix-matches (`k1_rec3h` matched `k1_rec3h_b`); use `-t "=name"`.
+- 07:45 report (Drive `k1_rep0744_*`): all five dl runs FINISHED (track 2999, kick 3999, push/reach/carry
+  2999); dl GPU0/1 idle except renders. Track usable (reward 15.6, 6 % fall). Kick, push simple and
+  reach failed (see table); carry plateaued at 36 % fall. Squat it 1727, height_ema 0.0298, still stage 0.
+  `~/rec3h_dl.sh` now takes `GPU=<idx>`; `~/recq3.sh <gpu> <jobs...>` renders final checkpoints.
