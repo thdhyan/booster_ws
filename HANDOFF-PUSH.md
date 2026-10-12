@@ -705,3 +705,6 @@ zz-bw GPU1 for other users.
 - dl launcher: `~/launch_1012.sh` (90 s stagger). dl `~/k1_run_ws` is a git clone: update with
   `git fetch origin main && git merge --ff-only origin/main`. MAPPO on dl uses `K1_SKRL_PATH=~/skrl` (fork @1388269).
 - zz-bw `~/run_k1_train.sh` defaults to GPU1: always launch with `K1_GPU=0 ~/k1_train_tmux.sh ...`.
+- 12:50 report (Drive `k1_rep1250_*`, status slide + 5 clip slides): all restarts training. MAPPO goal_reached
+  45 % right after resume; carry tilt falls 13 % (was 36 %); squat height_ema 0.0283 under the 0.03 gate
+  (stage advance due after it 200); reach/kick too early to judge. Renders: `~/recq4.sh <gpu> <jobs>` on dl.
