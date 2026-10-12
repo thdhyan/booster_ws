@@ -690,3 +690,18 @@ zz-bw GPU1 for other users.
   2999); dl GPU0/1 idle except renders. Track usable (reward 15.6, 6 % fall). Kick, push simple and
   reach failed (see table); carry plateaued at 36 % fall. Squat it 1727, height_ema 0.0298, still stage 0.
   `~/rec3h_dl.sh` now takes `GPU=<idx>`; `~/recq3.sh <gpu> <jobs...>` renders final checkpoints.
+
+## 17. Restarts 2026-10-12 ~12:30 (user OK), commit 5f58f5b
+
+| run | host / GPU | tmux | log | change |
+|---|---|---|---|---|
+| MAPPO resume from agent_14400, 2400 it | dl / 1 | `k1_mappo` | `~/k1_logs/mappo_resume_dl.log` | new `train_mappo.py --resume` (models + scalers; env curricula restart at stage 0) |
+| reach v2, fresh, 3000 it | dl / 0 | `k1_reach` | `~/k1_logs/reach_v2_dl.log` | `height_below_command` -> `fallen` (robot_fallen, z < 0.30 or tilt > 0.8) |
+| kick v2, fresh, 4000 it | dl / 1 | `k1_kick` | `~/k1_logs/kick_v2_dl.log` | + align_stance 0.5, foot_ball_proximity 1.0 (std 0.3), ball_vel_to_goal 2.0 (clamp 0-3 m/s) |
+| carry v2, warm from it2999, 3000 it | dl / 0 | `k1_carry` | `~/k1_logs/carry_v2_dl.log` | tilt limit 30 deg -> 0.8 rad, pushes +-0.5 -> +-0.2 m/s, fall_threshold 0.08 -> 0.20, fall penalty -500 -> -200 |
+| squat v2, warm from it800, 6000 it | zz-bw / 0 | `k1_squat` | `$S/logs/squat_v2_1012.log` | height_gate 0.03, base_height 4 -> 10, residual_l2 -0.2 -> -0.1 |
+
+- Squat v1 had finished all 6000 it still in stage 0 (height_ema 0.031).
+- dl launcher: `~/launch_1012.sh` (90 s stagger). dl `~/k1_run_ws` is a git clone: update with
+  `git fetch origin main && git merge --ff-only origin/main`. MAPPO on dl uses `K1_SKRL_PATH=~/skrl` (fork @1388269).
+- zz-bw `~/run_k1_train.sh` defaults to GPU1: always launch with `K1_GPU=0 ~/k1_train_tmux.sh ...`.
