@@ -155,6 +155,56 @@ class _GaitPhase:
         return buf
 
 
+def _cadence_steps_per_s(
+    env,
+    asset_cfg: SceneEntityCfg,
+    dt: float = 0.02,
+    alpha: float = 0.15,
+    knee_index: int = 3,
+    window_s: float = 2.5,
+) -> torch.Tensor:
+    """Cadence estimate shared by all cadence terms: (n,) steps/s.
+
+    One-pole filter on knee joint VELOCITY (not position -- position drifts and
+    hides the 4-6 Hz chatter, see gait_cadence_penalty's docstring), then the
+    zero-crossing rate of a ring buffer. Cached per env step so that several
+    cadence terms (Huber + L1) share ONE filter advance per step; without the
+    cache the second caller would advance the EMA twice and halve its time
+    constant.
+    """
+    joints = env.scene[asset_cfg.name].data.joint_vel[:, asset_cfg.joint_ids]
+    knee = joints[:, knee_index]
+    num_envs, device = knee.shape[0], knee.device
+
+    window = max(int(window_s / dt), 8)
+    key = f"cadence_{asset_cfg.name}"
+    hist = _GaitPhase.get(key, (num_envs, window), device)
+    filt = _GaitPhase.get(f"{key}_filt", num_envs, device)
+    cache = _GaitPhase.get(f"{key}_hz", num_envs, device)
+    stepbuf = _GaitPhase.get(f"{key}_hz_step", 1, device)
+    step = float(getattr(env, "common_step_counter", -1))
+    if step >= 0.0 and stepbuf.item() == step:
+        return cache
+
+    filt.mul_(1.0 - alpha).add_(alpha * knee)
+    # Roll rather than an overlapping slice-assign, which is undefined when the
+    # source and destination overlap.
+    hist.copy_(torch.roll(hist, shifts=1, dims=1))
+    hist[:, 0] = filt
+
+    centered = hist - hist.mean(dim=1, keepdim=True)
+    sign = torch.sign(centered)
+    # fraction of adjacent sample pairs that changed sign
+    frac = (sign[:, 1:] * sign[:, :-1] < 0).float().mean(dim=1)
+    # Two crossings per gait cycle, and the window spans window*dt seconds:
+    #   steps/s = (2 crossings/cycle) / 2 * frac * (window-1) / (window*dt)
+    steps_per_s = frac * (window - 1) / (window * dt)
+    cache.copy_(steps_per_s)
+    if step >= 0.0:
+        stepbuf.fill_(step)
+    return cache
+
+
 def gait_cadence_penalty(
     env,
     asset_cfg: SceneEntityCfg,
@@ -187,44 +237,33 @@ def gait_cadence_penalty(
     than 0, so standing prices ~0.90, still well under the shuffle's ~2.47 --
     "stop stepping" is not an exit, but it is cheaper than chattering.
     """
-    # Joint state lives on the articulation's .data, not on the Articulation
-    # itself. K1_LEG_JOINTS order is [LHipP,LHipR,LHipY,LKnee,LAnkP,LAnkR, ...],
-    # so the knees are indices 3 and 9. Do not derive this from numel(): that
-    # gives Right_Hip_Pitch, which does not oscillate once per step.
-    # joint_vel, not joint_pos: position carries a slow postural drift that
-    # swamps the stepping oscillation and made the estimator read ~1-3 steps/s
-    # on a 6.68-steps/s shuffle (see the docstring).
-    joints = env.scene[asset_cfg.name].data.joint_vel[:, asset_cfg.joint_ids]
-    knee = joints[:, knee_index]
-    num_envs = knee.shape[0]
-
-    # Cadence needs a history of the signal, not one scalar per env. A 1-D
-    # (num_envs,) buffer made sign[:, 1:] 1-D and mean(dim=1) raised
-    # "too many indices for tensor of dimension 1". So keep a ring buffer of the
-    # last `window` filtered samples per env: 64 samples is 1.28 s at 50 Hz,
-    # which spans ~2.5 cycles of a 2 Hz gait -- enough for a stable estimate.
-    window = max(int(window_s / dt), 8)
-    key = f"cadence_{asset_cfg.name}"
-    hist = _GaitPhase.get(key, (num_envs, window), knee.device)
-    filt = _GaitPhase.get(f"{key}_filt", num_envs, knee.device)
-    filt.mul_(1.0 - alpha).add_(alpha * knee)
-    # Roll rather than an overlapping slice-assign, which is undefined when the
-    # source and destination overlap.
-    hist.copy_(torch.roll(hist, shifts=1, dims=1))
-    hist[:, 0] = filt
-
-    centered = hist - hist.mean(dim=1, keepdim=True)
-    sign = torch.sign(centered)
-    # fraction of adjacent sample pairs that changed sign
-    frac = (sign[:, 1:] * sign[:, :-1] < 0).float().mean(dim=1)
-    # Two crossings per gait cycle, and the window spans window*dt seconds:
-    #   steps/s = (2 crossings/cycle) / 2 * frac * (window-1) / (window*dt)
-    steps_per_s = frac * (window - 1) / (window * dt)
+    steps_per_s = _cadence_steps_per_s(env, asset_cfg, dt, alpha, knee_index, window_s)
 
     # Huber-ish: flat near the target, quadratic in the error beyond it, so the
     # policy can sit at 2 Hz without fighting noise.
     err = (steps_per_s - target_hz).abs()
     return torch.where(err <= 0.5, 0.5 * err.pow(2), 0.125 + 0.5 * (err - 0.5)).mean()
+
+
+def gait_cadence_l1(
+    env,
+    asset_cfg: SceneEntityCfg,
+    target_hz: float = 2.0,
+    dt: float = 0.02,
+    alpha: float = 0.15,
+    knee_index: int = 3,
+    window_s: float = 2.5,
+) -> torch.Tensor:
+    """L1 regulariser on the step cadence: |steps/s - target_hz|.
+
+    Teacher v3 (2026-10-12): the Huber cadence term is flat within +-0.5 steps/s
+    of the target, so near the goal cadence there is no gradient at all, and on
+    the far side its slope is halved by the flat zone. The L1 term prices every
+    step/s of error with the same constant gradient, the same way the linear
+    feet_clearance hinge keeps working at 1 cm and at 5 cm of shortfall.
+    """
+    hz = _cadence_steps_per_s(env, asset_cfg, dt, alpha, knee_index, window_s)
+    return (hz - target_hz).abs().mean()
 
 
 def feet_clearance(

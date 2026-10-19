@@ -104,6 +104,18 @@ def command_magnitude(env, command_name: str = "base_velocity") -> torch.Tensor:
     return torch.linalg.norm(cmd[:, :2], dim=1)
 
 
+def commanded_frequency(env, command_name: str = "base_velocity") -> torch.Tensor | None:
+    """Per-env commanded gait frequency (Hz), or None if the command term has no such channel."""
+    mgr = getattr(env, "command_manager", None)
+    if mgr is None:
+        return None
+    try:
+        term = mgr.get_term(command_name)
+    except Exception:  # noqa: BLE001 - probing envs may lack commands
+        return None
+    return getattr(term, "gait_freq_command", None)
+
+
 def get_frequency(env, command_name: str = "base_velocity") -> torch.Tensor:
     """Per-env gait frequency in Hz, following the commanded speed.
 
@@ -123,6 +135,13 @@ def get_frequency(env, command_name: str = "base_velocity") -> torch.Tensor:
             )
         else:
             return torch.full((num_envs,), PHASE_FREQUENCY_HZ, device=device)
+
+    # GEAR-style walk task (lower_body_gear_env_cfg): the frequency IS a command
+    # channel, so the clock follows it directly instead of the speed heuristic.
+    f_cmd = commanded_frequency(env, command_name)
+    if f_cmd is not None:
+        state["freq_hz"].copy_(f_cmd)
+        return state["freq_hz"]
 
     mag = command_magnitude(env, command_name)
     if mag is None:

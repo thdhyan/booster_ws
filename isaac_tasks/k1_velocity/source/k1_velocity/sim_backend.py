@@ -40,6 +40,11 @@ from isaaclab.sim import SimulationCfg
 PAIRS_PER_ENV = 512
 #: Floor regardless of env count, so small runs are not raised to a silly size.
 MIN_AGGREGATE_PAIRS = 2**22  # 4 194 304
+#: Found/lost broadphase buffers per env. Lower-body walk at 8192 envs (2026-10-16) asked for
+#: 2 897 275 found/lost pairs (~354/env) and 62 914 502 found/lost aggregate pairs (~7 680/env)
+#: against the 2**21 / 2**25 defaults; budgets below leave headroom.
+FOUND_LOST_PAIRS_PER_ENV = 512
+FOUND_LOST_AGGREGATE_PAIRS_PER_ENV = 16384  # a 2nd 8192 smoke asked 86.9M (~10 600/env)
 
 
 def ensure_physx_gpu_capacity(env_cfg) -> int:
@@ -101,6 +106,10 @@ def ensure_physx_gpu_capacity(env_cfg) -> int:
     want = max(MIN_AGGREGATE_PAIRS, num_envs * PAIRS_PER_ENV)
     if physics.gpu_total_aggregate_pairs_capacity < want:
         physics.gpu_total_aggregate_pairs_capacity = want
+    for knob, per_env in (("gpu_found_lost_pairs_capacity", FOUND_LOST_PAIRS_PER_ENV),
+                          ("gpu_found_lost_aggregate_pairs_capacity", FOUND_LOST_AGGREGATE_PAIRS_PER_ENV)):
+        if hasattr(physics, knob) and getattr(physics, knob) < num_envs * per_env:
+            setattr(physics, knob, num_envs * per_env)
     return int(physics.gpu_total_aggregate_pairs_capacity)
 
 

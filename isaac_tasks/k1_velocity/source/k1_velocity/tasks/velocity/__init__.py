@@ -121,6 +121,47 @@ gym.register(
 )
 
 
+# Stage-0 lower-body base (PLAN_HRL_CONTROLLER.md WP2): (vx, vy, wz, H*) under random
+# arm/head poses and stub-tip forces, time-based squat ramp (lower_body_env_cfg.py).
+for _id, _cfg in (("Isaac-LowerBody-K1-v0", "K1LowerBodyEnvCfg"),
+                  ("Isaac-LowerBody-K1-Play-v0", "K1LowerBodyPlayEnvCfg")):
+    gym.register(
+        id=_id,
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"k1_velocity.tasks.velocity.lower_body_env_cfg:{_cfg}",
+            "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.squat_ppo_cfg:K1LowerBodyPPORunnerCfg",
+        },
+    )
+
+# Teacher v4 PBT member (PLAN_HRL_CONTROLLER.md 6a): survival-gated ramps, stairs/slopes,
+# member chosen by env var K1_TEACHER_PRESET=0..3.
+for _id, _cfg in (("Isaac-LowerBody-V4-K1-v0", "K1LowerBodyV4EnvCfg"),
+                  ("Isaac-LowerBody-V4-K1-Play-v0", "K1LowerBodyV4PlayEnvCfg")):
+    gym.register(
+        id=_id,
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"k1_velocity.tasks.velocity.lower_body_env_cfg:{_cfg}",
+            "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.squat_ppo_cfg:K1LowerBodyV4PPORunnerCfg",
+        },
+    )
+
+# Stage-0 lower-body STUDENT (distilled from Isaac-LowerBody-K1-v0; 710-dim stacked proprio).
+for _id, _cfg in (("Isaac-LowerBody-K1-Distill-v0", "K1LowerBodyDistillEnvCfg"),
+                  ("Isaac-LowerBody-K1-Distill-Play-v0", "K1LowerBodyDistillPlayEnvCfg")):
+    gym.register(
+        id=_id,
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"k1_velocity.tasks.velocity.lower_body_env_cfg:{_cfg}",
+            "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.rsl_rl_distill_cfg:K1LowerBodyDistillRunnerCfg",
+        },
+    )
+
 # Squat teacher as a residual over the frozen velocity student (feet_flat included).
 for _id, _cfg in (("Isaac-Velocity-Squat-Residual-K1-v0", "K1VelocitySquatResidualEnvCfg"),
                   ("Isaac-Velocity-Squat-Residual-K1-Play-v0", "K1VelocitySquatResidualPlayEnvCfg")):
@@ -159,3 +200,21 @@ gym.register(
         "rsl_rl_cfg_entry_point": "k1_velocity.tasks.velocity.agents.rsl_rl_distill_cfg:K1VelocityDistillRunnerCfg",
     },
 )
+
+# GEAR-style decoupled lower body (PLAN_HRL_CONTROLLER.md 6g): separate walk / stand policies,
+# direct RL with an asymmetric actor-critic, gait-frequency command on the walk policy.
+for _id, _cfg, _runner in (
+    ("Isaac-LowerBody-Walk-K1-v0", "K1LowerBodyWalkEnvCfg", "K1LowerBodyWalkPPORunnerCfg"),
+    ("Isaac-LowerBody-Walk-K1-Play-v0", "K1LowerBodyWalkPlayEnvCfg", "K1LowerBodyWalkPPORunnerCfg"),
+    ("Isaac-LowerBody-Stand-K1-v0", "K1LowerBodyStandEnvCfg", "K1LowerBodyStandPPORunnerCfg"),
+    ("Isaac-LowerBody-Stand-K1-Play-v0", "K1LowerBodyStandPlayEnvCfg", "K1LowerBodyStandPPORunnerCfg"),
+):
+    gym.register(
+        id=_id,
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"k1_velocity.tasks.velocity.lower_body_gear_env_cfg:{_cfg}",
+            "rsl_rl_cfg_entry_point": f"k1_velocity.tasks.velocity.agents.squat_ppo_cfg:{_runner}",
+        },
+    )

@@ -86,3 +86,17 @@ class K1VelocityDistillForceRunnerCfg(K1VelocityDistillRunnerCfg):
 
     experiment_name = "p2f_move_student"
     run_name = "p2f_move_student"
+
+
+@configclass
+class K1LowerBodyDistillRunnerCfg(K1VelocityDistillRunnerCfg):
+    """Stage-0 lower-body STUDENT: (vx, vy, wz, H*) base distilled from k1_lower_body.
+
+    Teacher input = lower-body teacher group (scan + clean proprio + H* + 20 upper-joint
+    obs + 6 stub wrench); student = blind 71 x 10 = 710. Net sizes are inferred from the env.
+    Launch: ``--task Isaac-LowerBody-K1-Distill-v0 --teacher_checkpoint <k1_lower_body model.pt>``.
+    """
+
+    max_iterations = 5000
+    experiment_name = "k1_lower_body_student"
+    run_name = "k1_lower_body_student"

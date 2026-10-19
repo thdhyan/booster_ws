@@ -66,7 +66,7 @@ cli_args_unused = None  # parity with train.py; extend if needed
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-if args_cli.headless:
+if getattr(args_cli, "headless", False):
     os.environ.setdefault("HEADLESS", "1")
 
 if args_cli.video:

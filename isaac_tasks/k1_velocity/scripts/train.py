@@ -101,7 +101,8 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-if args_cli.video:
+# IL3 AppLauncher has no --enable_cameras flag; camera-sensor tasks set K1_ENABLE_CAMERAS=1
+if args_cli.video or os.environ.get("K1_ENABLE_CAMERAS") == "1":
     args_cli.enable_cameras = True
 
 sys.argv = [sys.argv[0]] + hydra_args
@@ -174,6 +175,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
         agent_cfg.algorithm.entropy_coef = 0.001
         print("[INFO]: SAFE_RESUME lr=1e-4 schedule=fixed max_grad_norm=0.5 value_loss_coef=0.5")
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    # env cfgs size the PhysX pair buffers in __post_init__ from their default num_envs; re-size for --num_envs
+    from k1_velocity.sim_backend import ensure_physx_gpu_capacity
+    ensure_physx_gpu_capacity(env_cfg)
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
