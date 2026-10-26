@@ -8,6 +8,32 @@
 
 ---
 
+## 0. Current fleet (2026-10-27): see docs/network_robotics_5G_2026-10-26.md
+A2 192.168.50.215, A3 .230, B1 .105, B3 .248, B2 .62 (off) — all static on robotics_5G, SSH aliases updated.
+
+## 0b. Session 2026-10-26 — lab network move (Hello → robotics_5G)
+
+A1, A2 out of commission. A3, B1-B3 powered; laptop and robots were on **Hello**.
+Lab SSID is **`robotics_5G`** (underscore; also 2.4 GHz `robotics`). Password `robotics`
+(typed `robtoics` fails: "Secrets were required").
+
+| Robot (identity unconfirmed) | Hello IP (before move) | wlP1p1s0 MAC | Firmware | robotics_5G IP |
+|---|---|---|---|---|
+| ? (old .18 = A3?) | 10.245.87.18 | 20:bd:1d:d8:31:0f | v1.6.2.2-release.global-02145 | **192.168.50.230** (gw 192.168.50.1, no internet) |
+| ? (old .108 = B1?) | 10.245.87.108 | 20:bd:1d:d5:3e:5f | v1.6.2.2-release.global-02145 | **192.168.50.105** (static) |
+| ? (old .109 = B2?) | 10.245.87.109 | 20:bd:1d:71:ae:53 | v1.6.2.2-release.global-02145 | **192.168.50.62** (static) |
+| B3 (old .248) | 10.245.87.248 | 20:bd:1d:d8:3c:ea | v1.6.2.2-release.global-02145 | **192.168.50.248** (static) |
+
+Identity mapping above is a guess from old last octets; confirm via Booster App serials.
+Robots joined with `nmcli dev wifi connect robotics_5G ... name robotics_5G` (profile persists, autoconnect).
+Router LAN MAC (ARP over ethernet): `A0:04:60:8A:68:90`; WAN MAC unknown (needs router login).
+Laptop enp2s0 profile `robotics-lan`: DHCP 192.168.50.125 + static 192.168.123.222 (G1 subnet); internet via eduroam on wlo1.
+.230 unresponsive after 2026-10-26 (offline?); static IP not yet set.
+See docs/network_robotics_5G_2026-10-26.md for all findings.
+OLD TODO: switch laptop to robotics_5G, rescan, fill IPs, pin them (DHCP reservation by MAC, or static via nmcli).
+
+---
+
 ## 1. Network — Confirmed Device Inventory
 
 | # | Device | SSH Alias | WiFi IP | WiFi Interface | Hostname | Status |
