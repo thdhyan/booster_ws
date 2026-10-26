@@ -1,0 +1,15 @@
+[project]
+name = "k1-chat"
+version = "0.0.1"
+description = "Independent chatbot + policy-loading stack for Booster K1"
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.27", "python-dotenv>=1.0"]
+
+[dependency-groups]
+dev = ["pytest>=8", "respx>=0.21"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["robot: needs a live K1 (set K1_IP)", "net: needs internet / OpenRouter"]
+addopts = "-m 'not robot and not net'"
