@@ -94,6 +94,33 @@ class AplayPlayer:
             self._p.terminate()
 
 
+DUMP = HOME / "dump"
+
+
+def save_wav(path: Path, pcm: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(RATE); w.writeframes(pcm)
+
+
+def _dumped(asr, seg):
+    """Wrap ASR: keep the exact PCM the model receives (utt_*.wav) plus a .txt with level stats, threshold and the text."""
+    import numpy as np
+
+    def wrapped(pcm: bytes) -> str:
+        text = asr(pcm)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        x = np.frombuffer(pcm, np.int16).astype(np.float64)
+        save_wav(DUMP / f"utt_{stamp}.wav", pcm)
+        (DUMP / f"utt_{stamp}.txt").write_text(
+            f"text: {text!r}\nsec: {len(x) / RATE:.2f}\nrms: {np.sqrt(np.mean(x ** 2)):.0f}\npeak: {int(np.abs(x).max())}\n"
+            f"start_rms_threshold: {seg._start_rms:.0f}\n")
+        for old in sorted(DUMP.glob("utt_*.wav"))[:-30]:  # keep the last 30
+            old.unlink(); old.with_suffix(".txt").unlink(missing_ok=True)
+        return text
+    return wrapped
+
+
 def _timed(name, fn, size=len):
     def wrapped(x):
         t = time.time()
@@ -107,7 +134,8 @@ def build() -> Audio:
     asr = _timed("asr", WhisperAsr(), size=lambda pcm: f"{len(pcm) / 2 / RATE:.1f}s audio")
     tts = _timed("tts", KokoroTts(), size=lambda t: f"{len(t)} chars")
     start_rms = float(os.environ.get("K1_CHAT_START_RMS", _saved_rms()))
-    return Audio(ArecordCapture(), asr, tts, AplayPlayer(), Segmenter(RATE, FRAME_MS, start_rms=start_rms, end_silence_ms=450))
+    seg = Segmenter(RATE, FRAME_MS, start_rms=start_rms, end_silence_ms=450)
+    return Audio(ArecordCapture(), _dumped(asr, seg), tts, AplayPlayer(), seg)
 
 
 def _saved_rms(default: float = 500.0) -> float:
@@ -115,6 +143,24 @@ def _saved_rms(default: float = 500.0) -> float:
         return float((HOME / "start_rms").read_text())
     except (OSError, ValueError):
         return default
+
+
+def mic_test(secs: int = 6) -> int:
+    """Record all 6 mic-array channels while you speak; print level + ASR per channel and for the mono mix, keep wavs."""
+    import numpy as np
+    print(f"SPEAK NOW for {secs}s (a full sentence, at the distance you will use) ...", flush=True)
+    raw = subprocess.run(["arecord", "-q", "-D", MIC, "-f", "S16_LE", "-r", str(RATE), "-c", "6", "-t", "raw", "-d", str(secs)],
+                         capture_output=True, check=True).stdout
+    x = np.frombuffer(raw[: len(raw) // 12 * 12], np.int16).reshape(-1, 6)
+    asr = WhisperAsr()
+    clips = {f"ch{i}": x[:, i] for i in range(6)}
+    clips["mean"] = x.astype(np.float32).mean(axis=1).astype(np.int16)
+    for name, c in clips.items():
+        c = np.ascontiguousarray(c, np.int16)
+        save_wav(DUMP / f"mictest_{name}.wav", c.tobytes())
+        rms = float(np.sqrt(np.mean(c.astype(np.float64) ** 2))); peak = int(np.abs(c).max())
+        print(f"{name:5s} rms {rms:6.0f} peak {peak:6d}  ASR: {asr(c.tobytes())!r}", flush=True)
+    return 0
 
 
 def calibrate(quiet_s: int = 3, speak_s: int = 5) -> int:
@@ -135,11 +181,14 @@ def calibrate(quiet_s: int = 3, speak_s: int = 5) -> int:
 
     print(f"Stay SILENT for {quiet_s}s ...", flush=True)
     cap.drain()
-    noise = sorted(rms(f) for f in record(quiet_s))
+    quiet_frames = record(quiet_s)
+    noise = sorted(rms(f) for f in quiet_frames)
     print(f"SPEAK NOW for {speak_s}s (say a sentence at normal volume, standing where you will talk) ...", flush=True)
     cap.drain()
     speech_frames = record(speak_s)
     cap.close()
+    save_wav(DUMP / "calib_quiet.wav", b"".join(quiet_frames))
+    save_wav(DUMP / "calib_speech.wav", b"".join(speech_frames))
     loud = sorted(rms(f) for f in speech_frames)
     n95, s_med, s_top = noise[int(len(noise) * .95) - 1], statistics.median(loud[len(loud) // 2:]), loud[-1]
     thr = max(150.0, n95 * 2.5)
@@ -154,7 +203,11 @@ def calibrate(quiet_s: int = 3, speak_s: int = 5) -> int:
         (HOME / "start_rms").write_text(f"{thr:.0f}")
         print(f"saved start_rms = {thr:.0f}")
         verdict = 0
-    print("ASR heard:", repr(WhisperAsr()(b"".join(speech_frames))), flush=True)
+    heard = WhisperAsr()(b"".join(speech_frames))
+    (DUMP / "calib_report.txt").write_text(
+        f"noise_p95_rms: {n95:.0f}\nspeech_median_loud_half_rms: {s_med:.0f}\nspeech_peak_rms: {s_top:.0f}\n"
+        f"threshold_saved: {f'{thr:.0f}' if verdict == 0 else 'no'}\nasr_text: {heard!r}\n")
+    print("ASR heard:", repr(heard), flush=True)
     return verdict
 
 
@@ -167,6 +220,7 @@ def main(argv=None) -> int:
     sub.add_parser("listen")
     sub.add_parser("bench")
     sub.add_parser("calibrate")
+    sub.add_parser("mic-test")
     af = sub.add_parser("asr-file")
     af.add_argument("wav")
     args = ap.parse_args(argv)
@@ -174,6 +228,8 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     if args.cmd == "calibrate":
         return calibrate()
+    if args.cmd == "mic-test":
+        return mic_test()
     a = build()
     try:
         if args.cmd == "bench":
