@@ -23,15 +23,30 @@ SPEAKER = "plughw:CARD=Device,DEV=0"
 HOME = Path(os.environ.get("K1_CHAT_HOME", Path.home() / "k1_chat"))
 
 
+LIVE_CH, NCH = 4, 6  # the K1 mic array exposes 6 channels; 0-3 are live mics, 4-5 are silent (rms ~3)
+
+
+def set_mic_gain(level: int | None = None) -> None:
+    """Capture volume is 10/25 by default (peaks ~1500/32768); ALSA mixer setting, lost on reboot."""
+    level = int(os.environ.get("K1_CHAT_MIC_GAIN", 16)) if level is None else level
+    subprocess.run(["amixer", "-q", "-c", "Speaker", "cset", "name=Mic Capture Volume", ",".join([str(level)] * NCH)], check=False)
+
+
 class ArecordCapture:
+    """6-channel capture mixed down to mono (mean of the live channels); ALSA's own 6->1 mix includes the dead ones and loses ~40%."""
+
     def __init__(self, device: str = MIC):
-        self._p = subprocess.Popen(["arecord", "-q", "-D", device, "-f", "S16_LE", "-r", str(RATE), "-c", "1", "-t", "raw"],
+        set_mic_gain()
+        self._p = subprocess.Popen(["arecord", "-q", "-D", device, "-f", "S16_LE", "-r", str(RATE), "-c", str(NCH), "-t", "raw"],
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
     def __iter__(self):
-        while chunk := self._p.stdout.read(FRAME_BYTES):
-            if len(chunk) == FRAME_BYTES:
-                yield chunk
+        import numpy as np
+        size = FRAME_BYTES * NCH
+        while chunk := self._p.stdout.read(size):
+            if len(chunk) == size:
+                x = np.frombuffer(chunk, np.int16).reshape(-1, NCH)[:, :LIVE_CH]
+                yield x.astype(np.int32).mean(axis=1).astype(np.int16).tobytes()
 
     def drain(self) -> None:
         fd = self._p.stdout.fileno()
@@ -138,7 +153,7 @@ def build() -> Audio:
     return Audio(ArecordCapture(), _dumped(asr, seg), tts, AplayPlayer(), seg)
 
 
-def _saved_rms(default: float = 500.0) -> float:
+def _saved_rms(default: float = 150.0) -> float:
     try:
         return float((HOME / "start_rms").read_text())
     except (OSError, ValueError):
@@ -148,6 +163,7 @@ def _saved_rms(default: float = 500.0) -> float:
 def mic_test(secs: int = 6) -> int:
     """Record all 6 mic-array channels while you speak; print level + ASR per channel and for the mono mix, keep wavs."""
     import numpy as np
+    set_mic_gain()
     print(f"SPEAK NOW for {secs}s (a full sentence, at the distance you will use) ...", flush=True)
     raw = subprocess.run(["arecord", "-q", "-D", MIC, "-f", "S16_LE", "-r", str(RATE), "-c", "6", "-t", "raw", "-d", str(secs)],
                          capture_output=True, check=True).stdout
@@ -191,9 +207,9 @@ def calibrate(quiet_s: int = 3, speak_s: int = 5) -> int:
     save_wav(DUMP / "calib_speech.wav", b"".join(speech_frames))
     loud = sorted(rms(f) for f in speech_frames)
     n95, s_med, s_top = noise[int(len(noise) * .95) - 1], statistics.median(loud[len(loud) // 2:]), loud[-1]
-    thr = max(150.0, n95 * 2.5)
+    thr = max(60.0, n95 * 2.5)
     if thr > s_med * 0.5:
-        thr = max(150.0, (n95 + s_med) / 2) if s_med > n95 else thr
+        thr = max(60.0, (n95 + s_med) / 2) if s_med > n95 else thr
     print(f"noise p95 rms {n95:.0f}   speech median-of-loud-half {s_med:.0f}   speech peak {s_top:.0f}")
     if s_top < n95 * 2:
         print("WARN: speech barely above noise: speak louder/closer, or the mic is quiet. Threshold NOT saved.")
