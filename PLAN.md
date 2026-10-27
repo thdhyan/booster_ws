@@ -58,3 +58,6 @@ Live: `... pytest -m net` / `-m robot` (needs `K1_IP`).
 - Whether 1.8.1.2 AI chat (`StartAiChat`) talks to a Booster cloud. Avoid it; we use our own LLM loop. Check network egress before enabling.
 - Free models may log prompts; no private audio/video of people without consent.
 - Keys: only `OPENROUTER_API_KEY` was copied. Other keys in intent-sim `.env` (NIM, OpenAI, Gemini) were left there on purpose.
+
+## Next (see HANDOFF.md for state, issues, details)
+- Tool calling (`run_python`, where it runs is undecided), barge-in/interruption, OpenAI Realtime API spike (paid, later), per-robot calibration, ASR noise hallucinations.
