@@ -7,8 +7,10 @@ Drive (shared drive folder `K1 voice chat (ASR - LLM - TTS)`, id 19TTmMfsWvI-BS3
   -> energy VAD -> faster-whisper tiny.en (CPU) -> OpenRouter free model -> Kokoro-82M (GPU) -> aplay. Bench: Kokoro ~1 s / 5 s sentence, ASR ~1-2 s.
 - `scripts/k1voice.sh start|stop|smoke|log|fetch|calibrate|mic-test|status|restore <robot>`; `start` = async voice chat (new LLM call per utterance,
   stale replies dropped, mic muted while speaking + 0.5 s). Audio dumps: `k1voice.sh fetch` -> `audio_dumps/<robot>/`. Details: `docs/AUDIO_PIPELINE.md`.
-- Model: `K1_CHAT_MODEL=cohere/north-mini-code:free` (tool-capable, ~1 s). nemotron-3.5-lightning is a reasoning model and returned empty content at low max_tokens.
-  Free models 429 often; fallback `poolside/laguna-s-2.1:free`. System prompt: `src/k1_chat/system_prompt.md` (to be rewritten).
+- Model: `K1_CHAT_MODEL=nvidia/nemotron-3.5-super-vl:free` (tool-capable reasoning model, ~1-4 s; reasoning kept on, `max_tokens=2000` so thinking does not eat the answer). Earlier: cohere/north-mini-code:free; nemotron-3.5-lightning returned empty content at low max_tokens.
+  Free models 429 often; fallback `poolside/laguna-s-2.1:free`. System prompt: `src/k1_chat/system_prompt.md` (persona) + every `src/k1_chat/knowledge/*.md` (booster, ethics, umn; MnRI = Minnesota Robotics Institute), loaded in name order, synced by `k1voice.sh`.
+- Memory: 20 turns, saved to `~/k1_chat/history.json` on the robot (survives stop/start; `rm` it to reset).
+- `k1voice.sh start <robot>` (chat mode) checks the laptop NAT (`ip_forward` + nft `k1nat`) and creates it with `sudo -n`; warns if the robot itself has no internet (A1 needs default route via 192.168.50.250, temporary until reboot).
 - Live-tested on A3: calibrate + smoke OK. Chat loop with the new model + async: NOT yet tested live.
 
 ## Known issues
@@ -18,6 +20,8 @@ Drive (shared drive folder `K1 voice chat (ASR - LLM - TTS)`, id 19TTmMfsWvI-BS3
 - Never run `booster-cli upgrade`/`upload_log`; chat must never move the robot or change locomotion mode; free OpenRouter models only.
 
 ## Next steps
+### 0. Web search (decision)
+- OpenRouter `:online`/web plugin is paid (breaks free-only). Free route = tool calling with a `web_search` tool run by our code (e.g. DuckDuckGo). Not built.
 ### 1. Tool calling (skipped on purpose for now)
 - Model already supports `tools`. Plan: extend `OpenRouterClient.chat` to return the full message (tool_calls), add a tool registry in `conversation.py`,
   loop: LLM -> tool_call -> run -> `role: tool` result -> LLM -> speak. Rewrite `system_prompt.md` to describe the tools.
