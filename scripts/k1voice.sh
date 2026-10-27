@@ -6,10 +6,11 @@
 #   k1voice.sh smoke   <robot> [text]   say text, hear one utterance, say it back (foreground)
 #   k1voice.sh calibrate <robot>        measure room noise + your voice, save the VAD threshold on the robot, show what ASR heard
 #   k1voice.sh fetch   <robot>          copy the robot's raw audio dumps to audio_dumps/<robot>/ (calib_*, mictest_*, utt_* wav + txt)
+#   k1voice.sh log     <robot>          follow the live transcripts of `start` (Ctrl-C leaves the listener running)
 #   k1voice.sh status  <robot>
 #   k1voice.sh restore <robot>          just make sure the audio service is running
 set -euo pipefail
-cmd=${1:?usage: k1voice.sh start|stop|smoke|fetch|mic-test|calibrate|status|restore <robot> [text]}
+cmd=${1:?usage: k1voice.sh start|stop|smoke|log|fetch|mic-test|calibrate|status|restore <robot> [text]}
 name=${2:?robot name, e.g. a1}
 host=boosterk1.${name,,}
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -32,6 +33,8 @@ case $cmd in
       ~/k1_chat/run.sh --status; tail -2 ~/k1_chat/voice.log 2>/dev/null' ;;
   smoke)
     ssh -t "$host" "~/k1_chat/run.sh smoke ${3:+\"$3\"}" ;;
+  log)
+    ssh -t "$host" 'tail -n 20 -f ~/k1_chat/voice.log' ;;
   fetch)
     mkdir -p "$root/audio_dumps/${name,,}"
     rsync -av "$host:k1_chat/dump/" "$root/audio_dumps/${name,,}/" && ls -l "$root/audio_dumps/${name,,}" ;;
