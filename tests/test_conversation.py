@@ -47,3 +47,52 @@ def test_run_voice_chat_speaks_each_reply():
 def test_default_system_prompt_comes_from_file():
     from k1_chat.conversation import SYSTEM
     assert "robot" in SYSTEM.lower() and len(SYSTEM) > 20
+
+
+import threading
+import time
+
+from k1_chat.conversation import run_async_voice_chat
+
+
+class SlowLLM:
+    """First call blocks until released; later calls answer at once."""
+    def __init__(self):
+        self.release, self.calls = threading.Event(), []
+
+    def chat(self, messages, **kw):
+        self.calls.append([m["content"] for m in messages[1:]])
+        if len(self.calls) == 1:
+            self.release.wait(2)
+        return f"answer {len(self.calls)}"
+
+
+def test_new_utterance_supersedes_pending_llm_call():
+    llm, spoken = SlowLLM(), []
+    conv = Conversation(llm, system="s")
+
+    def texts():
+        yield "first"
+        while not llm.calls:          # first call is now in flight
+            time.sleep(0.01)
+        yield "second"
+        time.sleep(0.2)
+        llm.release.set()             # stale first reply arrives late
+
+    run_async_voice_chat(texts(), conv, spoken.append)
+    assert spoken == ["answer 2"]                     # stale reply never spoken
+    assert llm.calls[1] == ["first second"]           # user turns merged for the new call
+    assert [m["role"] for m in conv.history] == ["user", "assistant"]
+
+
+def test_async_chat_answers_each_utterance_when_not_overlapping():
+    spoken = []
+
+    def texts():
+        yield "a"
+        while len(spoken) < 1:
+            time.sleep(0.01)
+        yield "b"
+
+    run_async_voice_chat(texts(), Conversation(FakeLLM(["x", "y"]), system="s"), spoken.append)
+    assert spoken == ["x", "y"]

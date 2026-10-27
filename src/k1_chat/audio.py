@@ -6,6 +6,7 @@ robot_audio.py and run on the K1. tests/test_audio.py defines the contract.
 import array
 import math
 import re
+import time
 from collections import deque
 from typing import Callable, Iterable, Iterator, Protocol
 
@@ -68,11 +69,16 @@ class Segmenter:
 
 class Audio:
     def __init__(self, capture: Iterable[bytes], asr: Callable[[bytes], str], tts: Callable[[str], bytes],
-                 player: Player, segmenter: Segmenter):
+                 player: Player, segmenter: Segmenter, concurrent: bool = False, echo_tail_s: float = 0.5):
         self._cap, self._asr, self._tts, self._player, self._seg = capture, asr, tts, player, segmenter
+        # concurrent: listen() runs in another thread while we speak; it alone reads the mic and discards our own voice
+        self._concurrent, self._echo_tail, self._speaking, self._mute_until = concurrent, echo_tail_s, False, 0.0
 
     def listen(self) -> Iterator[str]:
         for f in self._cap:
+            if self._speaking or time.monotonic() < self._mute_until:
+                self._seg.reset()
+                continue
             utt = self._seg.feed(f)
             if utt is None:
                 continue
@@ -83,11 +89,17 @@ class Audio:
     def speak(self, text: str) -> None:
         if not text.strip():
             return
-        for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):  # first audio starts after one sentence, not all
-            if sentence:
-                self._player.play(self._tts(sentence))
-        self._seg.reset()
-        self._cap.drain()  # drop what the mic heard of our own voice
+        self._speaking = True
+        try:
+            for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):  # first audio starts after one sentence, not all
+                if sentence:
+                    self._player.play(self._tts(sentence))
+        finally:
+            self._mute_until = time.monotonic() + self._echo_tail
+            self._speaking = False
+        if not self._concurrent:
+            self._seg.reset()
+            self._cap.drain()  # drop what the mic heard of our own voice
 
     def stop_speaking(self) -> None:
         self._player.stop()

@@ -117,3 +117,16 @@ def test_stop_speaking_stops_player():
 @pytest.mark.robot
 def test_robot_speaks_and_hears():
     pytest.skip("run `scripts/k1voice.sh smoke <robot>` instead; needs a person at the robot")
+
+
+def test_concurrent_mode_ignores_mic_while_speaking_and_skips_drain():
+    frames = [LOUD] * 10 + [QUIET] * 12
+    a, played, _ = make(frames)
+    a._concurrent = True
+    a._speaking = True                    # robot is talking: its own voice must not become an utterance
+    assert list(a.listen()) == []
+    a._speaking = False
+    a._cap.frames = frames
+    assert list(a.listen()) == ["hello robot"]
+    a.speak("Hi.")
+    assert a._cap.drained == 0            # listener thread owns the pipe, drain would split frames

@@ -145,12 +145,12 @@ def _timed(name, fn, size=len):
     return wrapped
 
 
-def build() -> Audio:
+def build(concurrent: bool = False) -> Audio:
     asr = _timed("asr", WhisperAsr(), size=lambda pcm: f"{len(pcm) / 2 / RATE:.1f}s audio")
     tts = _timed("tts", KokoroTts(), size=lambda t: f"{len(t)} chars")
     start_rms = float(os.environ.get("K1_CHAT_START_RMS", _saved_rms()))
     seg = Segmenter(RATE, FRAME_MS, start_rms=start_rms, end_silence_ms=450)
-    return Audio(ArecordCapture(), _dumped(asr, seg), tts, AplayPlayer(), seg)
+    return Audio(ArecordCapture(), _dumped(asr, seg), tts, AplayPlayer(), seg, concurrent=concurrent)
 
 
 def _saved_rms(default: float = 150.0) -> float:
@@ -247,7 +247,7 @@ def main(argv=None) -> int:
         return calibrate()
     if args.cmd == "mic-test":
         return mic_test()
-    a = build()
+    a = build(concurrent=args.cmd == "chat")
     try:
         if args.cmd == "bench":
             wav = a._tts("Hello, I am a Booster K1 robot. It is nice to meet you. How can I help you today?")
@@ -279,7 +279,7 @@ def main(argv=None) -> int:
             print(f"HEARD: {heard}", flush=True)
             a.speak(f"I heard: {heard}")
         elif args.cmd == "chat":
-            from k1_chat.conversation import Conversation, run_voice_chat
+            from k1_chat.conversation import Conversation, run_async_voice_chat
             from k1_chat.llm import from_env
 
             def heard():
@@ -293,7 +293,7 @@ def main(argv=None) -> int:
                 a.speak(text)
                 print(f"[speak] {time.time() - t:.2f}s", file=sys.stderr, flush=True)
 
-            run_voice_chat(heard(), Conversation(from_env()), say)
+            run_async_voice_chat(heard(), Conversation(from_env()), say)
         else:
             for text in a.listen():
                 print(f"HEARD: {text}", flush=True)
