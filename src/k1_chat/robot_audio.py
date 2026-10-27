@@ -293,7 +293,7 @@ def main(argv=None) -> int:
                 a.speak(text)
                 print(f"[speak] {time.time() - t:.2f}s", file=sys.stderr, flush=True)
 
-            run_async_voice_chat(heard(), Conversation(from_env()), say)
+            run_async_voice_chat(heard(), Conversation(from_env(), history_file=HOME / "history.json"), say)
         else:
             for text in a.listen():
                 print(f"HEARD: {text}", flush=True)
