@@ -35,7 +35,7 @@ class OpenRouterClient:
             if r.status_code >= 400:
                 raise LLMError(f"HTTP {r.status_code}: {r.text[:200]}")
             try:
-                return r.json()["choices"][0]["message"]["content"]
+                return r.json()["choices"][0]["message"]["content"] or ""
             except (KeyError, IndexError, TypeError, ValueError) as e:
                 raise LLMError(f"bad response shape: {e}") from e
         raise LLMError(f"gave up after {self.retries + 1} attempts: {last}")

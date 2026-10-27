@@ -1,4 +1,5 @@
 """Voice conversation: transcript in, short spoken reply out. Speech only: nothing here can command the robot."""
+import sys
 from typing import Callable, Iterable
 
 SYSTEM = ("You are a friendly Booster K1 humanoid robot talking out loud with a person. "
@@ -15,8 +16,9 @@ class Conversation:
         self.history.append({"role": "user", "content": text})
         self.history = self.history[-(2 * self._max - 1):]
         try:
-            answer = self._llm.chat([{"role": "system", "content": self._system}, *self.history], max_tokens=120).strip()
-        except Exception:
+            answer = (self._llm.chat([{"role": "system", "content": self._system}, *self.history], max_tokens=400) or "").strip()
+        except Exception as e:
+            print(f"[llm] {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             self.history.pop()
             return FALLBACK
         self.history.append({"role": "assistant", "content": answer})
