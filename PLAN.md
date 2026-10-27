@@ -15,7 +15,7 @@ No files shared with `booster_ws`. Reads `booster_ws/sdk/booster_robotics_sdk` a
 - Audio hardware: capture card "NationalChip UAC Speaker" (USB mic array, DOA), playback USB audio device.
 - Camera: `/boostercamera/head/rgb` ~27 Hz nv12 544x448; depth ~25 Hz float32 mm. MJPEG helper exists in `booster_ws/tools/k1_camera/depth_sbs_server.py`.
 - Robots: A2 192.168.50.215, A3 .230, B1 .105, B2 .62, B3 .248 on robotics_5G. ssh aliases `boosterk1.<name>`.
-- Free OpenRouter models (checked 2026-10-27): text `nvidia/nemotron-3-super-120b-a12b:free`, vision `google/gemma-4-31b-it:free`,
+- Free OpenRouter models (checked 2026-10-27): text `nvidia/nemotron-3.5-lightning:free`, vision `google/gemma-4-31b-it:free`,
   audio-in `thinkingmachines/inkling-small:free`. Only `:free` ids allowed (client rejects others). Free tier is rate limited: retry/backoff, local fallback later.
 
 ## Architecture
@@ -42,8 +42,8 @@ Tests first: spec validator against fixture policies; sim-in-the-loop MuJoCo tes
 
 ## TDD phases (red -> green)
 - P0 (done): scaffold, `.env` (OpenRouter key only), tests for `llm` and `arbiter` written and failing (13 red).
-- P1: implement `llm.py` (httpx, `:free` guard, retry on 429/5xx, `LLMError`) and `arbiter.py` until green. Live test `-m net`.
-- P2: `audio.py` (mic capture / ASR chunks / TTS) with fake transport tests, then `-m robot` smoke on A2 (speak a fixed sentence first).
+- P1 (done, 13 green; live net test passes on nemotron-3.5-lightning, nemotron-3-super 404s upstream): implement `llm.py` (httpx, `:free` guard, retry on 429/5xx, `LLMError`) and `arbiter.py` until green. Live test `-m net`.
+- P2 (fake-transport part done, 6 tests; open: RobotTransport + AsrChunk shape + robot smoke): `audio.py` (mic capture / ASR chunks / TTS) with fake transport tests, then `-m robot` smoke on A2 (speak a fixed sentence first).
 - P3: `vision.py`: frame grab, JPEG -> vision model, describe scene test with fixture image, then `-m robot`.
 - P4: `brain.py`: conversation loop, tool calls (`move`, `stop`, `look`, `say`), persona prompt; tests with scripted LLM.
 - P5: multi-robot: one brain per robot, namespaced by `robot_ns`; independent state and history.
