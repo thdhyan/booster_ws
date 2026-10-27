@@ -1,5 +1,7 @@
 # k1-chat handoff (state as of 2026-10-27, branch `feat/k1-chatbot`)
 
+Drive (shared drive folder `K1 voice chat (ASR - LLM - TTS)`, id 19TTmMfsWvI-BS3srMDhxWrB9MjlGJtU5): status deck `1l00na5AEsAdHfaahgO_VbWNqkhfFlzRfNjzxCtqnZhQ`, copies of this file and AUDIO_PIPELINE.md. PR: umn-cse-mnri/booster_ws#3 (branch `feat/k1-chatbot`, code under `k1_chat/`).
+
 ## State: working
 - P1 llm client + velocity arbiter; P2 local voice on all 6 K1s (A1-A3, B1-B3, fw 1.8.1.2): mic 6ch -> mean of live ch0-3 (mic gain 16/25)
   -> energy VAD -> faster-whisper tiny.en (CPU) -> OpenRouter free model -> Kokoro-82M (GPU) -> aplay. Bench: Kokoro ~1 s / 5 s sentence, ASR ~1-2 s.
