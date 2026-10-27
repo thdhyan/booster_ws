@@ -9,6 +9,8 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 from k1_chat.audio import Audio, Segmenter
@@ -56,9 +58,12 @@ class PiperTts:
         self._model = model
 
     def __call__(self, text: str) -> bytes:
-        r = subprocess.run([sys.executable, "-m", "piper", "-m", str(self._model)], input=text.encode(),
-                           capture_output=True, check=True)
-        return r.stdout
+        with tempfile.NamedTemporaryFile(suffix=".wav") as f:  # piper 1.8 writes nothing to stdout without -f
+            r = subprocess.run([sys.executable, "-m", "piper", "-m", str(self._model), "-f", f.name],
+                               input=text.encode(), capture_output=True)
+            if r.returncode:
+                raise RuntimeError(f"piper failed: {r.stderr.decode()[-300:]}")
+            return Path(f.name).read_bytes()
 
 
 class AplayPlayer:
@@ -77,8 +82,19 @@ class AplayPlayer:
             self._p.terminate()
 
 
+def _timed(name, fn, size=len):
+    def wrapped(x):
+        t = time.time()
+        out = fn(x)
+        print(f"[{name}] {time.time() - t:.2f}s in={size(x)} out={out if isinstance(out, str) else len(out)}", file=sys.stderr, flush=True)
+        return out
+    return wrapped
+
+
 def build() -> Audio:
-    return Audio(ArecordCapture(), WhisperAsr(), PiperTts(), AplayPlayer(), Segmenter(RATE, FRAME_MS))
+    asr = _timed("asr", WhisperAsr(), size=lambda pcm: f"{len(pcm) / 2 / RATE:.1f}s audio")
+    tts = _timed("tts", PiperTts(), size=lambda t: f"{len(t)} chars")
+    return Audio(ArecordCapture(), asr, tts, AplayPlayer(), Segmenter(RATE, FRAME_MS))
 
 
 def main(argv=None) -> int:
@@ -88,12 +104,19 @@ def main(argv=None) -> int:
     sm.add_argument("sentence", nargs="?", default="Hello, I am a Booster K1. Please say something.")
     sm.add_argument("--timeout", type=int, default=20)
     sub.add_parser("listen")
+    af = sub.add_parser("asr-file")
+    af.add_argument("wav")
     args = ap.parse_args(argv)
 
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     a = build()
     try:
-        if args.cmd == "smoke":
+        if args.cmd == "asr-file":
+            import wave
+            with wave.open(args.wav) as w:
+                assert w.getframerate() == RATE and w.getnchannels() == 1, "need 16 kHz mono wav"
+                print("ASR:", a._asr(w.readframes(w.getnframes())), flush=True)
+        elif args.cmd == "smoke":
             a.speak(args.sentence)
             print("listening...", flush=True)
             signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError()))
@@ -101,7 +124,7 @@ def main(argv=None) -> int:
             try:
                 heard = next(a.listen())
             except (TimeoutError, StopIteration):
-                print("HEARD: <nothing>", flush=True)
+                print(f"HEARD: <nothing> (mic peak rms {a._seg.peak:.0f}, threshold 500)", flush=True)
                 return 1
             finally:
                 signal.alarm(0)

@@ -18,6 +18,10 @@ echo $$ > "$PIDFILE"
 trap 'restore; rm -f "$PIDFILE"' EXIT
 trap 'exit 143' TERM INT HUP
 
+# Preflight: change nothing on the robot unless we can run AND restore.
+[ -x "$BA/bin/booster-audio" ] || { echo "no $BA/bin/booster-audio: fw layout not supported (fw 1.8.x runs /opt/booster/bin/container/audio)" >&2; trap - EXIT; rm -f "$PIDFILE"; exit 2; }
+[ -x "$HOME/k1_chat/venv/bin/python" ] || { echo "no ~/k1_chat/venv on this robot: install the voice stack first" >&2; trap - EXIT; rm -f "$PIDFILE"; exit 2; }
+
 pkill -TERM -x booster-audio
 for _ in 1 2 3 4 5 6 7 8; do pgrep -x booster-audio >/dev/null || break; sleep 1; done
 pgrep -x booster-audio >/dev/null && { echo "booster-audio would not stop" >&2; exit 1; }

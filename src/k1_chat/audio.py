@@ -26,6 +26,7 @@ class Segmenter:
         self._start_rms = start_rms
         self._end, self._min, self._max = ms(end_silence_ms), ms(min_ms), ms(max_ms)
         self._pre = deque(maxlen=ms(preroll_ms))
+        self.peak = 0.0  # loudest frame RMS seen, for tuning start_rms
         self.reset()
 
     def reset(self) -> None:
@@ -40,7 +41,9 @@ class Segmenter:
         return math.sqrt(sum(x * x for x in s) / len(s)) if s else 0.0
 
     def feed(self, f: bytes) -> bytes | None:
-        loud = self._rms(f) >= self._start_rms
+        rms = self._rms(f)
+        self.peak = max(self.peak, rms)
+        loud = rms >= self._start_rms
         if not self._buf:
             if not loud:
                 self._pre.append(f)
