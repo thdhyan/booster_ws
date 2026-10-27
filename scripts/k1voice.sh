@@ -4,10 +4,11 @@
 #   k1voice.sh start   <robot>          background listener, transcripts in ~/k1_chat/voice.log
 #   k1voice.sh stop    <robot>          stop ours, start the audio service again
 #   k1voice.sh smoke   <robot> [text]   say text, hear one utterance, say it back (foreground)
+#   k1voice.sh calibrate <robot>        measure room noise + your voice, save the VAD threshold on the robot, show what ASR heard
 #   k1voice.sh status  <robot>
 #   k1voice.sh restore <robot>          just make sure the audio service is running
 set -euo pipefail
-cmd=${1:?usage: k1voice.sh start|stop|smoke|status|restore <robot> [text]}
+cmd=${1:?usage: k1voice.sh start|stop|smoke|calibrate|status|restore <robot> [text]}
 name=${2:?robot name, e.g. a1}
 host=boosterk1.${name,,}
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -30,6 +31,8 @@ case $cmd in
       ~/k1_chat/run.sh --status; tail -2 ~/k1_chat/voice.log 2>/dev/null' ;;
   smoke)
     ssh -t "$host" "~/k1_chat/run.sh smoke ${3:+\"$3\"}" ;;
+  calibrate)
+    ssh -t "$host" '~/k1_chat/run.sh calibrate' ;;
   status)
     ssh "$host" '[ -f ~/k1_chat/run.pid ] && kill -0 $(cat ~/k1_chat/run.pid) 2>/dev/null && echo "our ASR: running" || echo "our ASR: stopped"
       ~/k1_chat/run.sh --status; tail -3 ~/k1_chat/voice.log 2>/dev/null' ;;

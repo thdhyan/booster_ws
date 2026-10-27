@@ -106,7 +106,56 @@ def _timed(name, fn, size=len):
 def build() -> Audio:
     asr = _timed("asr", WhisperAsr(), size=lambda pcm: f"{len(pcm) / 2 / RATE:.1f}s audio")
     tts = _timed("tts", KokoroTts(), size=lambda t: f"{len(t)} chars")
-    return Audio(ArecordCapture(), asr, tts, AplayPlayer(), Segmenter(RATE, FRAME_MS, end_silence_ms=450))
+    start_rms = float(os.environ.get("K1_CHAT_START_RMS", _saved_rms()))
+    return Audio(ArecordCapture(), asr, tts, AplayPlayer(), Segmenter(RATE, FRAME_MS, start_rms=start_rms, end_silence_ms=450))
+
+
+def _saved_rms(default: float = 500.0) -> float:
+    try:
+        return float((HOME / "start_rms").read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def calibrate(quiet_s: int = 3, speak_s: int = 5) -> int:
+    """Measure room noise, then speech, save a VAD threshold to ~/k1_chat/start_rms and transcribe the speech clip."""
+    import statistics
+    cap = ArecordCapture()
+
+    def record(secs):
+        frames = []
+        for f in cap:
+            frames.append(f)
+            if len(frames) * FRAME_MS >= secs * 1000:
+                return frames
+        return frames
+
+    def rms(f):
+        return Segmenter._rms(f)
+
+    print(f"Stay SILENT for {quiet_s}s ...", flush=True)
+    cap.drain()
+    noise = sorted(rms(f) for f in record(quiet_s))
+    print(f"SPEAK NOW for {speak_s}s (say a sentence at normal volume, standing where you will talk) ...", flush=True)
+    cap.drain()
+    speech_frames = record(speak_s)
+    cap.close()
+    loud = sorted(rms(f) for f in speech_frames)
+    n95, s_med, s_top = noise[int(len(noise) * .95) - 1], statistics.median(loud[len(loud) // 2:]), loud[-1]
+    thr = max(150.0, n95 * 2.5)
+    if thr > s_med * 0.5:
+        thr = max(150.0, (n95 + s_med) / 2) if s_med > n95 else thr
+    print(f"noise p95 rms {n95:.0f}   speech median-of-loud-half {s_med:.0f}   speech peak {s_top:.0f}")
+    if s_top < n95 * 2:
+        print("WARN: speech barely above noise: speak louder/closer, or the mic is quiet. Threshold NOT saved.")
+        verdict = 1
+    else:
+        HOME.mkdir(parents=True, exist_ok=True)
+        (HOME / "start_rms").write_text(f"{thr:.0f}")
+        print(f"saved start_rms = {thr:.0f}")
+        verdict = 0
+    print("ASR heard:", repr(WhisperAsr()(b"".join(speech_frames))), flush=True)
+    return verdict
 
 
 def main(argv=None) -> int:
@@ -117,11 +166,14 @@ def main(argv=None) -> int:
     sm.add_argument("--timeout", type=int, default=20)
     sub.add_parser("listen")
     sub.add_parser("bench")
+    sub.add_parser("calibrate")
     af = sub.add_parser("asr-file")
     af.add_argument("wav")
     args = ap.parse_args(argv)
 
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    if args.cmd == "calibrate":
+        return calibrate()
     a = build()
     try:
         if args.cmd == "bench":
@@ -147,7 +199,7 @@ def main(argv=None) -> int:
             try:
                 heard = next(a.listen())
             except (TimeoutError, StopIteration):
-                print(f"HEARD: <nothing> (mic peak rms {a._seg.peak:.0f}, threshold 500)", flush=True)
+                print(f"HEARD: <nothing> (mic peak rms {a._seg.peak:.0f}, threshold {a._seg._start_rms:.0f})", flush=True)
                 return 1
             finally:
                 signal.alarm(0)
