@@ -5,6 +5,7 @@ robot_audio.py and run on the K1. tests/test_audio.py defines the contract.
 """
 import array
 import math
+import re
 from collections import deque
 from typing import Callable, Iterable, Iterator, Protocol
 
@@ -82,7 +83,9 @@ class Audio:
     def speak(self, text: str) -> None:
         if not text.strip():
             return
-        self._player.play(self._tts(text))
+        for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):  # first audio starts after one sentence, not all
+            if sentence:
+                self._player.play(self._tts(sentence))
         self._seg.reset()
         self._cap.drain()  # drop what the mic heard of our own voice
 

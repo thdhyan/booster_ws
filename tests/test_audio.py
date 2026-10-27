@@ -89,6 +89,19 @@ def test_speak_synthesizes_plays_and_drains_mic():
     assert a._cap.drained == 1
 
 
+def test_speak_plays_sentence_by_sentence_so_first_audio_starts_early():
+    a, played, _ = make([])
+    a.speak("Hello there. How are you today? Fine!")
+    assert played == [b"WAV:Hello there.", b"WAV:How are you today?", b"WAV:Fine!"]
+    assert a._cap.drained == 1
+
+
+def test_speak_keeps_decimals_and_abbreviation_free_text_together():
+    a, played, _ = make([])
+    a.speak("Speed is 0.4 m/s now")
+    assert played == [b"WAV:Speed is 0.4 m/s now"]
+
+
 def test_speak_blank_is_noop():
     a, played, _ = make([])
     a.speak("  ")
