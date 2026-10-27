@@ -1,57 +1,87 @@
-"""Mic -> ASR utterances and text -> TTS over the robot LUI service. tests/test_audio.py defines the contract.
+"""Local voice pipeline: mic frames -> VAD segmenter -> ASR text, and text -> TTS wav -> player.
 
-The transport is injected: `call(api_id, body)` returns 0 on success, `asr_chunks()` yields dicts
-{"text": str, "is_final": bool}. The chunk shape is an assumption until the AsrChunk idl is checked on the robot.
+Capture, ASR, TTS and player are injected so the logic is testable; the real ones live in
+robot_audio.py and run on the K1. tests/test_audio.py defines the contract.
 """
-import json
-from enum import IntEnum
-from typing import Iterator, Protocol
+import array
+import math
+from collections import deque
+from typing import Callable, Iterable, Iterator, Protocol
+
+# Whisper emits these on near-silence; they are never real user speech.
+_HALLUCINATIONS = {"", "you", "thank you", "thanks for watching", "[blank_audio]", "(silence)"}
 
 
-class AudioError(Exception):
-    pass
+class Player(Protocol):
+    def play(self, wav: bytes) -> None: ...
+    def stop(self) -> None: ...
 
 
-class LuiApi(IntEnum):
-    START_ASR = 1000
-    STOP_ASR = 1001
-    START_TTS = 1050
-    STOP_TTS = 1051
-    SEND_TTS_TEXT = 1052
+class Segmenter:
+    """Energy VAD over fixed-size 16-bit mono PCM frames. feed() returns a finished utterance or None."""
 
+    def __init__(self, rate=16000, frame_ms=30, start_rms=500.0, end_silence_ms=700, min_ms=300,
+                 max_ms=15000, preroll_ms=300):
+        ms = lambda v: max(1, v // frame_ms)
+        self._start_rms = start_rms
+        self._end, self._min, self._max = ms(end_silence_ms), ms(min_ms), ms(max_ms)
+        self._pre = deque(maxlen=ms(preroll_ms))
+        self.reset()
 
-class Transport(Protocol):
-    def call(self, api_id: int, body: str) -> int: ...
-    def asr_chunks(self) -> Iterator[dict]: ...
+    def reset(self) -> None:
+        self._pre.clear()
+        self._buf: list[bytes] = []
+        self._speech = 0
+        self._quiet = 0
+
+    @staticmethod
+    def _rms(f: bytes) -> float:
+        s = array.array("h", f)
+        return math.sqrt(sum(x * x for x in s) / len(s)) if s else 0.0
+
+    def feed(self, f: bytes) -> bytes | None:
+        loud = self._rms(f) >= self._start_rms
+        if not self._buf:
+            if not loud:
+                self._pre.append(f)
+                return None
+            self._buf = list(self._pre) + [f]
+            self._pre.clear()
+            self._speech, self._quiet = 1, 0
+            return None
+        self._buf.append(f)
+        if loud:
+            self._speech += 1
+            self._quiet = 0
+        else:
+            self._quiet += 1
+        if self._quiet >= self._end or len(self._buf) >= self._max:
+            utt, ok = b"".join(self._buf), self._speech >= self._min
+            self.reset()
+            return utt if ok else None
+        return None
 
 
 class Audio:
-    def __init__(self, transport: Transport, voice: str = "zh_male_wennuanahu_moon_bigtts"):
-        self._t, self._voice, self._tts_on = transport, voice, False
+    def __init__(self, capture: Iterable[bytes], asr: Callable[[bytes], str], tts: Callable[[str], bytes],
+                 player: Player, segmenter: Segmenter):
+        self._cap, self._asr, self._tts, self._player, self._seg = capture, asr, tts, player, segmenter
 
-    def _call(self, api: LuiApi, body: str = "") -> None:
-        rc = self._t.call(int(api), body)
-        if rc != 0:
-            raise AudioError(f"{api.name} failed rc={rc}")
+    def listen(self) -> Iterator[str]:
+        for f in self._cap:
+            utt = self._seg.feed(f)
+            if utt is None:
+                continue
+            text = self._asr(utt).strip()
+            if text.lower().strip(".!? ") not in _HALLUCINATIONS:
+                yield text
 
     def speak(self, text: str) -> None:
         if not text.strip():
             return
-        if not self._tts_on:
-            self._call(LuiApi.START_TTS, json.dumps({"voice_type": self._voice}))
-            self._tts_on = True
-        self._call(LuiApi.SEND_TTS_TEXT, json.dumps({"text": text}))
+        self._player.play(self._tts(text))
+        self._seg.reset()
+        self._cap.drain()  # drop what the mic heard of our own voice
 
     def stop_speaking(self) -> None:
-        self._call(LuiApi.STOP_TTS)
-        self._tts_on = False
-
-    def listen(self) -> Iterator[str]:
-        self._call(LuiApi.START_ASR)
-        try:
-            for chunk in self._t.asr_chunks():
-                text = chunk.get("text", "").strip()
-                if chunk.get("is_final") and text:
-                    yield text
-        finally:
-            self._call(LuiApi.STOP_ASR)
+        self._player.stop()

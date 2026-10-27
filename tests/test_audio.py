@@ -1,61 +1,106 @@
-import json
+import struct
 
 import pytest
-from k1_chat.audio import Audio, AudioError, LuiApi
+from k1_chat.audio import Audio, Segmenter
+
+FRAME_MS = 30
+N = 480  # samples per 30 ms @ 16 kHz
 
 
-class FakeTransport:
-    def __init__(self, chunks=(), rc=0):
-        self.calls, self.chunks, self.rc = [], list(chunks), rc
-
-    def call(self, api_id: int, body: str) -> int:
-        self.calls.append((api_id, body))
-        return self.rc
-
-    def asr_chunks(self):
-        yield from self.chunks
+def frame(amp: int) -> bytes:
+    return struct.pack(f"<{N}h", *([amp, -amp] * (N // 2)))
 
 
-def test_speak_starts_tts_once_then_sends_text():
-    t = FakeTransport(); a = Audio(t, voice="v1")
-    a.speak("hello"); a.speak("again")
-    assert [c[0] for c in t.calls] == [LuiApi.START_TTS, LuiApi.SEND_TTS_TEXT, LuiApi.SEND_TTS_TEXT]
-    assert json.loads(t.calls[0][1]) == {"voice_type": "v1"}
-    assert json.loads(t.calls[1][1]) == {"text": "hello"}
+LOUD, QUIET = frame(3000), frame(10)
 
 
-def test_speak_empty_text_is_noop():
-    t = FakeTransport(); Audio(t).speak("  ")
-    assert t.calls == []
+def seg(**kw):
+    return Segmenter(rate=16000, frame_ms=FRAME_MS, start_rms=500, end_silence_ms=300, min_ms=200,
+                     max_ms=2000, preroll_ms=60, **kw)
 
 
-def test_speak_nonzero_rc_raises():
-    with pytest.raises(AudioError):
-        Audio(FakeTransport(rc=-1)).speak("hi")
+def run(s, frames):
+    return [u for f in frames if (u := s.feed(f))]
 
 
-def test_listen_yields_only_final_utterances_and_stops_asr():
-    t = FakeTransport([{"text": "hel", "is_final": False}, {"text": "hello robot", "is_final": True},
-                       {"text": "", "is_final": True}, {"text": "stop", "is_final": True}])
-    a = Audio(t)
-    assert list(a.listen()) == ["hello robot", "stop"]
-    assert [c[0] for c in t.calls] == [LuiApi.START_ASR, LuiApi.STOP_ASR]
+def test_utterance_emitted_after_trailing_silence():
+    out = run(seg(), [QUIET] * 5 + [LOUD] * 10 + [QUIET] * 12)
+    assert len(out) == 1
+    assert len(out[0]) >= 10 * len(LOUD)
 
 
-def test_listen_stops_asr_when_consumer_breaks():
-    t = FakeTransport([{"text": "a", "is_final": True}, {"text": "b", "is_final": True}])
-    for _ in Audio(t).listen():
-        break
-    assert t.calls[-1][0] == LuiApi.STOP_ASR
+def test_preroll_included():
+    out = run(seg(), [QUIET] * 5 + [LOUD] * 10 + [QUIET] * 12)
+    assert len(out[0]) >= (10 + 2) * len(LOUD)  # 60 ms preroll = 2 frames
 
 
-def test_stop_speaking_sends_stop_tts():
-    t = FakeTransport(); a = Audio(t); a.speak("x"); a.stop_speaking()
-    assert t.calls[-1][0] == LuiApi.STOP_TTS
-    a.speak("y")  # TTS must be re-started after a stop
-    assert t.calls[-2][0] == LuiApi.START_TTS
+def test_short_blip_ignored():
+    assert run(seg(), [QUIET] * 3 + [LOUD] * 2 + [QUIET] * 15) == []
+
+
+def test_silence_only_emits_nothing():
+    assert run(seg(), [QUIET] * 50) == []
+
+
+def test_max_length_forces_cut():
+    out = run(seg(), [LOUD] * 100)
+    assert len(out) >= 1
+    assert all(len(u) <= 2000 // FRAME_MS * len(LOUD) + 3 * len(LOUD) for u in out)
+
+
+def test_two_utterances():
+    out = run(seg(), ([LOUD] * 10 + [QUIET] * 12) * 2)
+    assert len(out) == 2
+
+
+class Cap:
+    def __init__(self, frames): self.frames, self.drained = frames, 0
+    def __iter__(self): return iter(self.frames)
+    def drain(self): self.drained += 1
+
+
+def make(frames, asr=lambda pcm: "hello robot", tts=lambda t: b"WAV:" + t.encode()):
+    played = []
+
+    class Player:
+        stopped = 0
+        def play(self, wav): played.append(wav)
+        def stop(self): self.stopped += 1
+
+    p = Player()
+    return Audio(Cap(frames), asr, tts, p, seg()), played, p
+
+
+def test_listen_yields_transcripts():
+    a, _, _ = make([LOUD] * 10 + [QUIET] * 12)
+    assert list(a.listen()) == ["hello robot"]
+
+
+@pytest.mark.parametrize("junk", ["", "  ", "you", "Thank you.", "[BLANK_AUDIO]"])
+def test_listen_drops_empty_and_whisper_hallucinations(junk):
+    a, _, _ = make([LOUD] * 10 + [QUIET] * 12, asr=lambda pcm: junk)
+    assert list(a.listen()) == []
+
+
+def test_speak_synthesizes_plays_and_drains_mic():
+    a, played, _ = make([])
+    a.speak("hi there")
+    assert played == [b"WAV:hi there"]
+    assert a._cap.drained == 1
+
+
+def test_speak_blank_is_noop():
+    a, played, _ = make([])
+    a.speak("  ")
+    assert played == []
+
+
+def test_stop_speaking_stops_player():
+    a, _, p = make([])
+    a.stop_speaking()
+    assert p.stopped == 1
 
 
 @pytest.mark.robot
-def test_robot_speaks_fixed_sentence():
-    pytest.skip("RobotTransport not written yet; needs the A2 LUI transport")
+def test_robot_speaks_and_hears():
+    pytest.skip("run `scripts/k1voice.sh smoke <robot>` instead; needs a person at the robot")
