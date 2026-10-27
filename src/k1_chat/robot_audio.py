@@ -234,6 +234,7 @@ def main(argv=None) -> int:
     sm.add_argument("sentence", nargs="?", default="Hello, I am a Booster K1. Please say something.")
     sm.add_argument("--timeout", type=int, default=20)
     sub.add_parser("listen")
+    sub.add_parser("chat")  # needs OPENROUTER_API_KEY + K1_CHAT_MODEL in the environment
     sub.add_parser("bench")
     sub.add_parser("calibrate")
     sub.add_parser("mic-test")
@@ -277,6 +278,22 @@ def main(argv=None) -> int:
                 signal.alarm(0)
             print(f"HEARD: {heard}", flush=True)
             a.speak(f"I heard: {heard}")
+        elif args.cmd == "chat":
+            from k1_chat.conversation import Conversation, run_voice_chat
+            from k1_chat.llm import from_env
+
+            def heard():
+                for text in a.listen():
+                    print(f"HEARD: {text}", flush=True)
+                    yield text
+
+            def say(text):
+                t = time.time()
+                print(f"SAID: {text}", flush=True)
+                a.speak(text)
+                print(f"[speak] {time.time() - t:.2f}s", file=sys.stderr, flush=True)
+
+            run_voice_chat(heard(), Conversation(from_env()), say)
         else:
             for text in a.listen():
                 print(f"HEARD: {text}", flush=True)

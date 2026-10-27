@@ -22,7 +22,7 @@ if [ ! -f venv/.k1gpu ]; then
     rm -rf venv && python3 -m venv --system-site-packages venv || { echo "venv failed"; exit 1; }
 fi
 venv/bin/pip install -q --upgrade pip
-venv/bin/pip install -q faster-whisper kokoro-onnx || { echo "pip failed"; exit 1; }
+venv/bin/pip install -q faster-whisper kokoro-onnx httpx || { echo "pip failed"; exit 1; }
 venv/bin/pip uninstall -y -q onnxruntime >/dev/null 2>&1   # CPU wheel would shadow the system GPU one
 venv/bin/pip install -q "numpy<2" 2>&1 | grep -v "requires numpy" ; touch venv/.k1gpu
 cd models
