@@ -1,9 +1,9 @@
 """Voice conversation: transcript in, short spoken reply out. Speech only: nothing here can command the robot."""
 import sys
+from pathlib import Path
 from typing import Callable, Iterable
 
-SYSTEM = ("You are a friendly Booster K1 humanoid robot talking out loud with a person. "
-          "Reply in one or two short spoken sentences, plain words, no markdown, no lists, no emoji.")
+SYSTEM = (Path(__file__).with_name("system_prompt.md")).read_text().strip()  # edit that file; k1voice.sh syncs it
 FALLBACK = "Sorry, I could not think of an answer just now."
 
 

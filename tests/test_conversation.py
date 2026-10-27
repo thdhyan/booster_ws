@@ -42,3 +42,8 @@ def test_run_voice_chat_speaks_each_reply():
     spoken = []
     run_voice_chat(iter(["hello", "bye"]), Conversation(FakeLLM(["Hi.", "Goodbye."]), system="s"), spoken.append)
     assert spoken == ["Hi.", "Goodbye."]
+
+
+def test_default_system_prompt_comes_from_file():
+    from k1_chat.conversation import SYSTEM
+    assert "robot" in SYSTEM.lower() and len(SYSTEM) > 20
