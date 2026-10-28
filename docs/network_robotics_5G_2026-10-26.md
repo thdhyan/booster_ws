@@ -21,12 +21,12 @@
 ## Robots (identities confirmed from /opt/booster/robot_info.txt nickname, 2026-10-27)
 | Robot | SN | MAC | robotics_5G IP (static) | Status |
 |---|---|---|---|---|
-| A2 | 01022026070048 | 20:bd:1d:d8:31:00 | 192.168.50.215 | on, SSH OK |
+| A2 | 01022026070048 | 20:bd:1d:d8:31:00 | 192.168.50.215 | firmware update DONE (per user, 2026-10-27); off, charging; version not re-read |
 | A3 | 01022026070058 | 20:bd:1d:d8:31:0f | 192.168.50.230 | on, SSH OK |
 | B1 | 01022026070044 | 20:bd:1d:d5:3e:5f | 192.168.50.105 | on, SSH OK |
-| B3 | 01022026070057 | 20:bd:1d:d8:3c:ea | 192.168.50.248 | answers, user says low battery |
+| B3 | 01022026070057 | 20:bd:1d:d8:3c:ea | 192.168.50.248 | on, SSH OK, 1.6.2.2, download started 2026-10-27 |
 | B2 | ? | 20:bd:1d:71:ae:53 (guess) | 192.168.50.62 (static set) | off, low battery |
-| A1 | — | — | — | out of commission |
+| A1 | 01022026070052 | 20:bd:1d:77:55:b5 | 192.168.50.82 (DHCP, no static yet) | on, SSH OK (found 2026-10-27 via ARP; was listed out of commission) |
 Nicknames are `Booster K1_UMN_<name>`. `~/.ssh/config` aliases boosterk1.{a2,a3,b1,b2,b3} point at these IPs
 (backup: ~/.ssh/config.bak-20261026). B2 MAC/IP mapping is a guess (it was the .109 Hello robot).
 
@@ -53,6 +53,11 @@ not NTP-synced.  Not tested: DDS/SDK discovery across the router, camera streams
 ## Robot internet via laptop (2026-10-27) — NOT persistent on the laptop
 - Laptop eduroam (wlo1) NATs to the router LAN: `sysctl net.ipv4.ip_forward=1` + nft table `ip k1nat`
   (postrouting masquerade oifname wlo1, saddr 192.168.50.0/24). Lost on reboot. Undo: `sudo nft delete table ip k1nat`.
+- Re-create after a laptop reboot (wlo1 = eduroam, enp2s0 = router link):
+  `sudo sysctl -w net.ipv4.ip_forward=1; sudo nft add table ip k1nat;`
+  `sudo nft 'add chain ip k1nat post { type nat hook postrouting priority srcnat; policy accept; }';`
+  `sudo nft add rule ip k1nat post oifname "wlo1" ip saddr 192.168.50.0/24 masquerade`.
+  Check from a robot: `ping -c1 8.8.8.8` and `curl -sI https://pypi.org`. Robots need `ip route` default via 192.168.50.250.
 - Laptop enp2s0 has fixed 192.168.50.250/24 (profile robotics-lan) as the robots' gateway.
 - Robots A2,A3,B1,B3: nmcli profile robotics_5G gateway 192.168.50.250, DNS 8.8.8.8 1.1.1.1, ignore-auto-dns.
   Router DNS (192.168.50.1) returns 10.0.0.1 for every name while it has no uplink, so do not use it.
@@ -81,3 +86,45 @@ not NTP-synced.  Not tested: DDS/SDK discovery across the router, camera streams
 - Battery % = first status msg (field1=10000, submsg `{1:'battery',3:f32}`) from `ws://<ip>:51111`, polled every 10 s, socket closed right after (it also streams ~1 Mbit/s JPEG frames, never held open).
 - A1/B2 listed offline until they broadcast. Default bind is 127.0.0.1; `--host 0.0.0.0` also exposes it on eduroam (wlo1), no auth.
 - Tested: A2 64%, A3 36%, B1 30%, B3 22%, B2 offline.
+
+## Camera / Studio streaming test (2026-10-27, A2 on robotics_5G, fw 1.6.2.2)
+- `ws://A2:51111` (Studio websocket) carries only 2 message kinds in 8 s: field1=10001 camera JPEG (~124 KiB, ~10 fps, ~10 Mbit/s,
+  steady) and field1=10000 status (~0.9 KiB, battery etc.). No depth frames. RGB only.
+- Port 8765 (ROS bridge) is NOT listening on the robot (connection refused). Only :51111 listens. The bridge is not a robot-side service.
+- On-robot `ros2 topic hz` (humble): `/boostercamera/head/depth` and `/boostercamera/head/rgb` both ~4.3 Hz, jittery (max gap 1.8 s).
+  So A2 camera graph DOES publish now; older doc (`k1_hardware_camera_findings.md`, 2026-09-29, "no sensor fitted") is outdated or covered a
+  stalled `booster-video-stream` window. Depth is stereo-derived (StereoNetNode), so it only exists inside the ROS graph.
+- Depth path = ROS 2 DDS (domain 0) from laptop, not tested over the router yet. Docs say ROS subscription fails: DDS multicast discovery
+  across wifi/AP is filtered, and the laptop is Jazzy vs robot Humble (match QoS RELIABLE/VOLATILE; wired + `ip route add 224.0.0.0/4`).
+- 10 fps cap not network-bound (10 Mbit/s over 5 GHz wifi is fine): set by robot encoder/Studio stream.
+- `.claude/settings.local.json` valid JSON; allow rules added (gh, ssh boosterk1.*, rtk gh/git). They do not override auto-mode classifier.
+
+## Fleet upgrade run (2026-10-27, user-requested, target = latest 1.8.1.2-release-02884)
+- Run in tmux session `k1upgrade` (windows a1, b2, a3b1). `booster-cli upgrade` started on A3, B1, B2, A1. B3 and A2 unreachable (no route / timeout) at the time.
+- A1 has no `robotics_5G` profile: DHCP on wlP1p1s0, default gateway router .1 (no internet). B2 default gateway also .1 and DNS wrong (pypi.org -> 10.0.0.1).
+  Runtime-only fix (lost on reboot): `sudo ip route replace default via 192.168.50.250 dev wlP1p1s0 metric 20600; sudo resolvectl dns wlP1p1s0 8.8.8.8 1.1.1.1`.
+  Persistent `nmcli con mod` on B2 was blocked by the permission classifier; not done.
+- `~/.ssh/config`: boosterk1.a1 now -> 192.168.50.82.
+
+### Status 2026-10-27 (update)
+| Robot | Firmware | Upgrade state |
+|---|---|---|
+| A2 | 1.8.1.2 (per user, not re-read) | DONE; charging, off |
+| A3 | 1.6.2.2 | 1.8.1.2 .run downloaded (3824 MiB); waiting at install prompt |
+| B1 | 1.6.2.2 | download in progress (~1.3 GB at last check) |
+| B2 | 1.6.2.2 | download in progress, started via laptop route/DNS |
+| A1 | 1.6.2.2 | download in progress, slow (~0.3-1 MB/s) |
+| B3 | 1.6.2.2 | download started, tmux window `b3` |
+- FINDING: `booster-cli upgrade` pauses after download with "Before installing, please make sure robot is firmly supported. Would you like to install it now? (yes/no)".
+  With `nohup ... </dev/null` stdin is EOF, so the process exits after download and nothing installs. Install needs an interactive `yes`
+  (run `booster-cli upgrade` again in tmux with a TTY; the .run is already cached in /opt/booster/Upgrade). Robot must be physically supported (hanging/on stand) first.
+- Do NOT answer yes remotely until the user confirms each robot is supported and has enough battery.
+
+### Status 2026-10-27 (installs)
+- A3, B1, B3: installed, `version.txt` reads 1.8.1.2-release-02884-2026-10-15-global (read over SSH after reboot).
+- A2: done per user (version not re-read; off, charging).
+- B2, A1: download complete (4010058959 B); installs auto-started in tmux `k1upgrade` (windows b2-install, a1-install), yes answered per user approval.
+- Install flow that works: `ssh -t host booster-cli upgrade` in tmux, then type `yes` (piping yes via stdin does NOT work). Robots reset the temporary laptop route (metric 600); re-add with metric 100.
+
+---
+> **Network note (2026-10-27):** the robotics router (192.168.50.1) has no internet uplink. The laptop shares its eduroam (`wlo1`) internet to the robots by NAT: `enp2s0` = 192.168.50.250/24 is the robots' gateway, with `ip_forward=1` and nft table `ip k1nat` (masquerade out `wlo1`, source 192.168.50.0/24). It is lost on laptop reboot; robots use DNS 8.8.8.8/1.1.1.1 (router DNS is wrong). Re-create steps: `docs/network_robotics_5G_2026-10-26.md` ("Robot internet via laptop").
