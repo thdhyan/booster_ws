@@ -14,7 +14,7 @@
 | Branch | `dev/phase-6-soccer-hrl` @ `16a6803` (pushed) — `main` == `origin/main` @ `88f73fc` |
 | Tags | `v0.7-phase0-complete` (pushed) |
 | Uncommitted (modified) | none |
-| Untracked | `.claude/` (gitignored), `src/k1_description/assets` (submodule untracked content: `K1_22dof.urdf`, `K1_flat.usd`) |
+| Untracked | `.claude/` (gitignored), `booster_assets` (submodule untracked content: `K1_22dof.urdf`, `K1_flat.usd`) |
 
 **T6.0 git closure DONE (2026-09-22):** leftovers committed `6ae1d94` → merged/pushed to `main` → tagged → phase-6 branch opened. **LFS incident fixed `88f73fc`**: 62 `.py` files had been stored as LFS pointers (`002a647` added `*.py filter=lfs`, `dd3f6b2` removed the rule without de-LFS'ing) — all restored from local `.git/lfs/objects`, zero edit loss.
 

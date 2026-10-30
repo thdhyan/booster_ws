@@ -10,7 +10,7 @@ cd "$REPO" || exit 1
 
 for p in isaac_tasks/booster_train_ref/source/booster_train \
          isaac_tasks/k1_velocity \
-         src/k1_description/assets; do
+         booster_assets; do
   "$PY" -m pip install --no-deps --no-build-isolation -q -e "$REPO/$p" > /dev/null 2>&1
 done
 

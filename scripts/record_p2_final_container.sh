@@ -9,7 +9,7 @@ export WANDB_API_KEY="$(cat "$REPO/logs/.wandb_key" 2>/dev/null)"
 
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train >/tmp/p2_rec_install.log 2>&1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity >>/tmp/p2_rec_install.log 2>&1
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets >>/tmp/p2_rec_install.log 2>&1
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets >>/tmp/p2_rec_install.log 2>&1
 "$PY" -m pip install -q pillow imageio imageio-ffmpeg >>/tmp/p2_rec_install.log 2>&1
 
 latest_ckpt() {

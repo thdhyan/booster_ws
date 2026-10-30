@@ -11,7 +11,7 @@ cd "$REPO" || { echo "PROBE4_CD_FAIL"; exit 1; }
 echo "== installs:"
 for p in isaac_tasks/booster_train_ref/source/booster_train \
          isaac_tasks/k1_velocity \
-         src/k1_description/assets \
+         booster_assets \
          isaac_tasks/k1_kicking \
          isaac_tasks/k1_head_tracking; do
   "$PY" -m pip install --no-deps --no-build-isolation -q -e "$REPO/$p" > /tmp/pip_$$.log 2>&1

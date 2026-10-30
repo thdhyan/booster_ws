@@ -178,7 +178,7 @@ def main() -> int:
 
 REPO_URDF = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "src/k1_description/assets/robots/K1/K1_22dof.xml")
+    "booster_assets/robots/K1/K1_22dof.xml")
 SOLE_DROP = 0.038   # foot_link origin -> sole plane, from the K1 MJCF foot box
 
 

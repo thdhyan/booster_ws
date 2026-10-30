@@ -850,7 +850,7 @@ rsync'd to zz-bw, preflight PASS; Phase-1 squat teacher RUNNING on zz-bw:**
   - Sparks: container files are root-owned; rsync with
     `--no-owner --no-group --no-perms --exclude='__pycache__'`.
     Occasional `Could not resolve hostname aim_sparkNN` → retry.
-  - Never `git add src/k1_description/assets`.
+  - Never edit files inside `booster_assets/` directly; change them on the assets fork and bump the submodule pointer.
   - tmux launchers that CREATE their own session (`spark_*_host.sh`,
     `record_policies_host.sh`) must be invoked directly, not wrapped in another
     `tmux new-session` (duplicate-session error).

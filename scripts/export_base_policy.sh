@@ -8,7 +8,7 @@ cd "$REPO" || exit 1
 CKPT=$(ls -t logs/rsl_rl/k1_partialctrl_base/*/model_*.pt 2>/dev/null | head -1)
 echo "BASE_CKPT=$CKPT"
 [ -n "$CKPT" ] || { echo "NO_BASE_CKPT"; exit 1; }
-$PY -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train -e isaac_tasks/k1_velocity -e src/k1_description/assets >/dev/null 2>&1
+$PY -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train -e isaac_tasks/k1_velocity -e booster_assets >/dev/null 2>&1
 $PY isaac_tasks/k1_velocity/scripts/play_record.py \
   --task Isaac-Velocity-PartialCtrl-K1-Play-v0 \
   --checkpoint "$CKPT" \

@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-URDF = ROOT / "src/k1_description/assets/robots/K1/K1_22dof.urdf"
+URDF = ROOT / "booster_assets/robots/K1/K1_22dof.urdf"
 MDP = ROOT / "isaac_tasks/k1_velocity/source/k1_velocity/tasks/carry/carry_mdp.py"
 
 

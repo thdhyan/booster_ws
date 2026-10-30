@@ -43,7 +43,7 @@ import sys
 import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MJCF = os.path.join(REPO, "src/k1_description/assets/robots/K1/K1_22dof.xml")
+MJCF = os.path.join(REPO, "booster_assets/robots/K1/K1_22dof.xml")
 
 # booster_assets.motions.K1_JOINT_NAMES — CSV column order
 JOINT_NAMES = [

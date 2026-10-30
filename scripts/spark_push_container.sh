@@ -15,7 +15,7 @@ echo "=== PUSH INSTALL booster_train (rsl_rl fork)"
 echo "=== PUSH INSTALL k1_velocity"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -2
 echo "=== PUSH INSTALL booster_assets (K1 URDF package)"
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -2
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -2
 
 case "${WHICH:-}" in
 reach)

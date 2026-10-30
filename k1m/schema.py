@@ -59,9 +59,9 @@ Booster CSV wants root quat as xyzw.
 """
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_K1_URDF = os.path.join(_ROOT, "src", "k1_description", "assets",
+DEFAULT_K1_URDF = os.path.join(_ROOT, "booster_assets",
                                "robots", "K1", "K1_22dof.urdf")
-DEFAULT_K1_XML = os.path.join(_ROOT, "src", "k1_description", "assets",
+DEFAULT_K1_XML = os.path.join(_ROOT, "booster_assets",
                               "robots", "K1", "K1_22dof.xml")
 
 

@@ -34,7 +34,7 @@ echo "DISP_CKPT=$CKPT"
 
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train 2>&1 | tail -1
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -1
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -1
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 OUTDIR="$REPO/isaac_tasks/k1_velocity/videos"

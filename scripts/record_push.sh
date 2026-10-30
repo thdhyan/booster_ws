@@ -9,7 +9,7 @@ set +e
 REPO=/workspace/booster_ws
 PY=/isaac-sim/python.sh
 cd "$REPO" || exit 1
-$PY -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train -e isaac_tasks/k1_velocity -e src/k1_description/assets >/dev/null 2>&1
+$PY -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train -e isaac_tasks/k1_velocity -e booster_assets >/dev/null 2>&1
 TASK="${1:?usage: record_push.sh <task> <checkpoint> <out.mp4> [label]}"
 CKPT="${2:?missing checkpoint path}"
 OUT="${3:?missing output mp4 path}"

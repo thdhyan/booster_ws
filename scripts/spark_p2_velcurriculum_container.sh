@@ -22,7 +22,7 @@ echo "=== P2_VEL INSTALL booster_train"
 echo "=== P2_VEL INSTALL k1_velocity"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -2
 echo "=== P2_VEL INSTALL k1_assets"
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -2
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -2
 
 TASK=Isaac-Velocity-Rough-K1-Teacher-v0
 LOGDIR="$REPO/scripts"

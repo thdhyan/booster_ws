@@ -488,7 +488,7 @@ Full tracking:
 - `src/k1_control/k1_control/sdk_bridge_node.cpp:28-32,44,57,60-75,104-149,155,183-217,219-257`
 - `src/k1_bringup/launch/real.launch.py:95` · `src/k1_control/launch/control.launch.py`
 - `src/k1_locomotion/k1_locomotion/locomotion_node.py:79-89,139,157-168,262-325`
-- `src/k1_description/assets/robots/K1/K1_22dof.urdf` (order + limits), `K1_22dof.xml:56-174`
+- `booster_assets/robots/K1/K1_22dof.urdf` (order + limits), `K1_22dof.xml:56-174`
 - `isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/velocity_env_cfg.py:56-105,199-252,270-277`
 - `isaac_tasks/booster_train_ref/source/booster_train/booster_train/assets/robots/{actuator.py:305-367, booster.py:60-166}`
 - `scripts/motion_feasibility_gate.py:181-260,313-545` · `k1m/pipeline.py:11` (9.58× / 91 mm)

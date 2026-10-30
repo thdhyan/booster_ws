@@ -113,7 +113,7 @@ For Isaac Sim: launch nodes in a **separate terminal** with the Isaac Sim ROS en
 - **Tags**: Semantic versioning: `v0.N-name` (e.g., `v0.1-base-control`, `v0.2-rough-terrain`)
 - **Submodules**: 
   - **Read-only**: `sdk/booster_robotics_sdk/` — never edit directly
-  - **Editable**: `src/k1_description/assets/` — edit on `thakk100/booster_assets` fork, then PR upstream
+  - **Editable**: `booster_assets/` — edit on `thakk100/booster_assets` fork, then PR upstream
 
 Example workflow:
 ```bash

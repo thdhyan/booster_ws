@@ -14,7 +14,7 @@ echo "=== P2_GAIT INSTALL booster_train"
 echo "=== P2_GAIT INSTALL k1_velocity"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -3
 echo "=== P2_GAIT INSTALL k1_assets"
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -3
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -3
 
 TEACHER_TASK=Isaac-Velocity-Rough-K1-Teacher-v0
 STUDENT_TASK=Isaac-Velocity-Distill-K1-v0

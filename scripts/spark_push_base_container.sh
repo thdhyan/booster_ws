@@ -25,7 +25,7 @@ echo "=== PUSH BASE INSTALL booster_train (rsl_rl fork)"
 echo "=== PUSH BASE INSTALL k1_velocity"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -3
 echo "=== PUSH BASE INSTALL booster_assets (K1 URDF package)"
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -3
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -3
 
 SMOKE_LOG="$REPO/scripts/push_base.smoke.train.log"
 FULL_LOG="$REPO/scripts/push_base.full.train.log"

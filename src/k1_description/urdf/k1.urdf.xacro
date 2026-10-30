@@ -2,7 +2,7 @@
 <robot name="k1" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <!--
     Booster K1 URDF
-    Source: src/k1_description/assets/robots/K1/ (booster_assets submodule)
+    Source: booster_assets/robots/K1/ (booster_assets submodule)
     After running: git submodule update --init --recursive
     Replace this placeholder with:
       <xacro:include filename="$(find k1_description)/assets/robots/K1/k1.urdf.xacro"/>

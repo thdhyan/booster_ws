@@ -66,12 +66,12 @@ COPY scripts/record_k1_motion.py /opt/booster_ws/scripts/record_k1_motion.py
 # fails with "Error opening file .../meshes/Trunk.STL" without them. 26 MB, which
 # is a fair price for a self-contained image. Only the replay RENDERER additionally
 # needs a GL backend, which is why do_render still defaults to False.
-COPY src/k1_description/assets/robots/K1/meshes/ \
-     /opt/booster_ws/src/k1_description/assets/robots/K1/meshes/
-COPY src/k1_description/assets/robots/K1/K1_22dof.urdf \
-     /opt/booster_ws/src/k1_description/assets/robots/K1/K1_22dof.urdf
-COPY src/k1_description/assets/robots/K1/K1_22dof.xml \
-     /opt/booster_ws/src/k1_description/assets/robots/K1/K1_22dof.xml
+COPY booster_assets/robots/K1/meshes/ \
+     /opt/booster_ws/booster_assets/robots/K1/meshes/
+COPY booster_assets/robots/K1/K1_22dof.urdf \
+     /opt/booster_ws/booster_assets/robots/K1/K1_22dof.urdf
+COPY booster_assets/robots/K1/K1_22dof.xml \
+     /opt/booster_ws/booster_assets/robots/K1/K1_22dof.xml
 
 # Warm the package import at build time so a broken image fails here rather than
 # on the first request. Also assert the ssh client exists, since its absence is

@@ -52,7 +52,7 @@ import numpy as np
 # K1 model constants (verified against K1_22dof.urdf)
 # --------------------------------------------------------------------------- #
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-URDF = os.path.join(REPO, "src/k1_description/assets/robots/K1/K1_22dof.urdf")
+URDF = os.path.join(REPO, "booster_assets/robots/K1/K1_22dof.urdf")
 
 # K1 standing root (Trunk) height. BOOSTER_K1_CFG init_state z=0.57.
 ROOT_HEIGHT_NOMINAL = 0.57
@@ -89,7 +89,7 @@ FOOT_JOINTS = ["Left_Ankle_Roll", "Right_Ankle_Roll"]
 # matches K1_JOINT_NAMES exactly (verified: 7 free-joint qpos, then 22 hinges
 # in the same sequence), and the sole box geom sits 0.038 m below each
 # foot_link origin.
-MJCF = os.path.join(REPO, "src/k1_description/assets/robots/K1/K1_22dof.xml")
+MJCF = os.path.join(REPO, "booster_assets/robots/K1/K1_22dof.xml")
 SOLE_DROP = 0.038   # foot_link origin -> sole plane, from the K1 MJCF foot box
 
 _FK = None  # lazily-built (model, data, foot body ids)

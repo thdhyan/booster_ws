@@ -320,7 +320,7 @@ uv run python app/tools/robot_config_generator.py --viewer gl   # configurator
 ```
 
 We already have the inputs it wants — `K1_22dof.urdf` + `meshes/` in
-`src/k1_description/assets/robots/K1/`. Note the configurator **cannot read
+`booster_assets/robots/K1/`. Note the configurator **cannot read
 xacro**, so use the plain `.urdf` (we have it), and it needs
 `+Z up, +X forward, +Y left`.
 

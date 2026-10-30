@@ -14,7 +14,7 @@ echo "=== S1 INSTALL booster_train (rsl_rl fork)"
 echo "=== S1 INSTALL k1_velocity"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -4
 echo "=== S1 INSTALL booster_assets (K1 URDF package)"
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -4
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -4
 echo "=== S1 VERIFY import"
 if "$PY" -c "import k1_velocity" >/tmp/s1_imp.log 2>&1; then
   echo "IMPORT_k1_velocity_OK"

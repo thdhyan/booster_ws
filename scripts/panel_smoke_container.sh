@@ -18,7 +18,7 @@ mkdir -p "$OUT_DIR"
 
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train >/tmp/panel_install.log 2>&1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity >>/tmp/panel_install.log 2>&1
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets >>/tmp/panel_install.log 2>&1
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets >>/tmp/panel_install.log 2>&1
 "$PY" -m pip install -q ultralytics >>/tmp/panel_install.log 2>&1
 
 timeout 1200 "$PY" -u isaac_tasks/k1_velocity/scripts/play_record.py \

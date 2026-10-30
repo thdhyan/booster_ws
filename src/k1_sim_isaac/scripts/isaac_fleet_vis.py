@@ -191,7 +191,7 @@ except ImportError:
         spawn=_sim_utils.UrdfFileCfg(
             fix_base=False,
             replace_cylinders_with_capsules=False,
-            asset_path="/workspace/booster_ws/src/k1_description/assets/robots/K1/K1_22dof.urdf",
+            asset_path="/workspace/booster_ws/booster_assets/robots/K1/K1_22dof.urdf",
             activate_contact_sensors=True,
             rigid_props=_sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=False,

@@ -10,7 +10,7 @@ export YOLO_WEIGHTS="$REPO/logs/yolov8n.pt"
 
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train >/tmp/p3_recovery_install.log 2>&1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity >>/tmp/p3_recovery_install.log 2>&1
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets >>/tmp/p3_recovery_install.log 2>&1
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets >>/tmp/p3_recovery_install.log 2>&1
 "$PY" -m pip install -q ultralytics >>/tmp/p3_recovery_install.log 2>&1
 
 LOG="$REPO/scripts/p3.recover.full.train.log"

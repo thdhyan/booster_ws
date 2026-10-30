@@ -124,7 +124,7 @@ def build_field_spec():
 
     # six K1 humanoids
     urdf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "../../k1_description/assets/robots/K1/K1_22dof.urdf")
+                        "../../../booster_assets/robots/K1/K1_22dof.urdf")
     urdf = os.path.normpath(urdf)
     for ns, x, y, yaw in FORMATION:
         robot_spec = mujoco.MjSpec.from_file(urdf)
