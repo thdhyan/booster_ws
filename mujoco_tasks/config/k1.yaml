@@ -1,4 +1,4 @@
-# K1 task settings. Not read by code yet; the PR 3 loader will use this.
+# K1 task settings. "tasks" is checked by mujoco_tasks.load_mjlab.load_tasks().
 robot:
   mjcf: robots/K1/K1_22dof.xml   # relative to booster_assets/
 tasks:

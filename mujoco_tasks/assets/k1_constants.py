@@ -12,10 +12,16 @@ from mjlab.utils.spec_config import CollisionCfg
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _K1_REL = Path("robots") / "K1" / "K1_22dof.xml"
+_SERIAL_ANKLE_LINK = "left_ankle_roll_link"
 
 
 def _find_k1_xml() -> Path:
-  """$BOOSTER_ASSETS, then the root submodule, the old submodule path, ~/booster_assets."""
+  """Find a K1 MJCF with the serial-ankle link names these tasks are written for.
+
+  Search order: $BOOSTER_ASSETS, <repo>/booster_assets, the old submodule path,
+  ~/booster_assets. Copies of K1_22dof.xml without `left_ankle_roll_link` (older
+  K1 models with a parallel Ankle_Cross ankle) are skipped.
+  """
   bases = []
   if os.environ.get("BOOSTER_ASSETS"):
     bases.append(Path(os.environ["BOOSTER_ASSETS"]))
@@ -24,9 +30,16 @@ def _find_k1_xml() -> Path:
     _REPO_ROOT / "src" / "k1_description" / "assets",
     Path.home() / "booster_assets",
   ]
-  for base in bases:
-    if (base / _K1_REL).exists():
-      return base / _K1_REL
+  found = [b / _K1_REL for b in bases if (b / _K1_REL).exists()]
+  for xml in found:
+    if _SERIAL_ANKLE_LINK in xml.read_text():
+      return xml
+  if found:
+    raise RuntimeError(
+      f"Found K1_22dof.xml but none has the link {_SERIAL_ANKLE_LINK}, which these "
+      f"tasks need (serial-ankle K1 model): {', '.join(map(str, found))}. "
+      "Clone BoosterRobotics/booster_assets and set BOOSTER_ASSETS to it."
+    )
   raise FileNotFoundError(
     "K1_22dof.xml not found. Run `git submodule update --init` or set BOOSTER_ASSETS."
   )
