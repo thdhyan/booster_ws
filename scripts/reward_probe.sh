@@ -10,7 +10,7 @@ PY=/isaac-sim/python.sh
 "$PY" -m pip install --no-deps --no-build-isolation \
   -e isaac_tasks/booster_train_ref/source/booster_train \
   -e isaac_tasks/k1_velocity \
-  -e src/k1_description/assets >/dev/null 2>&1
+  -e booster_assets >/dev/null 2>&1
 
 TASKS=("$@")
 [ ${#TASKS[@]} -eq 0 ] && TASKS=(Isaac-Velocity-Rough-K1-v0 Isaac-Velocity-PartialCtrl-K1-v0)

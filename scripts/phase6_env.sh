@@ -17,7 +17,7 @@ export OMNI_KIT_ACCEPT_EULA=YES
 export PATH="$PHASE6_VENV/bin:$PATH"
 
 _phase6_ws="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PYTHONPATH="$_phase6_ws/isaac_tasks/k1_velocity/source:$_phase6_ws/isaac_tasks/booster_train_ref/source/booster_train:$_phase6_ws/src/k1_description/assets/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$_phase6_ws/isaac_tasks/k1_velocity/source:$_phase6_ws/isaac_tasks/booster_train_ref/source/booster_train:$_phase6_ws/booster_assets/src${PYTHONPATH:+:$PYTHONPATH}"
 unset _phase6_ws
 
 phase6-python() { "$PHASE6_VENV/bin/python" "$@"; }

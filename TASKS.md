@@ -26,7 +26,7 @@ Status: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
 - [ ] **T0.G4** Add submodules
   ```bash
   git submodule add git@github.com:BoosterRobotics/booster_robotics_sdk.git sdk/booster_robotics_sdk
-  git submodule add git@github.com:thakk100/booster_assets.git src/k1_description/assets
+  git submodule add git@github.com:thakk100/booster_assets.git booster_assets
   git submodule add git@github.com:thakk100/booster_train.git isaac_tasks/booster_train_ref
   ```
 - [ ] **T0.G5** Pin SDK submodule to latest release tag; commit `.gitmodules`
@@ -44,7 +44,7 @@ Status: `[ ]` todo · `[~]` in-progress · `[x]` done · `[!]` blocked
 - [ ] **T0.2** Create `src/` tree with empty package stubs (package.xml + CMakeLists / setup.py)
   - `k1_description`, `k1_interfaces`, `k1_control`, `k1_locomotion`, `k1_wbc`, `k1_sim_gazebo`, `k1_sim_isaac`, `k1_bringup`
   - Commit stub: `git commit -m "feat: add ROS2 package stubs"`
-- [ ] **T0.3** `booster_assets` submodule active — copy K1 URDF from `src/k1_description/assets/robots/K1/` into package; do NOT edit assets/ directly (PR upstream fork instead)
+- [ ] **T0.3** `booster_assets` submodule active — copy K1 URDF from `booster_assets/robots/K1/` into package; do NOT edit assets/ directly (PR upstream fork instead)
 - [ ] **T0.4** `sdk/booster_robotics_sdk` submodule active; build C++ SDK locally
 - [ ] **T0.5** `isaac_tasks/booster_train_ref` submodule active — reference only; K1 task goes in `isaac_tasks/k1_velocity/` (owned code)
 - [ ] **T0.6** Create `isaac_tasks/k1_velocity/` owned package (NOT a submodule), commit

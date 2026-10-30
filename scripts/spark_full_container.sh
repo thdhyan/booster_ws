@@ -16,7 +16,7 @@ echo "=== FULL INSTALL booster_train (rsl_rl fork)"
 echo "=== FULL INSTALL k1_velocity"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -3
 echo "=== FULL INSTALL booster_assets (K1 URDF package)"
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -3
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -3
 
 case "${WHICH:?set WHICH=p1|p2}" in
   p1) TASK=Isaac-Basic-Student-K1-v0

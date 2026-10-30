@@ -34,7 +34,7 @@ ROBOTS = {
 }
 
 URDF_PATH = os.path.expanduser(
-    '~/Projects/booster_ws/src/k1_description/assets/K1_22dof.urdf'
+    '~/Projects/booster_ws/booster_assets/K1_22dof.urdf'
 )
 
 RVIZ_CONFIG = os.path.expanduser(

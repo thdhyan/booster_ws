@@ -84,7 +84,7 @@ echo "[k1-entrypoint] python: ${PY}"
 # computes BOOSTER_ASSETS_DIR from __file__ — both break when non-editable.
 $PY -m pip install --no-cache-dir -q -e isaac_tasks/booster_train_ref/source/booster_train
 $PY -m pip install --no-cache-dir -q -e isaac_tasks/k1_velocity
-$PY -m pip install --no-cache-dir -q -e src/k1_description/assets
+$PY -m pip install --no-cache-dir -q -e booster_assets
 $PY -c "import booster_train, k1_velocity; print('[k1-entrypoint] workspace packages import OK')"
 
 # ------------------------------------------------- optional ROS sourcing ----

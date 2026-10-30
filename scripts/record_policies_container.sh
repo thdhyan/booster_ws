@@ -15,7 +15,7 @@ echo "=== REC INSTALL booster_train (rsl_rl fork)"
 echo "=== REC INSTALL k1_velocity"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -3
 echo "=== REC INSTALL booster_assets (K1 URDF package)"
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -3
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -3
 echo "=== REC video libs (pillow/imageio)"
 "$PY" -m pip install -q pillow imageio imageio-ffmpeg 2>&1 | tail -2
 "$PY" -c "import PIL, imageio, imageio_ffmpeg; print('VIDEO_LIBS_OK', PIL.__version__, imageio.__version__)" \

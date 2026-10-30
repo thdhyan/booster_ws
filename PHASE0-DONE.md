@@ -23,7 +23,7 @@ under the robot root. Contact sensors then address them correctly.
 
 | File | What it does |
 |------|-------------|
-| `scripts/flatten_k1_usd.py` | Traverses the URDF-converted USD, finds all `UsdPhysics.RigidBodyAPI` prims, reparents them to robot root preserving world pose, applies `PhysxContactReportAPI` on all 23 bodies, writes `src/k1_description/assets/robots/K1/K1_flat.usd` (4.2 MB). Idempotent. |
+| `scripts/flatten_k1_usd.py` | Traverses the URDF-converted USD, finds all `UsdPhysics.RigidBodyAPI` prims, reparents them to robot root preserving world pose, applies `PhysxContactReportAPI` on all 23 bodies, writes `booster_assets/robots/K1/K1_flat.usd` (4.2 MB). Idempotent. |
 | `isaac_tasks/k1_velocity/source/k1_velocity/tasks/velocity/velocity_env_cfg.py` | Re-enabled `ContactSensorCfg` (prim_path `{ENV_REGEX_NS}/Robot/.*`, history_length=3, track_air_time=True, filter `/World/ground`). Re-added `feet_air_time` + `feet_slide` rewards matching G1 weights. Added `foot_contact` obs to teacher group only (student stays contact-free). Removed all "contact sensors unavailable" stub comments. |
 
 ### To train with contact rewards on zz-bw

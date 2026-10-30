@@ -228,7 +228,7 @@ Phase 1-4: locomotion only (12 joints). Phase 5+: full WBC with arm regulation.
 ```
 .gitmodules
   sdk/booster_robotics_sdk      → github.com/BoosterRobotics/booster_robotics_sdk  @ pinned tag
-  src/k1_description/assets     → github.com/thakk100/booster_assets                @ main
+  booster_assets     → github.com/thakk100/booster_assets                @ main
   isaac_tasks/booster_train_ref → github.com/thakk100/booster_train                 @ main
 ```
 
@@ -295,7 +295,7 @@ git push -u origin main
 
 # 3. Fork upstream repos on GitHub UI, then add submodules:
 git submodule add git@github.com:BoosterRobotics/booster_robotics_sdk.git sdk/booster_robotics_sdk
-git submodule add git@github.com:thakk100/booster_assets.git src/k1_description/assets
+git submodule add git@github.com:thakk100/booster_assets.git booster_assets
 git submodule add git@github.com:thakk100/booster_train.git isaac_tasks/booster_train_ref
 
 # 4. Pin SDK to latest release

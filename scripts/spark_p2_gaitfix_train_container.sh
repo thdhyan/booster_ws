@@ -26,7 +26,7 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 echo "=== P2_GAITS INSTALL"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train 2>&1 | tail -1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -1
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -1
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -1
 
 echo "=== P2_GAITS SMOKE 16x3"
 timeout 1800 "$PY" -u isaac_tasks/k1_velocity/scripts/train.py \

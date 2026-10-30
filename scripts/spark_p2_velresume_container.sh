@@ -37,7 +37,7 @@ TRAIN_LOG="$LOGDIR/p2_vel_resume.train.log"
 echo "=== P2_RESUME INSTALL"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train 2>&1 | tail -1
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -1
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -1
 
 # ---- stage 1: look at it ----------------------------------------------------
 # Four labelled panels (overview, top-down, follow cam, status header) and a

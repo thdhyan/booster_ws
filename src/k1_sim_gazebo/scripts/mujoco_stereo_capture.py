@@ -86,7 +86,7 @@ def build_spec():
             size=[0.25, 0.25, z], rgba=list(c), contype=0, conaffinity=0)
 
     urdf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "../../k1_description/assets/robots/K1/K1_22dof.urdf")
+                        "../../../booster_assets/robots/K1/K1_22dof.urdf")
     spec.attach(mujoco.MjSpec.from_file(os.path.normpath(urdf)),
                 site=spec.worldbody.add_site(pos=[0, 0, 0], name="spawn_k1"),
                 prefix="k1_")

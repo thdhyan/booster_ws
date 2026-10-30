@@ -182,7 +182,7 @@ def main():
     args = parser.parse_args()
 
     urdf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "../../k1_description/assets/robots/K1/K1_22dof.urdf")
+                        "../../../booster_assets/robots/K1/K1_22dof.urdf")
     urdf = os.path.normpath(urdf)
     assert os.path.exists(urdf), f"URDF not found: {urdf}"
 

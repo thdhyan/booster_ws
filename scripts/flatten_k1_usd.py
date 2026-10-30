@@ -147,7 +147,7 @@ def main():
     apply_contact_apis_recursive(robot_prim)
 
     # Step 3: Export the stage
-    output_dir = Path("/home/thakk100/Projects/booster_ws/src/k1_description/assets/robots/K1")
+    output_dir = Path("/home/thakk100/Projects/booster_ws/booster_assets/robots/K1")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "K1_flat.usd"
 

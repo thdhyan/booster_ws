@@ -27,7 +27,7 @@ PREFLIGHT_LOG="$LOGDIR/p2_gaits.preflight.log"
 echo "=== P2_GAITS INSTALL"
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train 2>&1 | tail -1
 "$PY" -m pip install --no-deps --no-build-isolation -e isaac_tasks/k1_velocity 2>&1 | tail -1
-"$PY" -m pip install --no-deps --no-build-isolation -e src/k1_description/assets 2>&1 | tail -1
+"$PY" -m pip install --no-deps --no-build-isolation -e booster_assets 2>&1 | tail -1
 
 # 200 steps rather than 150: the new gait terms are all zero under a constant zero
 # action, and a longer window makes it obvious they are zero *structurally*

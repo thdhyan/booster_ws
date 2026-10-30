@@ -6,7 +6,7 @@ PY=/isaac-sim/python.sh
 cd "$REPO" || exit 1
 export WANDB_API_KEY="$(cat "$REPO/logs/.wandb_key" 2>/dev/null)"
 [ -n "$WANDB_API_KEY" ] || export WANDB_MODE=disabled
-$PY -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train -e isaac_tasks/k1_velocity -e src/k1_description/assets >/dev/null 2>&1
+$PY -m pip install --no-deps --no-build-isolation -e isaac_tasks/booster_train_ref/source/booster_train -e isaac_tasks/k1_velocity -e booster_assets >/dev/null 2>&1
 echo "=== P4T SMOKE Isaac-Kick-Ball-K1-Teacher-v0 16x3"
 LOG="$REPO/scripts/p4tsmoke.train.log"
 timeout 2400 $PY -u isaac_tasks/k1_velocity/scripts/train.py \

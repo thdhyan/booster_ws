@@ -38,7 +38,7 @@ case "${1:-all}" in
         start k1-teleop-sim --gpus "device=$SIM_GPU" --network host --ipc host --user 0 --entrypoint bash \
             -e ACCEPT_EULA=Y -e OMNI_KIT_ALLOW_ROOT=1 -e NVIDIA_DRIVER_CAPABILITIES=all -e PYTHONUNBUFFERED=1 "${ROS_ENV[@]}" \
             -v "$REPO/logs/k1_teleop_cache:/root/.cache" -v "$REPO:/workspace/booster_ws" "$ISAAC_IMAGE" \
-            -c "cd /workspace/booster_ws && /isaac-sim/python.sh -m pip install --no-deps -e src/k1_description/assets >/dev/null 2>&1;
+            -c "cd /workspace/booster_ws && /isaac-sim/python.sh -m pip install --no-deps -e booster_assets >/dev/null 2>&1;
                 exec /isaac-sim/python.sh src/k1_sim_isaac/scripts/k1_teleop_sim.py $SIM_ARGS" ;;
     teleop)
         start k1-teleop-xr --gpus "device=$XR_GPU" --network host --ipc host --user "$(id -u):$(id -g)" \
