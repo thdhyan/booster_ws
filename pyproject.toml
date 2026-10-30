@@ -24,6 +24,11 @@ dependencies = [
 [project.optional-dependencies]
 app = ["gradio>=5.0"]
 science = ["scipy>=1.9"]
+# mujoco_tasks (K1 mjlab tasks). Pinned to the mjlab commit the tasks were trained on.
+mjlab = [
+  "mjlab @ git+https://github.com/mujocolab/mjlab.git@45b1e263ec1c3c0d2c3211b458135d80bb7030df",
+  "pyyaml>=6.0",
+]
 
 [project.scripts]
 k1m = "k1m.cli:main"

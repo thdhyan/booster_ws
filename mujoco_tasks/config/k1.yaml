@@ -1,0 +1,9 @@
+# K1 task settings. "tasks" is checked by mujoco_tasks.load_mjlab.load_tasks().
+robot:
+  mjcf: robots/K1/K1_22dof.xml   # relative to booster_assets/
+tasks:
+  - Mjlab-Velocity-Rough-Booster-K1
+  - Mjlab-Velocity-Flat-Booster-K1
+  - Mjlab-Velocity-Stairs-Booster-K1
+rl:
+  experiment_name: k1_velocity
