@@ -15,10 +15,11 @@ ros2 launch k1_fleet_rviz fleet_rviz.launch.py
 | `k1console/` | decoupled console: truth sources (page / PhaseSpace / own MuJoCo) + policy preview, http://127.0.0.1:8770 |
 
 `k1console` is the simple, source-agnostic console: `python -m k1console --sim` (add `deploy/` and `libs/*/src` to
-`PYTHONPATH`), `--viewer` adds its own MuJoCo window (3D, main thread), PhaseSpace via
+`PYTHONPATH`), `--viewer` adds its own MuJoCo window (3D, main thread; `--no-viewer` keeps it headless), PhaseSpace via
 `python -m k1console.phasespace_bridge --map a=dhyan-hat,box=dhyan-hat-2`.
-The page shows live truth and preview replay side by side, and adds/removes robots (`/api/agents`) so a multi-agent
-scene rebuilds in the same MuJoCo world. See `deploy/k1console/README.md`.
+The page shows live truth and preview replay side by side, adds/removes robots (`/api/agents`), walks a robot to a goal
+in the own sim (`/api/goto`) and fills its walk-base / push-policy dropdowns from a scan of the models dir
+(`GET /api/policies`). See `deploy/k1console/README.md`.
 
 
 Robot IPs, safety and step-by-step runs: [docs/ROBOTS.md](https://github.com/thdhyan/k1-workspace/blob/main/docs/ROBOTS.md). The end-to-end test runs without hardware:
